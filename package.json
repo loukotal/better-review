@@ -12,8 +12,5 @@
   "peerDependencies": {
     "typescript": "^5"
   },
-  "dependencies": {
-    "effect": "^3.19.13",
-    "elysia": "^1.4.19"
-  }
+  "dependencies": {}
 }
