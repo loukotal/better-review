@@ -1,10 +1,12 @@
 import { type Component, createSignal, Show } from "solid-js";
-import { DiffViewer } from "./DiffViewer";
+import { DiffViewer, type PRComment } from "./DiffViewer";
 
 const App: Component = () => {
   const [prUrl, setPrUrl] = createSignal("");
   const [loading, setLoading] = createSignal(false);
+  const [loadingComments, setLoadingComments] = createSignal(false);
   const [diff, setDiff] = createSignal<string | null>(null);
+  const [comments, setComments] = createSignal<PRComment[]>([]);
   const [error, setError] = createSignal<string | null>(null);
 
   const loadPr = async (e: Event) => {
@@ -14,21 +16,48 @@ const App: Component = () => {
     setLoading(true);
     setError(null);
     setDiff(null);
+    setComments([]);
 
     try {
-      const res = await fetch(`/api/pr?url=${encodeURIComponent(prUrl())}`);
-      const data = await res.json();
+      // Load diff first
+      const diffRes = await fetch(`/api/pr/diff?url=${encodeURIComponent(prUrl())}`);
+      const diffData = await diffRes.json();
 
-      if (data.error) {
-        setError(data.error);
-      } else {
-        setDiff(data.diff);
+      if (diffData.error) {
+        setError(diffData.error);
+        return;
+      }
+      
+      setDiff(diffData.diff);
+      setLoading(false);
+
+      // Then load comments
+      setLoadingComments(true);
+      const commentsRes = await fetch(`/api/pr/comments?url=${encodeURIComponent(prUrl())}`);
+      const commentsData = await commentsRes.json();
+      
+      if (!commentsData.error) {
+        setComments(commentsData.comments ?? []);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load PR");
     } finally {
       setLoading(false);
+      setLoadingComments(false);
     }
+  };
+
+  const addComment = async (filePath: string, line: number, side: "LEFT" | "RIGHT", body: string) => {
+    const res = await fetch("/api/pr/comment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prUrl: prUrl(), filePath, line, side, body }),
+    });
+    const data = await res.json();
+    if (data.comment) {
+      setComments([...comments(), data.comment]);
+    }
+    return data;
   };
 
   return (
@@ -60,7 +89,12 @@ const App: Component = () => {
         )}
 
         <Show when={diff()}>
-          <DiffViewer rawDiff={diff()!} />
+          <DiffViewer 
+            rawDiff={diff()!} 
+            comments={comments()}
+            loadingComments={loadingComments()}
+            onAddComment={addComment} 
+          />
         </Show>
 
         {!diff() && !error() && !loading() && (

@@ -1,26 +1,80 @@
 import { runtime } from "./runtime";
-import { GhService } from "./gh/gh";
+import { GhService, type AddCommentParams } from "./gh/gh";
 import { Effect } from "effect";
 
 const server = Bun.serve({
   port: 3001,
   routes: {
-    "/api/pr": {
+    "/api/pr/diff": {
       GET: async (req) => {
         const url = new URL(req.url);
         const prUrl = url.searchParams.get("url");
 
         if (!prUrl) {
-          return Response.json({ error: "Missing url parameter" }, { status: 400 });
+          return Response.json(
+            { error: "Missing url parameter" },
+            { status: 400 },
+          );
         }
 
-        const result = await runtime.runPromise(
-          Effect.gen(function* () {
-            const gh = yield* GhService;
-            const diff = yield* gh.getDiff(prUrl);
-            return { diff };
-          })
-        ).catch((e) => ({ error: String(e) }));
+        const result = await runtime
+          .runPromise(
+            Effect.gen(function* () {
+              const gh = yield* GhService;
+              const diff = yield* gh.getDiff(prUrl);
+              return { diff };
+            }),
+          )
+          .catch((e) => ({ error: String(e) }));
+
+        return Response.json(result);
+      },
+    },
+    "/api/pr/comments": {
+      GET: async (req) => {
+        const url = new URL(req.url);
+        const prUrl = url.searchParams.get("url");
+
+        if (!prUrl) {
+          return Response.json(
+            { error: "Missing url parameter" },
+            { status: 400 },
+          );
+        }
+
+        const result = await runtime
+          .runPromise(
+            Effect.gen(function* () {
+              const gh = yield* GhService;
+              const comments = yield* gh.listComments(prUrl);
+              return { comments };
+            }),
+          )
+          .catch((e) => ({ error: String(e) }));
+
+        return Response.json(result);
+      },
+    },
+    "/api/pr/comment": {
+      POST: async (req) => {
+        const body = (await req.json()) as AddCommentParams;
+
+        if (!body.prUrl || !body.filePath || !body.line || !body.body) {
+          return Response.json(
+            { error: "Missing required fields: prUrl, filePath, line, body" },
+            { status: 400 },
+          );
+        }
+
+        const result = await runtime
+          .runPromise(
+            Effect.gen(function* () {
+              const gh = yield* GhService;
+              const comment = yield* gh.addComment(body);
+              return { comment };
+            }),
+          )
+          .catch((e) => ({ error: String(e) }));
 
         return Response.json(result);
       },
