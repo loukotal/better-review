@@ -6,6 +6,9 @@
   "workspaces": [
     "packages/*"
   ],
+  "scripts": {
+    "dev": "bun run --cwd packages/better-review dev & bun run --cwd packages/web dev"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
