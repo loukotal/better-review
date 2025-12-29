@@ -46,7 +46,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   };
 
   return (
-    <div class="relative mb-4">
+    <div class="relative">
       <button
         type="button"
         onClick={() => setOpen(!open())}
@@ -58,7 +58,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
       </button>
 
       <Show when={open()}>
-        <div class="absolute top-full left-0 mt-2 p-4 bg-bg-elevated border border-border rounded-lg shadow-lg z-50 min-w-[320px]">
+        <div class="absolute top-full right-0 mt-2 p-4 bg-bg-elevated border border-border rounded-lg shadow-lg z-50 min-w-[320px]">
           <div class="flex flex-col gap-4">
             {/* View Mode */}
             <div class="flex flex-col gap-1.5">

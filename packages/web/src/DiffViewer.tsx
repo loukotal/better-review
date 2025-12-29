@@ -1,7 +1,6 @@
 import { For, Show } from "solid-js";
-import { parsePatchFiles, SVGSpriteSheet } from "@pierre/diffs";
+import { parsePatchFiles, SVGSpriteSheet, type FileDiffMetadata } from "@pierre/diffs";
 
-import { SettingsPanel } from "./diff/SettingsPanel";
 import { FileDiffView } from "./diff/FileDiffView";
 import type { DiffSettings, PRComment } from "./diff/types";
 
@@ -9,20 +8,28 @@ import type { DiffSettings, PRComment } from "./diff/types";
 export type { DiffSettings, PRComment } from "./diff/types";
 export { DEFAULT_DIFF_SETTINGS } from "./diff/types";
 
+// Helper to create a consistent file ID for scroll targeting
+export function getFileElementId(fileName: string): string {
+  return `file-${encodeURIComponent(fileName)}`;
+}
+
 interface Props {
   rawDiff: string;
   comments: PRComment[];
   loadingComments?: boolean;
   onAddComment: (filePath: string, line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
   settings: DiffSettings;
-  onSettingsChange: (settings: DiffSettings) => void;
+  onFilesLoaded?: (files: FileDiffMetadata[]) => void;
 }
 
 export function DiffViewer(props: Props) {
   const files = () => {
     const patches = parsePatchFiles(props.rawDiff);
     // Flatten all files from all patches
-    return patches.flatMap((p) => p.files);
+    const allFiles = patches.flatMap((p) => p.files);
+    // Notify parent about files when they change
+    props.onFilesLoaded?.(allFiles);
+    return allFiles;
   };
 
   const commentsForFile = (fileName: string) => {
@@ -32,8 +39,6 @@ export function DiffViewer(props: Props) {
   return (
     <div>
       <div innerHTML={SVGSpriteSheet} style="display:none" />
-      
-      <SettingsPanel settings={props.settings} onChange={props.onSettingsChange} />
       
       <Show when={props.loadingComments}>
         <div class="mb-4 px-4 py-2 bg-bg-surface border border-border rounded-lg text-text-muted text-sm flex items-center gap-2">
@@ -48,12 +53,14 @@ export function DiffViewer(props: Props) {
       <div class="flex flex-col gap-4">
         <For each={files()}>
           {(file) => (
-            <FileDiffView
-              file={file}
-              comments={commentsForFile(file.name)}
-              onAddComment={(line, side, body) => props.onAddComment(file.name, line, side, body)}
-              settings={props.settings}
-            />
+            <div id={getFileElementId(file.name)}>
+              <FileDiffView
+                file={file}
+                comments={commentsForFile(file.name)}
+                onAddComment={(line, side, body) => props.onAddComment(file.name, line, side, body)}
+                settings={props.settings}
+              />
+            </div>
           )}
         </For>
       </div>

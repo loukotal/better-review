@@ -1,5 +1,8 @@
 import { type Component, createSignal, createEffect, Show } from "solid-js";
-import { DiffViewer, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
+import type { FileDiffMetadata } from "@pierre/diffs";
+import { DiffViewer, getFileElementId, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
+import { FileTreePanel } from "./FileTreePanel";
+import { SettingsPanel } from "./diff/SettingsPanel";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 
@@ -28,9 +31,18 @@ const App: Component = () => {
   const [loading, setLoading] = createSignal(false);
   const [loadingComments, setLoadingComments] = createSignal(false);
   const [diff, setDiff] = createSignal<string | null>(null);
+  const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
   const [comments, setComments] = createSignal<PRComment[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [settings, setSettings] = createSignal<DiffSettings>(loadSettings());
+
+  const scrollToFile = (fileName: string) => {
+    const elementId = getFileElementId(fileName);
+    const element = document.getElementById(elementId);
+    if (element) {
+      element.scrollIntoView({ behavior: "instant", block: "start" });
+    }
+  };
 
   // Persist settings to localStorage when they change
   createEffect(() => {
@@ -89,11 +101,15 @@ const App: Component = () => {
   };
 
   return (
-    <div class="min-h-screen bg-bg text-text p-6">
-      <div class="max-w-7xl mx-auto">
-        <h1 class="text-2xl font-semibold mb-6">Better Review</h1>
+    <div class="h-screen bg-bg text-text flex flex-col">
+      {/* Header */}
+      <div class="p-4 border-b border-border">
+        <div class="flex items-center justify-between mb-4">
+          <h1 class="text-xl font-semibold">Better Review</h1>
+          <SettingsPanel settings={settings()} onChange={setSettings} />
+        </div>
 
-        <form onSubmit={loadPr} class="flex gap-3 mb-6">
+        <form onSubmit={loadPr} class="flex gap-3">
           <input
             type="text"
             value={prUrl()}
@@ -111,28 +127,40 @@ const App: Component = () => {
         </form>
 
         {error() && (
-          <div class="p-4 bg-diff-remove-bg border border-error/30 rounded-lg mb-6 text-error">
+          <div class="p-4 mt-4 bg-diff-remove-bg border border-error/30 rounded-lg text-error">
             {error()}
           </div>
         )}
-
-        <Show when={diff()}>
-          <DiffViewer 
-            rawDiff={diff()!} 
-            comments={comments()}
-            loadingComments={loadingComments()}
-            onAddComment={addComment}
-            settings={settings()}
-            onSettingsChange={setSettings}
-          />
-        </Show>
-
-        {!diff() && !error() && !loading() && (
-          <div class="text-center py-16 text-text-faint">
-            Enter a PR URL to start reviewing
-          </div>
-        )}
       </div>
+
+      {/* Main content */}
+      <Show
+        when={diff()}
+        fallback={
+          <Show when={!loading()}>
+            <div class="flex-1 flex items-center justify-center text-text-faint">
+              Enter a PR URL to start reviewing
+            </div>
+          </Show>
+        }
+      >
+        <div class="flex-1 flex overflow-hidden">
+          {/* File tree panel */}
+          <FileTreePanel files={files()} onFileSelect={scrollToFile} />
+
+          {/* Diff viewer */}
+          <div class="flex-1 overflow-y-auto p-6">
+            <DiffViewer
+              rawDiff={diff()!}
+              comments={comments()}
+              loadingComments={loadingComments()}
+              onAddComment={addComment}
+              settings={settings()}
+              onFilesLoaded={setFiles}
+            />
+          </div>
+        </div>
+      </Show>
     </div>
   );
 };
