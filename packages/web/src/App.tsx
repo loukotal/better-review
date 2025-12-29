@@ -1,14 +1,24 @@
-import { type Component, createSignal, createEffect, Show } from "solid-js";
+import { type Component, createSignal, createEffect, createMemo, Show } from "solid-js";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { DiffViewer, getFileElementId, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
+import { ChatPanel } from "./ChatPanel";
 import { SettingsPanel } from "./diff/SettingsPanel";
 import { THEME_LABELS, type DiffTheme } from "./diff/types";
+import type { Annotation } from "./utils/parseReviewTokens";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
+const REVIEW_ORDER_STORAGE_KEY = "review-order";
+const ANNOTATIONS_STORAGE_KEY = "review-annotations";
 
 // Valid theme keys for validation
 const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
+
+interface PrInfo {
+  owner: string;
+  repo: string;
+  number: string;
+}
 
 function loadSettings(): DiffSettings {
   try {
@@ -35,8 +45,60 @@ function saveSettings(settings: DiffSettings): void {
   }
 }
 
+// Load review order from localStorage (keyed by PR URL)
+function loadReviewOrder(prUrl: string): string[] | null {
+  try {
+    const stored = localStorage.getItem(REVIEW_ORDER_STORAGE_KEY);
+    if (stored) {
+      const data = JSON.parse(stored);
+      return data[prUrl] ?? null;
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+function saveReviewOrder(prUrl: string, order: string[]): void {
+  try {
+    const stored = localStorage.getItem(REVIEW_ORDER_STORAGE_KEY);
+    const data = stored ? JSON.parse(stored) : {};
+    data[prUrl] = order;
+    localStorage.setItem(REVIEW_ORDER_STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // Ignore
+  }
+}
+
+// Load annotations from localStorage (keyed by PR URL)
+function loadAnnotations(prUrl: string): Annotation[] {
+  try {
+    const stored = localStorage.getItem(ANNOTATIONS_STORAGE_KEY);
+    if (stored) {
+      const data = JSON.parse(stored);
+      return data[prUrl] ?? [];
+    }
+  } catch {
+    // Ignore
+  }
+  return [];
+}
+
+function saveAnnotations(prUrl: string, annotations: Annotation[]): void {
+  try {
+    const stored = localStorage.getItem(ANNOTATIONS_STORAGE_KEY);
+    const data = stored ? JSON.parse(stored) : {};
+    data[prUrl] = annotations;
+    localStorage.setItem(ANNOTATIONS_STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // Ignore
+  }
+}
+
 const App: Component = () => {
   const [prUrl, setPrUrl] = createSignal("");
+  const [loadedPrUrl, setLoadedPrUrl] = createSignal<string | null>(null);
+  const [prInfo, setPrInfo] = createSignal<PrInfo | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [loadingComments, setLoadingComments] = createSignal(false);
   const [diff, setDiff] = createSignal<string | null>(null);
@@ -44,14 +106,96 @@ const App: Component = () => {
   const [comments, setComments] = createSignal<PRComment[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [settings, setSettings] = createSignal<DiffSettings>(loadSettings());
+  
+  // Review state
+  const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
+  const [annotations, setAnnotations] = createSignal<Annotation[]>([]);
+  const [highlightedLine, setHighlightedLine] = createSignal<{ file: string; line: number } | null>(null);
 
-  const scrollToFile = (fileName: string) => {
+  // File names for the chat panel
+  const fileNames = createMemo(() => files().map((f) => f.name));
+  
+  // Ordered files - respects reviewOrder when set
+  const orderedFiles = createMemo(() => {
+    const order = reviewOrder();
+    const allFiles = files();
+    if (!order || order.length === 0) return allFiles;
+    
+    // Sort files by review order (files not in order go at the end)
+    return [...allFiles].sort((a, b) => {
+      const aIdx = order.indexOf(a.name);
+      const bIdx = order.indexOf(b.name);
+      if (aIdx === -1 && bIdx === -1) return 0;
+      if (aIdx === -1) return 1;
+      if (bIdx === -1) return -1;
+      return aIdx - bIdx;
+    });
+  });
+  
+  // Ordered file names for FileTreePanel
+  const orderedFileNames = createMemo(() => orderedFiles().map((f) => f.name));
+
+  // Scroll to file (and optionally line)
+  const scrollToFile = (fileName: string, line?: number) => {
     const elementId = getFileElementId(fileName);
     const element = document.getElementById(elementId);
     if (element) {
       element.scrollIntoView({ behavior: "instant", block: "start" });
+      
+      // If line is specified, highlight it
+      if (line) {
+        setHighlightedLine({ file: fileName, line });
+        // Clear highlight after 3 seconds
+        setTimeout(() => setHighlightedLine(null), 3000);
+      }
     }
   };
+  
+  // Apply review order
+  const applyReviewOrder = (order: string[]) => {
+    setReviewOrder(order);
+    const url = loadedPrUrl();
+    if (url) {
+      saveReviewOrder(url, order);
+    }
+  };
+  
+  // Add annotation as GitHub comment
+  const addAnnotationAsComment = async (annotation: Annotation) => {
+    // Scroll to the file and line first
+    scrollToFile(annotation.file, annotation.line);
+    
+    // Format the comment body with severity prefix
+    const severityPrefix = annotation.severity === "critical" 
+      ? "[CRITICAL] " 
+      : annotation.severity === "warning" 
+        ? "[WARNING] " 
+        : "";
+    const body = `${severityPrefix}${annotation.message}`;
+    
+    // Add the comment via the existing addComment function
+    // Default to RIGHT side (additions) for now
+    await addComment(annotation.file, annotation.line, "RIGHT", body);
+  };
+  
+  // Load saved review state when PR changes
+  createEffect(() => {
+    const url = loadedPrUrl();
+    if (url) {
+      const savedOrder = loadReviewOrder(url);
+      if (savedOrder) {
+        setReviewOrder(savedOrder);
+      } else {
+        setReviewOrder(null);
+      }
+      
+      const savedAnnotations = loadAnnotations(url);
+      setAnnotations(savedAnnotations);
+    } else {
+      setReviewOrder(null);
+      setAnnotations([]);
+    }
+  });
 
   // Persist settings to localStorage when they change
   createEffect(() => {
@@ -66,11 +210,18 @@ const App: Component = () => {
     setError(null);
     setDiff(null);
     setComments([]);
+    setLoadedPrUrl(null);
+    setPrInfo(null);
 
     try {
-      // Load diff first
-      const diffRes = await fetch(`/api/pr/diff?url=${encodeURIComponent(prUrl())}`);
+      // Load diff and PR info in parallel
+      const [diffRes, infoRes] = await Promise.all([
+        fetch(`/api/pr/diff?url=${encodeURIComponent(prUrl())}`),
+        fetch(`/api/pr/info?url=${encodeURIComponent(prUrl())}`),
+      ]);
+      
       const diffData = await diffRes.json();
+      const infoData = await infoRes.json();
 
       if (diffData.error) {
         setError(diffData.error);
@@ -78,6 +229,16 @@ const App: Component = () => {
       }
       
       setDiff(diffData.diff);
+      setLoadedPrUrl(prUrl());
+      
+      // Set PR info if available
+      if (infoData.owner && infoData.repo && infoData.number) {
+        console.log("[App] PR info loaded:", infoData);
+        setPrInfo(infoData);
+      } else {
+        console.log("[App] PR info not available:", infoData);
+      }
+      
       setLoading(false);
 
       // Then load comments
@@ -164,25 +325,35 @@ const App: Component = () => {
       </header>
 
       {/* Main content */}
-      <Show
-        when={diff()}
-        fallback={
-          <Show when={!loading()}>
-            <div class="flex-1 flex items-center justify-center">
-              <div class="text-center">
-                <div class="text-text-faint text-xs">
-                  Enter a GitHub PR URL to start
+      <div class="flex-1 flex overflow-hidden">
+        {/* Chat panel (left) */}
+        <ChatPanel
+          prUrl={loadedPrUrl()}
+          prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
+          repoOwner={prInfo()?.owner ?? null}
+          repoName={prInfo()?.repo ?? null}
+          files={fileNames()}
+          onScrollToFile={scrollToFile}
+          onApplyReviewOrder={applyReviewOrder}
+          onAddAnnotationAsComment={addAnnotationAsComment}
+        />
+
+        {/* Center content */}
+        <Show
+          when={diff()}
+          fallback={
+            <Show when={!loading()}>
+              <div class="flex-1 flex items-center justify-center">
+                <div class="text-center">
+                  <div class="text-text-faint text-xs">
+                    Enter a GitHub PR URL to start
+                  </div>
                 </div>
               </div>
-            </div>
-          </Show>
-        }
-      >
-        <div class="flex-1 flex overflow-hidden">
-          {/* File tree panel */}
-          <FileTreePanel files={files()} onFileSelect={scrollToFile} />
-
-          {/* Diff viewer */}
+            </Show>
+          }
+        >
+          {/* Diff viewer (center) */}
           <div class="flex-1 overflow-y-auto px-4 py-3">
             <DiffViewer
               rawDiff={diff()!}
@@ -192,10 +363,19 @@ const App: Component = () => {
               onReplyToComment={replyToComment}
               settings={settings()}
               onFilesLoaded={setFiles}
+              fileOrder={reviewOrder()}
+              highlightedLine={highlightedLine()}
             />
           </div>
-        </div>
-      </Show>
+
+          {/* File tree panel (right) */}
+          <FileTreePanel 
+            files={orderedFiles()} 
+            onFileSelect={(file) => scrollToFile(file)}
+            reviewOrder={reviewOrder()}
+          />
+        </Show>
+      </div>
     </div>
   );
 };

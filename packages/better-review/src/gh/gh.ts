@@ -35,8 +35,15 @@ export interface AddReplyParams {
   body: string;
 }
 
+export interface PrInfo {
+  owner: string;
+  repo: string;
+  number: string;
+}
+
 interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError>;
+  getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError>;
   listComments: (prUrl: string) => Effect.Effect<PRComment[], GhError>;
   addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError>;
   replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError>;
@@ -72,6 +79,12 @@ const getPrInfo = (urlOrNumber: string) =>
   }).pipe(Effect.provide(BunContext.layer));
 
 export const GhServiceLive = Layer.succeed(GhService, {
+  getPrInfo: (urlOrNumber: string) =>
+    getPrInfo(urlOrNumber).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getPrInfo", cause })),
+      Effect.withSpan("GhService.getPrInfo", { attributes: { urlOrNumber } }),
+    ),
+
   getDiff: (urlOrNumber: string) =>
     Effect.gen(function* () {
       const cmd = Command.make("gh", "pr", "diff", urlOrNumber, "--patch");

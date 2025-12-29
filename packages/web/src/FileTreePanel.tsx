@@ -4,6 +4,7 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 interface FileTreePanelProps {
   files: FileDiffMetadata[];
   onFileSelect: (fileName: string) => void;
+  reviewOrder?: string[] | null;
 }
 
 interface TreeNode {
@@ -234,7 +235,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
   };
 
   return (
-    <div class="w-[220px] border-r border-border flex flex-col bg-bg-surface">
+    <div class="w-[220px] border-l border-border flex flex-col bg-bg-surface">
       {/* Panel Header */}
       <div class="px-2 py-2 border-b border-border">
         <input
@@ -245,6 +246,18 @@ export function FileTreePanel(props: FileTreePanelProps) {
           class="w-full px-2 py-1 bg-bg border border-border text-[11px] text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent"
         />
       </div>
+      
+      {/* AI Order indicator */}
+      <Show when={props.reviewOrder && props.reviewOrder.length > 0}>
+        <div class="px-2 py-1.5 border-b border-accent/30 bg-accent/5">
+          <div class="flex items-center gap-1.5 text-[10px] text-accent">
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M7 5.75A.75.75 0 0 1 7.75 5h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 5.75zm0 4A.75.75 0 0 1 7.75 9h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 9.75zM3.5 6a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5zM4.25 10a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0z"/>
+            </svg>
+            <span>AI review order applied</span>
+          </div>
+        </div>
+      </Show>
 
       {/* File Tree */}
       <div class="flex-1 overflow-y-auto py-1">

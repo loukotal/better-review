@@ -17,6 +17,7 @@ interface FileDiffViewProps {
   onAddComment: (line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   settings: DiffSettings;
+  highlightedLine?: number;
 }
 
 function ChevronIcon() {
@@ -135,6 +136,36 @@ export function FileDiffView(props: FileDiffViewProps) {
         containerRef.innerHTML = "";
         createInstance(containerRef);
       }
+    },
+    { defer: true }
+  ));
+
+  // Highlight line when highlightedLine prop changes
+  createEffect(on(
+    () => props.highlightedLine,
+    (line) => {
+      if (!instance || !line) return;
+      
+      // Use the setSelectedLines API to highlight the line
+      instance.setSelectedLines({ 
+        start: line, 
+        end: line, 
+        side: "additions" as const 
+      });
+      
+      // Try to scroll the line into view within the shadow DOM
+      setTimeout(() => {
+        const container = instance.getFileContainer?.() as HTMLElement | undefined;
+        const shadowRoot = container?.shadowRoot;
+        if (shadowRoot) {
+          // Try data-line attribute first, then data-alt-line
+          let lineEl = shadowRoot.querySelector(`[data-line="${line}"]`);
+          if (!lineEl) {
+            lineEl = shadowRoot.querySelector(`[data-alt-line="${line}"]`);
+          }
+          lineEl?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 100);
     },
     { defer: true }
   ));
