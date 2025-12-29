@@ -83,16 +83,18 @@ function FileStatusIndicator(props: { type: FileDiffMetadata["type"] }) {
   const indicator = () => {
     switch (props.type) {
       case "new":
-        return { char: "+", class: "text-diff-add-text" };
+        return { char: "+", class: "text-success" };
       case "deleted":
-        return { char: "-", class: "text-diff-remove-text" };
+        return { char: "−", class: "text-error" };
       default:
-        return { char: "•", class: "text-primary" };
+        return { char: "~", class: "text-accent" };
     }
   };
 
   return (
-    <span class={`font-bold ${indicator().class}`}>{indicator().char}</span>
+    <span class={`text-[10px] w-3 text-center ${indicator().class}`}>
+      {indicator().char}
+    </span>
   );
 }
 
@@ -115,16 +117,18 @@ function TreeNodeView(props: {
             <button
               type="button"
               onClick={() => props.onToggleFolder(props.node.path)}
-              class="w-full flex items-center gap-1.5 px-2 py-1 hover:bg-bg-elevated rounded text-left text-sm"
-              style={{ "padding-left": `${props.depth * 12 + 8}px` }}
+              class="w-full flex items-center gap-1 px-2 py-0.5 hover:bg-bg-elevated text-left text-[11px] group transition-colors"
+              style={{ "padding-left": `${props.depth * 10 + 8}px` }}
             >
               <span
-                class="text-text-muted text-xs transition-transform"
+                class="text-text-faint text-[9px] transition-transform w-3 text-center"
                 classList={{ "rotate-90": isExpanded() }}
               >
                 ▶
               </span>
-              <span class="text-text-muted truncate">{props.node.name}</span>
+              <span class="text-text-faint group-hover:text-text-muted truncate">
+                {props.node.name}
+              </span>
             </button>
             <Show when={isExpanded()}>
               <For each={props.node.children}>
@@ -145,11 +149,13 @@ function TreeNodeView(props: {
           <button
             type="button"
             onClick={() => props.onFileSelect(props.node.file!.name)}
-            class="w-full flex items-center gap-2 px-2 py-1 hover:bg-bg-elevated rounded text-left text-sm"
-            style={{ "padding-left": `${props.depth * 12 + 8}px` }}
+            class="w-full flex items-center gap-1.5 px-2 py-0.5 hover:bg-bg-elevated text-left text-[11px] group transition-colors"
+            style={{ "padding-left": `${props.depth * 10 + 8}px` }}
           >
             <FileStatusIndicator type={props.node.file!.type} />
-            <span class="text-text truncate">{props.node.name}</span>
+            <span class="text-text-muted group-hover:text-text truncate">
+              {props.node.name}
+            </span>
           </button>
         )}
       </div>
@@ -228,17 +234,20 @@ export function FileTreePanel(props: FileTreePanelProps) {
   };
 
   return (
-    <div class="w-[280px] border-r border-border flex flex-col bg-bg-surface">
-      <div class="p-3 border-b border-border">
+    <div class="w-[220px] border-r border-border flex flex-col bg-bg-surface">
+      {/* Panel Header */}
+      <div class="px-2 py-2 border-b border-border">
         <input
           type="text"
           value={searchQuery()}
           onInput={(e) => setSearchQuery(e.currentTarget.value)}
-          placeholder="Search files..."
-          class="w-full px-3 py-1.5 bg-bg border border-border rounded text-sm text-text placeholder:text-text-faint focus:outline-none focus:border-border-focus transition-colors"
+          placeholder="Filter..."
+          class="w-full px-2 py-1 bg-bg border border-border text-[11px] text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent"
         />
       </div>
-      <div class="flex-1 overflow-y-auto py-2">
+
+      {/* File Tree */}
+      <div class="flex-1 overflow-y-auto py-1">
         <For each={tree()}>
           {(node) => (
             <TreeNodeView
@@ -252,8 +261,10 @@ export function FileTreePanel(props: FileTreePanelProps) {
           )}
         </For>
       </div>
-      <div class="px-3 py-2 border-t border-border text-xs text-text-faint">
-        {props.files.length} file{props.files.length !== 1 ? "s" : ""} changed
+
+      {/* Footer Stats */}
+      <div class="px-3 py-1.5 border-t border-border text-[10px] text-text-faint">
+        {props.files.length} file{props.files.length !== 1 ? "s" : ""}
       </div>
     </div>
   );

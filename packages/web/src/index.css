@@ -1,24 +1,134 @@
 @import 'tailwindcss';
 
+/* JetBrains Mono - clean monospace for code */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @theme {
-  --color-bg: #0d1117;
-  --color-bg-surface: #161b22;
-  --color-bg-elevated: #21262d;
+  /* === MONOCHROME + ORANGE PALETTE === */
+  /* Deep blacks */
+  --color-bg: #000000;
+  --color-bg-surface: #080808;
+  --color-bg-elevated: #0e0e0e;
   
-  --color-text: #e6edf3;
-  --color-text-muted: #8b949e;
-  --color-text-faint: #484f58;
+  /* Orange accent - used sparingly for interactive elements */
+  --color-accent: #ff6b00;
+  --color-accent-dim: #662b00;
+  --color-accent-bright: #ff8533;
   
-  --color-border: #30363d;
-  --color-border-focus: #58a6ff;
+  /* Text hierarchy - white/gray spectrum */
+  --color-text: #e5e5e5;
+  --color-text-muted: #737373;
+  --color-text-faint: #404040;
   
-  --color-primary: #58a6ff;
-  --color-primary-hover: #79b8ff;
+  /* Borders - subtle grays */
+  --color-border: #1a1a1a;
+  --color-border-focus: #ff6b00;
   
-  --color-diff-add-bg: rgba(46, 160, 67, 0.15);
-  --color-diff-add-text: #3fb950;
-  --color-diff-remove-bg: rgba(248, 81, 73, 0.15);
-  --color-diff-remove-text: #f85149;
+  /* Primary action - orange */
+  --color-primary: #ff6b00;
+  --color-primary-hover: #ff8533;
   
-  --color-error: #f85149;
+  /* Diff colors - muted for readability */
+  --color-diff-add-bg: rgba(34, 197, 94, 0.1);
+  --color-diff-add-text: #4ade80;
+  --color-diff-remove-bg: rgba(239, 68, 68, 0.1);
+  --color-diff-remove-text: #f87171;
+  
+  /* Status colors */
+  --color-error: #ef4444;
+  --color-warning: #ff6b00;
+  --color-success: #22c55e;
+}
+
+/* === BASE STYLES === */
+* {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+html {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* Selection styling - orange */
+::selection {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+/* Scrollbar styling - minimal */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-faint);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--color-bg);
+}
+
+/* === INPUT STYLING === */
+input, textarea, select {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--color-text-faint);
+  opacity: 1;
+}
+
+/* Focus states - orange accent */
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--color-accent) !important;
+}
+
+/* === BUTTON BASE === */
+button {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* === UTILITY CLASSES === */
+.terminal-border {
+  border: 1px solid var(--color-border);
+}
+
+/* Focus visible for accessibility */
+:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Custom focus for buttons - no outline, just color change */
+button:focus-visible {
+  outline: none;
+}
+
+/* Smooth transitions */
+* {
+  transition-property: color, background-color, border-color, opacity;
+  transition-duration: 100ms;
+  transition-timing-function: ease-out;
+}
+
+/* Disable transitions for elements that shouldn't animate */
+input, textarea, select {
+  transition: border-color 100ms ease-out;
+}
+
+/* Better text rendering */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }

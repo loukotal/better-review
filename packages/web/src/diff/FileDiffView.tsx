@@ -21,8 +21,8 @@ interface FileDiffViewProps {
 
 function ChevronIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M4.5 5.5L8 9l3.5-3.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M4.5 5.5L8 9l3.5-3.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="square"/>
     </svg>
   );
 }
@@ -141,39 +141,39 @@ export function FileDiffView(props: FileDiffViewProps) {
 
   // Helper to render a single comment
   const renderSingleComment = (comment: PRComment, isReply: boolean): string => {
-    const indentClass = isReply ? "ml-4 pl-3 border-l-2 border-border" : "";
+    const indentClass = isReply ? "ml-3 pl-3 border-l border-border" : "";
     return `
       <div class="${indentClass}">
         <div class="flex items-center gap-2 mb-1">
-          <img src="${escapeHtml(comment.user.avatar_url)}" class="w-5 h-5 rounded-full" />
-          <span class="text-sm font-medium text-text">${escapeHtml(comment.user.login)}</span>
-          <span class="text-xs text-text-faint">${new Date(comment.created_at).toLocaleDateString()}</span>
+          <img src="${escapeHtml(comment.user.avatar_url)}" class="w-4 h-4 rounded-sm" />
+          <span class="text-[11px] text-text">${escapeHtml(comment.user.login)}</span>
+          <span class="text-[10px] text-text-faint">${new Date(comment.created_at).toLocaleDateString()}</span>
         </div>
-        <div class="text-sm text-text-muted whitespace-pre-wrap">${escapeHtml(comment.body)}</div>
+        <div class="text-[11px] text-text-muted whitespace-pre-wrap leading-relaxed">${escapeHtml(comment.body)}</div>
       </div>
     `;
   };
 
   // Helper to render the reply form
   const renderReplyForm = (commentId: number): string => `
-    <div class="ml-4 pl-3 border-l-2 border-primary mt-3">
+    <div class="ml-3 pl-3 border-l border-accent mt-2">
       <textarea
         placeholder="Write a reply..."
-        class="w-full px-3 py-2 bg-bg border border-border rounded-lg text-text placeholder:text-text-faint focus:outline-none focus:border-border-focus resize-y min-h-[60px]"
+        class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[50px] text-[11px]"
         data-reply-input="${commentId}"
       ></textarea>
-      <div class="flex gap-2 mt-2">
+      <div class="flex gap-2 mt-1.5">
         <button
           type="button"
           data-submit-reply="${commentId}"
-          class="px-3 py-1 bg-primary text-bg text-sm font-medium rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
+          class="px-2.5 py-1 bg-accent text-black text-[10px] hover:bg-accent-bright disabled:opacity-50 transition-colors"
         >
           Reply
         </button>
         <button
           type="button"
           data-cancel-reply="${commentId}"
-          class="px-3 py-1 text-text-muted text-sm hover:text-text transition-colors"
+          class="px-2.5 py-1 text-text-faint text-[10px] hover:text-text transition-colors"
         >
           Cancel
         </button>
@@ -203,7 +203,7 @@ export function FileDiffView(props: FileDiffViewProps) {
       if (!body) return;
       
       submitBtn.disabled = true;
-      submitBtn.textContent = "Submitting...";
+      submitBtn.textContent = "Sending...";
       setSubmitting(true);
       
       try {
@@ -250,10 +250,10 @@ export function FileDiffView(props: FileDiffViewProps) {
           const reply = pendingReply();
           const isReplyingToThis = reply?.commentId === rootComment.id;
           
-          div.className = "p-3 my-1 mx-2 bg-bg-elevated rounded border border-border";
+          div.className = "p-2.5 my-1 mx-2 bg-bg-elevated border border-border";
           
           // Build thread HTML
-          let html = `<div class="space-y-3">`;
+          let html = `<div class="space-y-2">`;
           
           // Render root comment
           html += renderSingleComment(rootComment, false);
@@ -262,7 +262,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           if (shouldCollapse) {
             // First reply
             if (replies.length > 0) {
-              html += `<div class="mt-3">${renderSingleComment(replies[0], true)}</div>`;
+              html += `<div class="mt-2">${renderSingleComment(replies[0], true)}</div>`;
             }
             
             const hiddenCount = replies.length - 2;
@@ -271,27 +271,27 @@ export function FileDiffView(props: FileDiffViewProps) {
             if (hiddenCount > 0) {
               html += `
                 <button data-expand-thread="${rootComment.id}" 
-                        class="ml-4 text-xs text-primary hover:underline cursor-pointer">
-                  Show ${hiddenCount} more ${hiddenCount === 1 ? "reply" : "replies"}
+                        class="ml-3 text-[10px] text-accent hover:text-accent-bright cursor-pointer">
+                  +${hiddenCount} more
                 </button>
               `;
               
               // Hidden replies (initially hidden)
               html += `<div data-hidden-replies="${rootComment.id}" class="hidden">`;
               for (let i = 1; i < replies.length - 1; i++) {
-                html += `<div class="mt-3">${renderSingleComment(replies[i], true)}</div>`;
+                html += `<div class="mt-2">${renderSingleComment(replies[i], true)}</div>`;
               }
               html += `</div>`;
             }
             
             // Last reply (if more than 1)
             if (replies.length > 1) {
-              html += `<div class="mt-3">${renderSingleComment(replies[replies.length - 1], true)}</div>`;
+              html += `<div class="mt-2">${renderSingleComment(replies[replies.length - 1], true)}</div>`;
             }
           } else {
             // Show all replies
             for (const replyComment of replies) {
-              html += `<div class="mt-3">${renderSingleComment(replyComment, true)}</div>`;
+              html += `<div class="mt-2">${renderSingleComment(replyComment, true)}</div>`;
             }
           }
           
@@ -301,7 +301,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           } else {
             html += `
               <button data-reply-to="${rootComment.id}" 
-                      class="mt-2 text-xs text-text-muted hover:text-primary transition-colors cursor-pointer">
+                      class="mt-2 text-[10px] text-text-faint hover:text-accent transition-colors cursor-pointer">
                 Reply
               </button>
             `;
@@ -340,28 +340,28 @@ export function FileDiffView(props: FileDiffViewProps) {
           
         } else if (metadata.type === "pending") {
           // Pending comment form (new comment, not a reply)
-          div.className = "p-3 my-1 mx-2 bg-bg-surface rounded border border-primary";
+          div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
           div.innerHTML = `
-            <div class="text-sm text-text-muted mb-2">
-              Comment on line ${metadata.line} (${metadata.side === "LEFT" ? "old" : "new"})
+            <div class="text-[10px] text-accent mb-2">
+              Line ${metadata.line}
             </div>
             <textarea
               placeholder="Write a comment..."
-              class="w-full px-3 py-2 bg-bg border border-border rounded-lg text-text placeholder:text-text-faint focus:outline-none focus:border-border-focus resize-y min-h-[80px]"
+              class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[60px] text-[11px]"
               data-comment-input="true"
             ></textarea>
             <div class="flex gap-2 mt-2">
               <button
                 type="button"
                 data-submit-comment="true"
-                class="px-4 py-1.5 bg-primary text-bg text-sm font-medium rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                class="px-2.5 py-1 bg-accent text-black text-[10px] hover:bg-accent-bright disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                Add comment
+                Comment
               </button>
               <button
                 type="button"
                 data-cancel-comment="true"
-                class="px-4 py-1.5 text-text-muted text-sm hover:text-text transition-colors"
+                class="px-2.5 py-1 text-text-faint text-[10px] hover:text-text transition-colors"
               >
                 Cancel
               </button>
@@ -390,7 +390,7 @@ export function FileDiffView(props: FileDiffViewProps) {
               if (!body) return;
               
               submitBtn.disabled = true;
-              submitBtn.textContent = "Submitting...";
+              submitBtn.textContent = "Sending...";
               setSubmitting(true);
               
               try {
@@ -429,37 +429,54 @@ export function FileDiffView(props: FileDiffViewProps) {
 
   const fileType = () => {
     switch (props.file.type) {
-      case "new": return { label: "Added", class: "text-diff-add-text" };
-      case "deleted": return { label: "Deleted", class: "text-diff-remove-text" };
+      case "new": return { label: "+", class: "text-success" };
+      case "deleted": return { label: "−", class: "text-error" };
       case "rename-pure":
-      case "rename-changed": return { label: "Renamed", class: "text-primary" };
-      default: return { label: "Modified", class: "text-text-muted" };
+      case "rename-changed": return { label: "→", class: "text-accent" };
+      default: return { label: "~", class: "text-accent" };
     }
   };
 
   return (
-    <div class="border border-border rounded-lg overflow-hidden">
+    <div class="border border-border overflow-hidden">
+      {/* File Header */}
       <button
         type="button"
         onClick={() => setCollapsed(!collapsed())}
-        class="w-full flex items-center gap-3 px-4 py-2 bg-bg-elevated hover:bg-bg-surface transition-colors text-left"
+        class="w-full flex items-center gap-2 px-3 py-1.5 bg-bg-elevated hover:bg-bg-surface text-left group"
       >
+        {/* Collapse indicator */}
         <span
-          class="text-text-muted transition-transform"
+          class="text-text-faint group-hover:text-text-muted text-[10px]"
           classList={{ "rotate-[-90deg]": collapsed() }}
         >
           <ChevronIcon />
         </span>
-        <span class="font-mono text-sm text-text flex-1 truncate">
+        
+        {/* Status indicator */}
+        <span class={`text-[10px] w-3 ${fileType().class}`}>
+          {fileType().label}
+        </span>
+        
+        {/* File path - preserve exact casing */}
+        <span class="text-[11px] text-text-muted group-hover:text-text flex-1 truncate">
           {props.file.name}
           {props.file.prevName && (
-            <span class="text-text-muted"> (from {props.file.prevName})</span>
+            <span class="text-text-faint ml-2">← {props.file.prevName}</span>
           )}
         </span>
-        <span class={`text-xs ${fileType().class}`}>{fileType().label}</span>
+        
+        {/* Comment count */}
+        <Show when={props.comments.length > 0}>
+          <span class="text-[10px] text-accent">
+            {props.comments.length}
+          </span>
+        </Show>
       </button>
+      
+      {/* Diff content */}
       <Show when={!collapsed()}>
-        <div ref={renderDiff} />
+        <div class="border-t border-border" ref={renderDiff} />
       </Show>
     </div>
   );

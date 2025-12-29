@@ -3,14 +3,23 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import { DiffViewer, getFileElementId, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
 import { SettingsPanel } from "./diff/SettingsPanel";
+import { THEME_LABELS, type DiffTheme } from "./diff/types";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
+
+// Valid theme keys for validation
+const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
 
 function loadSettings(): DiffSettings {
   try {
     const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (stored) {
-      return { ...DEFAULT_DIFF_SETTINGS, ...JSON.parse(stored) };
+      const parsed = JSON.parse(stored);
+      // Validate theme - if invalid, use default
+      if (parsed.theme && !VALID_THEMES.has(parsed.theme)) {
+        parsed.theme = DEFAULT_DIFF_SETTINGS.theme;
+      }
+      return { ...DEFAULT_DIFF_SETTINGS, ...parsed };
     }
   } catch {
     // Ignore parse errors
@@ -115,44 +124,56 @@ const App: Component = () => {
 
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
-      {/* Header */}
-      <div class="p-4 border-b border-border">
-        <div class="flex items-center justify-between mb-4">
-          <h1 class="text-xl font-semibold">Better Review</h1>
-          <SettingsPanel settings={settings()} onChange={setSettings} />
-        </div>
-
-        <form onSubmit={loadPr} class="flex gap-3">
-          <input
-            type="text"
-            value={prUrl()}
-            onInput={(e) => setPrUrl(e.currentTarget.value)}
-            placeholder="GitHub PR URL (e.g. https://github.com/owner/repo/pull/123)"
-            class="flex-1 px-4 py-2 bg-bg-surface border border-border rounded-lg text-text placeholder:text-text-faint focus:outline-none focus:border-border-focus transition-colors"
-          />
-          <button
-            type="submit"
-            disabled={loading() || !prUrl()}
-            class="px-5 py-2 bg-primary text-bg font-medium rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {loading() ? "Loading..." : "Load PR"}
-          </button>
-        </form>
-
-        {error() && (
-          <div class="p-4 mt-4 bg-diff-remove-bg border border-error/30 rounded-lg text-error">
-            {error()}
+      {/* Header Bar */}
+      <header class="border-b border-border bg-bg-surface">
+        {/* Main Header */}
+        <div class="px-4 py-3">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <span class="text-accent text-xs">●</span>
+              <h1 class="text-sm text-text">better-review</h1>
+            </div>
+            <SettingsPanel settings={settings()} onChange={setSettings} />
           </div>
-        )}
-      </div>
+
+          <form onSubmit={loadPr} class="flex gap-2">
+            <div class="flex-1">
+              <input
+                type="text"
+                value={prUrl()}
+                onInput={(e) => setPrUrl(e.currentTarget.value)}
+                placeholder="github.com/owner/repo/pull/123"
+                class="w-full px-3 py-2 bg-bg border border-border text-text text-xs placeholder:text-text-faint hover:border-text-faint focus:border-accent"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading() || !prUrl()}
+              class="px-4 py-2 bg-accent text-black font-medium hover:bg-accent-bright active:bg-accent disabled:opacity-30 disabled:cursor-not-allowed text-xs"
+            >
+              {loading() ? "..." : "Load"}
+            </button>
+          </form>
+
+          {error() && (
+            <div class="mt-3 px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-xs">
+              {error()}
+            </div>
+          )}
+        </div>
+      </header>
 
       {/* Main content */}
       <Show
         when={diff()}
         fallback={
           <Show when={!loading()}>
-            <div class="flex-1 flex items-center justify-center text-text-faint">
-              Enter a PR URL to start reviewing
+            <div class="flex-1 flex items-center justify-center">
+              <div class="text-center">
+                <div class="text-text-faint text-xs">
+                  Enter a GitHub PR URL to start
+                </div>
+              </div>
             </div>
           </Show>
         }
@@ -162,7 +183,7 @@ const App: Component = () => {
           <FileTreePanel files={files()} onFileSelect={scrollToFile} />
 
           {/* Diff viewer */}
-          <div class="flex-1 overflow-y-auto p-6">
+          <div class="flex-1 overflow-y-auto px-4 py-3">
             <DiffViewer
               rawDiff={diff()!}
               comments={comments()}
