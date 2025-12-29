@@ -74,8 +74,10 @@ export interface PRComment {
     avatar_url: string;
   };
   created_at: string;
+  in_reply_to_id?: number;
 }
 
 export type AnnotationMetadata = 
-  | { type: "comment"; comment: PRComment }
-  | { type: "pending"; line: number; side: "LEFT" | "RIGHT" };
+  | { type: "thread"; rootComment: PRComment; replies: PRComment[] }
+  | { type: "pending"; line: number; side: "LEFT" | "RIGHT" }
+  | { type: "pending-reply"; rootCommentId: number; line: number; side: "LEFT" | "RIGHT" };

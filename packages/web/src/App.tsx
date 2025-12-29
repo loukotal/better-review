@@ -100,6 +100,19 @@ const App: Component = () => {
     return data;
   };
 
+  const replyToComment = async (commentId: number, body: string) => {
+    const res = await fetch("/api/pr/comment/reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prUrl: prUrl(), commentId, body }),
+    });
+    const data = await res.json();
+    if (data.comment) {
+      setComments([...comments(), data.comment]);
+    }
+    return data;
+  };
+
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header */}
@@ -155,6 +168,7 @@ const App: Component = () => {
               comments={comments()}
               loadingComments={loadingComments()}
               onAddComment={addComment}
+              onReplyToComment={replyToComment}
               settings={settings()}
               onFilesLoaded={setFiles}
             />

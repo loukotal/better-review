@@ -18,6 +18,7 @@ export interface PRComment {
     avatar_url: string;
   };
   created_at: string;
+  in_reply_to_id?: number;
 }
 
 export interface AddCommentParams {
@@ -28,10 +29,17 @@ export interface AddCommentParams {
   side?: "LEFT" | "RIGHT";
 }
 
+export interface AddReplyParams {
+  prUrl: string;
+  commentId: number;
+  body: string;
+}
+
 interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError>;
   listComments: (prUrl: string) => Effect.Effect<PRComment[], GhError>;
   addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError>;
+  replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError>;
 }
 
 export class GhService extends Context.Tag("GHService")<GhService, GhCli>() {}
@@ -129,6 +137,30 @@ export const GhServiceLive = Layer.succeed(GhService, {
           prUrl: params.prUrl,
           filePath: params.filePath,
           line: params.line,
+        },
+      }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  replyToComment: (params: AddReplyParams) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(params.prUrl);
+
+      const payload = JSON.stringify({ body: params.body });
+
+      // Use the dedicated reply endpoint
+      const result = yield* Effect.tryPromise(() =>
+        Bun.$`echo ${payload} | gh api repos/${owner}/${repo}/pulls/${number}/comments/${params.commentId}/replies -X POST -H "Accept: application/vnd.github+json" --input -`.text(),
+      );
+      return JSON.parse(result) as PRComment;
+    }).pipe(
+      Effect.mapError(
+        (cause) => new GhError({ command: "replyToComment", cause }),
+      ),
+      Effect.withSpan("GhService.replyToComment", {
+        attributes: {
+          prUrl: params.prUrl,
+          commentId: params.commentId,
         },
       }),
       Effect.provide(BunContext.layer),

@@ -18,6 +18,7 @@ interface Props {
   comments: PRComment[];
   loadingComments?: boolean;
   onAddComment: (filePath: string, line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
+  onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   settings: DiffSettings;
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
 }
@@ -58,6 +59,7 @@ export function DiffViewer(props: Props) {
                 file={file}
                 comments={commentsForFile(file.name)}
                 onAddComment={(line, side, body) => props.onAddComment(file.name, line, side, body)}
+                onReplyToComment={props.onReplyToComment}
                 settings={props.settings}
               />
             </div>

@@ -1,5 +1,5 @@
 import { runtime } from "./runtime";
-import { GhService, type AddCommentParams } from "./gh/gh";
+import { GhService, type AddCommentParams, type AddReplyParams } from "./gh/gh";
 import { Effect } from "effect";
 
 const server = Bun.serve({
@@ -71,6 +71,30 @@ const server = Bun.serve({
             Effect.gen(function* () {
               const gh = yield* GhService;
               const comment = yield* gh.addComment(body);
+              return { comment };
+            }),
+          )
+          .catch((e) => ({ error: String(e) }));
+
+        return Response.json(result);
+      },
+    },
+    "/api/pr/comment/reply": {
+      POST: async (req) => {
+        const body = (await req.json()) as AddReplyParams;
+
+        if (!body.prUrl || !body.commentId || !body.body) {
+          return Response.json(
+            { error: "Missing required fields: prUrl, commentId, body" },
+            { status: 400 },
+          );
+        }
+
+        const result = await runtime
+          .runPromise(
+            Effect.gen(function* () {
+              const gh = yield* GhService;
+              const comment = yield* gh.replyToComment(body);
               return { comment };
             }),
           )
