@@ -1,5 +1,27 @@
-import { type Component, createSignal, Show } from "solid-js";
-import { DiffViewer, type PRComment } from "./DiffViewer";
+import { type Component, createSignal, createEffect, Show } from "solid-js";
+import { DiffViewer, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
+
+const SETTINGS_STORAGE_KEY = "diff-settings";
+
+function loadSettings(): DiffSettings {
+  try {
+    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (stored) {
+      return { ...DEFAULT_DIFF_SETTINGS, ...JSON.parse(stored) };
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return DEFAULT_DIFF_SETTINGS;
+}
+
+function saveSettings(settings: DiffSettings): void {
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 const App: Component = () => {
   const [prUrl, setPrUrl] = createSignal("");
@@ -8,6 +30,12 @@ const App: Component = () => {
   const [diff, setDiff] = createSignal<string | null>(null);
   const [comments, setComments] = createSignal<PRComment[]>([]);
   const [error, setError] = createSignal<string | null>(null);
+  const [settings, setSettings] = createSignal<DiffSettings>(loadSettings());
+
+  // Persist settings to localStorage when they change
+  createEffect(() => {
+    saveSettings(settings());
+  });
 
   const loadPr = async (e: Event) => {
     e.preventDefault();
@@ -93,7 +121,9 @@ const App: Component = () => {
             rawDiff={diff()!} 
             comments={comments()}
             loadingComments={loadingComments()}
-            onAddComment={addComment} 
+            onAddComment={addComment}
+            settings={settings()}
+            onSettingsChange={setSettings}
           />
         </Show>
 
