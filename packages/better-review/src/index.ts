@@ -17,6 +17,29 @@ import {
 } from "./handler";
 import { runtime } from "./runtime";
 
+// =============================================================================
+// Model/Provider Types and State
+// =============================================================================
+
+interface ModelEntry {
+  providerId: string;
+  modelId: string;
+}
+
+// Load providers from JSON file
+const providerData: ModelEntry[] = await Bun.file("./provider.json").json();
+console.log(`[models] Loaded ${providerData.length} model entries`);
+
+// Current model selection (in-memory, no persistence for now)
+let currentModel: ModelEntry = {
+  providerId: "anthropic",
+  modelId: "claude-opus-4-5",
+};
+
+// =============================================================================
+// Session and Cache State  
+// =============================================================================
+
 // Session storage: prUrl -> sessionId
 const prSessions = new Map<string, string>();
 
@@ -97,6 +120,70 @@ process.on("SIGTERM", cleanup);
 const server = Bun.serve({
   port: 3001,
   routes: {
+    // =========================================================================
+    // Model Selection Endpoints
+    // =========================================================================
+    
+    "/api/models/search": {
+      GET: async (req) => {
+        const url = new URL(req.url);
+        const query = (url.searchParams.get("q") || "").toLowerCase().trim();
+        
+        let results: ModelEntry[];
+        
+        if (!query) {
+          // Return first 50 models if no query
+          results = providerData.slice(0, 50);
+        } else {
+          // Case-insensitive substring search on both providerId and modelId
+          results = providerData
+            .filter(
+              (m) =>
+                m.providerId.toLowerCase().includes(query) ||
+                m.modelId.toLowerCase().includes(query)
+            )
+            .slice(0, 50);
+        }
+        
+        return Response.json({ models: results });
+      },
+    },
+    
+    "/api/models/current": {
+      GET: async () => {
+        return Response.json(currentModel);
+      },
+      POST: async (req) => {
+        const body = (await req.json()) as { providerId?: string; modelId?: string };
+        
+        if (!body.providerId || !body.modelId) {
+          return validationError("Missing providerId or modelId");
+        }
+        
+        // Validate that this model exists in our data
+        const exists = providerData.some(
+          (m) => m.providerId === body.providerId && m.modelId === body.modelId
+        );
+        
+        if (!exists) {
+          return validationError(`Model not found: ${body.providerId}/${body.modelId}`);
+        }
+        
+        currentModel = {
+          providerId: body.providerId,
+          modelId: body.modelId,
+        };
+        
+        console.log(`[models] Model changed to: ${currentModel.providerId}/${currentModel.modelId}`);
+        
+        return Response.json({ success: true, model: currentModel });
+      },
+    },
+    
+    // =========================================================================
+    // PR Endpoints
+    // =========================================================================
+    
     "/api/prs": {
       GET: async () => {
         return handleEffect(
@@ -431,19 +518,14 @@ const server = Bun.serve({
           Effect.gen(function* () {
             const { client } = yield* OpencodeService;
 
-            // Use a better model when using the review agent
-            const modelID =
-              body.agent === "review"
-                ? "claude-sonnet-4-20250514"
-                : "claude-3-5-haiku-latest";
-
+            // Use the currently selected model
             const result = yield* Effect.tryPromise(() =>
               client.session.prompt({
                 path: { id: body.sessionId },
                 body: {
                   model: {
-                    providerID: "anthropic",
-                    modelID,
+                    providerID: currentModel.providerId,
+                    modelID: currentModel.modelId,
                   },
                   agent: body.agent,
                   parts: [{ type: "text", text: body.message }],
@@ -557,12 +639,6 @@ const server = Bun.serve({
           Effect.gen(function* () {
             const { baseUrl: opencodeBaseUrl } = yield* OpencodeService;
 
-            // Use a better model when using the review agent
-            const modelID =
-              body.agent === "review"
-                ? "claude-sonnet-4-20250514"
-                : "claude-3-5-haiku-latest";
-
             // Use the async endpoint (prompt_async) - fire and forget
             const response = yield* Effect.tryPromise(() =>
               fetch(
@@ -572,8 +648,8 @@ const server = Bun.serve({
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     model: {
-                      providerID: "anthropic",
-                      modelID,
+                      providerID: currentModel.providerId,
+                      modelID: currentModel.modelId,
                     },
                     agent: body.agent,
                     parts: [{ type: "text", text: body.message }],

@@ -5,6 +5,7 @@ import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils
 import { FileLink } from "./components/FileLink";
 import { AnnotationBlock } from "./components/AnnotationBlock";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
+import { ModelSelector } from "./components/ModelSelector";
 import { useStreamingChat, type StreamingMessage, type ToolCall } from "./hooks/useStreamingChat";
 
 // Configure marked for safe, minimal output
@@ -415,8 +416,11 @@ export function ChatPanel(props: ChatPanelProps) {
             </button>
           </Show>
         </div>
-        <div class="text-[10px] mt-1 truncate">
-          {connectionStatus()}
+        <div class="flex items-center justify-between mt-1">
+          <div class="text-[10px] truncate">
+            {connectionStatus()}
+          </div>
+          <ModelSelector disabled={chat.isStreaming()} />
         </div>
       </div>
 
