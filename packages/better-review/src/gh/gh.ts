@@ -5,7 +5,7 @@ import { BunContext } from "@effect/platform-bun";
 class GhError extends Data.TaggedError("GhError")<{
   readonly command: string;
   readonly cause: unknown;
-}> {}
+}> { }
 
 export interface PRComment {
   id: number;
@@ -99,11 +99,28 @@ interface GhCli {
   searchReviewRequested: () => Effect.Effect<SearchedPr[], GhError>;
 }
 
-export class GhService extends Context.Tag("GHService")<GhService, GhCli>() {}
+export class GhService extends Context.Tag("GHService")<GhService, GhCli>() { }
+
+// Validate it's a PR number or valid PR URL (not an issue URL)
+const validatePrUrl = (url: string): Effect.Effect<void, GhError> => {
+  // Pure number is valid (PR number)
+  if (/^\d+$/.test(url.trim())) {
+    return Effect.void;
+  }
+  if (/^.+\/pull\/\d+/.test(url)) {
+    return Effect.void;;
+  }
+  return Effect.fail(new GhError({
+    command: "validateUrl",
+    cause: "Invalid pull request URL/number. E.g. github.com/john/demo/pull/12582",
+  }));
+};
 
 // Parse PR URL or get repo info from gh CLI
 const getPrInfo = (urlOrNumber: string) =>
   Effect.gen(function* () {
+    yield* validatePrUrl(urlOrNumber);
+
     // If it's a full URL, parse it
     const urlMatch = urlOrNumber.match(
       /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/,
@@ -137,6 +154,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
 
   getDiff: (urlOrNumber: string) =>
     Effect.gen(function* () {
+      yield* validatePrUrl(urlOrNumber);
       const cmd = Command.make("gh", "pr", "diff", urlOrNumber, "--patch");
       return yield* Command.string(cmd);
     }).pipe(
@@ -148,7 +166,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
   getPrStatus: (urlOrNumber: string) =>
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
-      
+
       // Get PR details
       const prCmd = Command.make(
         "gh",
@@ -157,7 +175,11 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "--jq",
         "{ state, draft, mergeable, title, body, author: .user.login, merged: .merged, html_url }",
       );
-      const prData = JSON.parse(yield* Command.string(prCmd)) as {
+      const prResult = (yield* Command.string(prCmd)).trim();
+      if (!prResult) {
+        return yield* Effect.fail(new GhError({ command: "getPrStatus", cause: "PR not found" }));
+      }
+      const prData = JSON.parse(prResult) as {
         state: string;
         draft: boolean;
         mergeable: boolean | null;
@@ -212,8 +234,8 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "--jq",
         ".",
       );
-      const result = yield* Command.string(cmd);
-      return JSON.parse(result) as PRComment[];
+      const result = (yield* Command.string(cmd)).trim();
+      return result ? JSON.parse(result) as PRComment[] : [];
     }).pipe(
       Effect.mapError(
         (cause) => new GhError({ command: "getComments", cause }),
