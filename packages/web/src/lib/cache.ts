@@ -33,6 +33,14 @@ export interface CachedStatus {
   updatedAt: number;
 }
 
+export interface CachedCommitDiff {
+  key: string; // prUrl:sha
+  prUrl: string;
+  sha: string;
+  diff: string;
+  updatedAt: number;
+}
+
 // ============ Database Schema ============
 
 interface BetterReviewDB extends DBSchema {
@@ -56,12 +64,17 @@ interface BetterReviewDB extends DBSchema {
     value: CachedStatus;
     indexes: { "by-updated": number };
   };
+  commitDiffs: {
+    key: string;
+    value: CachedCommitDiff;
+    indexes: { "by-pr": string; "by-updated": number };
+  };
 }
 
 // ============ Database Instance ============
 
 const DB_NAME = "better-review";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBPDatabase<BetterReviewDB>> | null = null;
 
@@ -88,6 +101,12 @@ function getDB(): Promise<IDBPDatabase<BetterReviewDB>> {
         if (!db.objectStoreNames.contains("status")) {
           const statusStore = db.createObjectStore("status", { keyPath: "prUrl" });
           statusStore.createIndex("by-updated", "updatedAt");
+        }
+        // Commit diffs store
+        if (!db.objectStoreNames.contains("commitDiffs")) {
+          const commitDiffsStore = db.createObjectStore("commitDiffs", { keyPath: "key" });
+          commitDiffsStore.createIndex("by-pr", "prUrl");
+          commitDiffsStore.createIndex("by-updated", "updatedAt");
         }
       },
     });
@@ -173,6 +192,43 @@ export const statusCache = {
   },
 };
 
+export const commitDiffCache = {
+  async get(prUrl: string, sha: string): Promise<string | undefined> {
+    const db = await getDB();
+    const key = `${prUrl}:${sha}`;
+    const data = await db.get("commitDiffs", key);
+    return data?.diff;
+  },
+
+  async set(prUrl: string, sha: string, diff: string): Promise<void> {
+    const db = await getDB();
+    const key = `${prUrl}:${sha}`;
+    await db.put("commitDiffs", { key, prUrl, sha, diff, updatedAt: Date.now() });
+  },
+
+  async delete(prUrl: string, sha: string): Promise<void> {
+    const db = await getDB();
+    const key = `${prUrl}:${sha}`;
+    await db.delete("commitDiffs", key);
+  },
+
+  async getAllForPr(prUrl: string): Promise<Map<string, string>> {
+    const db = await getDB();
+    const all = await db.getAllFromIndex("commitDiffs", "by-pr", prUrl);
+    return new Map(all.map(d => [d.sha, d.diff]));
+  },
+
+  async deleteAllForPr(prUrl: string): Promise<void> {
+    const db = await getDB();
+    const tx = db.transaction("commitDiffs", "readwrite");
+    const index = tx.store.index("by-pr");
+    for await (const cursor of index.iterate(prUrl)) {
+      cursor.delete();
+    }
+    await tx.done;
+  },
+};
+
 // ============ Unified Cache API ============
 
 export interface FullPrCache {
@@ -230,6 +286,7 @@ export const cache = {
       commitsCache.delete(url),
       commentsCache.delete(url),
       statusCache.delete(url),
+      commitDiffCache.deleteAllForPr(url),
     ]);
   },
 
@@ -241,6 +298,7 @@ export const cache = {
       db.clear("commits"),
       db.clear("comments"),
       db.clear("status"),
+      db.clear("commitDiffs"),
     ]);
   },
 

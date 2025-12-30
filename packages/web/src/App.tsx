@@ -12,7 +12,7 @@ import { PrStatusBar, type PrStatus } from "./components/PrStatusBar";
 import { ApproveButton } from "./components/ApproveButton";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
 import { CommitNavigator } from "./components/CommitNavigator";
-import { cache, commentsCache } from "./lib/cache";
+import { cache, commentsCache, commitDiffCache } from "./lib/cache";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
@@ -264,10 +264,17 @@ const AppContent: Component = () => {
     await addComment(annotation.file, annotation.line, "RIGHT", body);
   };
 
-  // Load commit diff
+  // Load commit diff (checks cache first)
   const loadCommitDiff = async (sha: string) => {
     const url = loadedPrUrl();
     if (!url) return;
+
+    // Check cache first
+    const cached = await commitDiffCache.get(url, sha);
+    if (cached) {
+      setCommitDiff(cached);
+      return;
+    }
 
     setLoadingCommits(true);
     try {
@@ -275,9 +282,31 @@ const AppContent: Component = () => {
       const data = await res.json();
       if (!data.error) {
         setCommitDiff(data.diff);
+        // Cache the result
+        commitDiffCache.set(url, sha, data.diff);
       }
     } finally {
       setLoadingCommits(false);
+    }
+  };
+
+  // Preload all commit diffs in background
+  const preloadCommitDiffs = async (prUrl: string, commitList: PrCommit[]) => {
+    for (const commit of commitList) {
+      // Check if already cached
+      const cached = await commitDiffCache.get(prUrl, commit.sha);
+      if (cached) continue;
+
+      // Fetch and cache
+      try {
+        const res = await fetch(`/api/pr/commit-diff?url=${encodeURIComponent(prUrl)}&sha=${commit.sha}`);
+        const data = await res.json();
+        if (!data.error) {
+          await commitDiffCache.set(prUrl, commit.sha, data.diff);
+        }
+      } catch {
+        // Ignore errors during preloading
+      }
     }
   };
 
@@ -505,6 +534,11 @@ const AppContent: Component = () => {
       });
 
       setLoading(false);
+
+      // Preload all commit diffs in background for instant navigation
+      if (loadedCommits.length > 0) {
+        preloadCommitDiffs(currentPrUrl, loadedCommits);
+      }
 
       // Then load fresh comments and status in parallel (background refresh)
       setLoadingComments(true);
