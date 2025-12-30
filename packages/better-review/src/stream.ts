@@ -1,4 +1,4 @@
-import { Effect, Stream, Queue, Data, Option, Fiber } from "effect";
+import { Console, Effect, Stream, Queue, Data, Option, Fiber } from "effect";
 import type {
   Event as OpenCodeEvent,
   ToolState,
@@ -284,6 +284,9 @@ export function createOpenCodeStream(
         (cause) => new StreamError({ cause, message: "Stream read error" }),
       );
 
+      // Track which text messages we've logged (to avoid spam)
+      const loggedTextMessages = new Set<string>();
+
       const eventStream: Stream.Stream<StreamEvent, StreamError> =
         byteStream.pipe(
           // Decode bytes to text
@@ -308,6 +311,28 @@ export function createOpenCodeStream(
             } catch {
               return Option.none();
             }
+          }),
+          // TODO: Add a runtime "verbose" flag that logs full event objects
+          Stream.tap((event) => {
+            // Skip reasoning entirely
+            if (event.type === "reasoning") return Effect.void;
+
+            // Log text only once per message
+            if (event.type === "text") {
+              if (loggedTextMessages.has(event.messageId)) return Effect.void;
+              loggedTextMessages.add(event.messageId);
+              return Console.log(
+                `[OpenCode] text started (message: ${event.messageId})`,
+              );
+            }
+
+            // Log errors with full details
+            if (event.type === "error") {
+              return Console.error("[OpenCode] error:", event);
+            }
+
+            // Log everything else
+            return Console.log(`[OpenCode] ${event.type}`);
           }),
         );
 
