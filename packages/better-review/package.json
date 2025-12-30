@@ -3,9 +3,13 @@
   "version": "1.0.50",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "bun run --watch src/index.ts"
+    "dev": "bun --hot src/index.ts"
   },
   "dependencies": {
+    "@effect/platform": "^0.94.0",
+    "@effect/platform-bun": "^0.87.0",
+    "@opencode-ai/sdk": "^1.0.207",
+    "@pierre/diffs": "^1.0.2",
     "effect": "^3.19.13",
     "elysia": "latest"
   },

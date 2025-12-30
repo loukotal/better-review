@@ -6,14 +6,14 @@
   "workspaces": [
     "packages/*"
   ],
+  "scripts": {
+    "dev": "bun run --cwd packages/better-review dev & bun run --cwd packages/web dev"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
-  "dependencies": {
-    "effect": "^3.19.13",
-    "elysia": "^1.4.19"
-  }
+  "dependencies": {}
 }
