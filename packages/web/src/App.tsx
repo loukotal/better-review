@@ -158,6 +158,19 @@ const AppContent: Component = () => {
     savePanelVisibility(newVisibility);
   };
 
+  // Current user (for showing edit/delete on own comments)
+  const [currentUser, setCurrentUser] = createSignal<string | null>(null);
+
+  // Fetch current user on mount
+  createEffect(() => {
+    fetch("/api/user")
+      .then(res => res.json())
+      .then(data => {
+        if (data.login) setCurrentUser(data.login);
+      })
+      .catch(() => {});
+  });
+
   // File names for the chat panel
   const fileNames = createMemo(() => files().map((f) => f.name));
   
@@ -402,6 +415,42 @@ const AppContent: Component = () => {
     return data;
   };
 
+  const editComment = async (commentId: number, body: string) => {
+    const res = await fetch("/api/pr/comment/edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prUrl: loadedPrUrl(), commentId, body }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      console.error("Failed to edit comment:", data.error);
+      return data;
+    }
+    if (data.comment) {
+      // Only update the body, preserve other fields from original comment
+      setComments(comments().map(c =>
+        c.id === commentId ? { ...c, body: data.comment.body } : c
+      ));
+    }
+    return data;
+  };
+
+  const deleteComment = async (commentId: number) => {
+    const res = await fetch("/api/pr/comment/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prUrl: loadedPrUrl(), commentId }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      console.error("Failed to delete comment:", data.error);
+      return data;
+    }
+    // Remove the comment from local state
+    setComments(comments().filter(c => c.id !== commentId));
+    return data;
+  };
+
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header Bar */}
@@ -533,6 +582,9 @@ const AppContent: Component = () => {
               loadingComments={loadingComments()}
               onAddComment={addComment}
               onReplyToComment={replyToComment}
+              onEditComment={editComment}
+              onDeleteComment={deleteComment}
+              currentUser={currentUser()}
               settings={settings()}
               onFilesLoaded={setFiles}
               fileOrder={reviewOrder()}

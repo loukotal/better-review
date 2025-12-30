@@ -2,6 +2,8 @@ import {
   GhService,
   type AddCommentParams,
   type AddReplyParams,
+  type EditCommentParams,
+  type DeleteCommentParams,
   type ApprovePrParams,
 } from "./gh/gh";
 import { Effect } from "effect";
@@ -299,6 +301,55 @@ const server = Bun.serve({
             const gh = yield* GhService;
             const comment = yield* gh.replyToComment(body);
             return { comment };
+          }),
+        );
+      },
+    },
+    "/api/pr/comment/edit": {
+      POST: async (req) => {
+        const body = (await req.json()) as EditCommentParams;
+
+        if (!body.prUrl || !body.commentId || !body.body) {
+          return validationError(
+            "Missing required fields: prUrl, commentId, body",
+          );
+        }
+
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const comment = yield* gh.editComment(body);
+            return { comment };
+          }),
+        );
+      },
+    },
+    "/api/pr/comment/delete": {
+      POST: async (req) => {
+        const body = (await req.json()) as DeleteCommentParams;
+
+        if (!body.prUrl || !body.commentId) {
+          return validationError(
+            "Missing required fields: prUrl, commentId",
+          );
+        }
+
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            yield* gh.deleteComment(body);
+            return { success: true };
+          }),
+        );
+      },
+    },
+    "/api/user": {
+      GET: async () => {
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const login = yield* gh.getCurrentUser();
+            return { login };
           }),
         );
       },
