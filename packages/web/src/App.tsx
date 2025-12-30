@@ -1,4 +1,5 @@
-import { type Component, createSignal, createEffect, createMemo, Show } from "solid-js";
+import { type Component, createSignal, createEffect, createMemo, Show, onMount } from "solid-js";
+import { useSearchParams, A } from "@solidjs/router";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { DiffViewer, getFileElementId, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
@@ -97,10 +98,19 @@ function saveAnnotations(prUrl: string, annotations: Annotation[]): void {
   }
 }
 
+interface QueuedPr {
+  url: string;
+  title: string;
+  repository: { nameWithOwner: string };
+}
+
 const AppContent: Component = () => {
   const { setPrUrl: setContextPrUrl } = usePrContext();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [prUrl, setPrUrl] = createSignal("");
   const [loadedPrUrl, setLoadedPrUrl] = createSignal<string | null>(null);
+  const [initialLoadTriggered, setInitialLoadTriggered] = createSignal(false);
+  const [prQueue, setPrQueue] = createSignal<QueuedPr[]>([]);
   const [prInfo, setPrInfo] = createSignal<PrInfo | null>(null);
   const [prStatus, setPrStatus] = createSignal<PrStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = createSignal(false);
@@ -139,6 +149,21 @@ const AppContent: Component = () => {
   
   // Ordered file names for FileTreePanel
   const orderedFileNames = createMemo(() => orderedFiles().map((f) => f.name));
+  
+  // Find the next PR in the queue
+  const nextPr = createMemo(() => {
+    const queue = prQueue();
+    const current = loadedPrUrl();
+    if (!current || queue.length === 0) return null;
+    
+    const currentIndex = queue.findIndex((pr) => pr.url === current);
+    if (currentIndex === -1) {
+      // Current PR not in queue, return first in queue
+      return queue[0];
+    }
+    // Return next PR, or null if at end
+    return queue[currentIndex + 1] ?? null;
+  });
 
   // Scroll to file (and optionally line)
   const scrollToFile = (fileName: string, line?: number) => {
@@ -182,6 +207,48 @@ const AppContent: Component = () => {
     // Default to RIGHT side (additions) for now
     await addComment(annotation.file, annotation.line, "RIGHT", body);
   };
+  
+  // Fetch PR queue on mount
+  onMount(async () => {
+    try {
+      const res = await fetch("/api/prs");
+      const data = await res.json();
+      if (data.prs) {
+        setPrQueue(data.prs.map((pr: { url: string; title: string; repository: { nameWithOwner: string } }) => ({
+          url: pr.url,
+          title: pr.title,
+          repository: pr.repository,
+        })));
+      }
+    } catch {
+      // Silently fail - queue is optional
+    }
+  });
+  
+  // Load PR from URL query param on mount
+  onMount(() => {
+    const urlPr = searchParams.prUrl;
+    const prUrlValue = Array.isArray(urlPr) ? urlPr[0] : urlPr;
+    if (prUrlValue && !initialLoadTriggered()) {
+      setPrUrl(prUrlValue);
+      setInitialLoadTriggered(true);
+      // Trigger load after state is set
+      setTimeout(() => {
+        const form = document.querySelector("form");
+        if (form) {
+          form.requestSubmit();
+        }
+      }, 0);
+    }
+  });
+  
+  // Sync URL when PR is loaded
+  createEffect(() => {
+    const loaded = loadedPrUrl();
+    if (loaded) {
+      setSearchParams({ prUrl: loaded });
+    }
+  });
   
   // Load saved review state when PR changes
   createEffect(() => {
@@ -315,7 +382,15 @@ const AppContent: Component = () => {
               <span class="text-accent text-xs">●</span>
               <h1 class="text-sm text-text">better-review</h1>
             </div>
-            <SettingsPanel settings={settings()} onChange={setSettings} />
+            <div class="flex items-center gap-4">
+              <A
+                href="/prs"
+                class="text-xs text-text-faint hover:text-text transition-colors"
+              >
+                Browse PRs
+              </A>
+              <SettingsPanel settings={settings()} onChange={setSettings} />
+            </div>
           </div>
 
           <form onSubmit={loadPr} class="flex gap-2">
@@ -335,6 +410,17 @@ const AppContent: Component = () => {
             >
               {loading() ? "..." : "Load"}
             </button>
+            <Show when={nextPr()}>
+              {(next) => (
+                <A
+                  href={`/?prUrl=${encodeURIComponent(next().url)}`}
+                  class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-xs flex items-center gap-1"
+                  title={`Next: ${next().title}`}
+                >
+                  Next PR <span class="text-accent">→</span>
+                </A>
+              )}
+            </Show>
           </form>
 
           {error() && (

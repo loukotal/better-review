@@ -17,4 +17,6 @@ export default defineConfig({
   build: {
     target: "esnext",
   },
+  // Ensure SPA routing works - all non-API routes serve index.html
+  appType: "spa",
 });

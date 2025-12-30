@@ -65,6 +65,25 @@ export interface PrStatus {
   checks: CheckRun[];
 }
 
+export type ReviewState = "PENDING" | "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | null;
+
+export interface SearchedPr {
+  number: number;
+  title: string;
+  url: string;
+  repository: {
+    name: string;
+    nameWithOwner: string;
+  };
+  author: {
+    login: string;
+  };
+  createdAt: string;
+  isDraft: boolean;
+  /** User's latest review state on this PR, null if not reviewed */
+  myReviewState: ReviewState;
+}
+
 interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError>;
   getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError>;
@@ -73,6 +92,7 @@ interface GhCli {
   addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError>;
   replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError>;
   approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError>;
+  searchReviewRequested: () => Effect.Effect<SearchedPr[], GhError>;
 }
 
 export class GhService extends Context.Tag("GHService")<GhService, GhCli>() {}
@@ -280,6 +300,127 @@ export const GhServiceLive = Layer.succeed(GhService, {
       Effect.withSpan("GhService.approvePr", {
         attributes: { prUrl: params.prUrl },
       }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  searchReviewRequested: () =>
+    Effect.gen(function* () {
+      // Get current user login
+      const userCmd = Command.make("gh", "api", "user", "--jq", ".login");
+      const currentUser = (yield* Command.string(userCmd)).trim();
+
+      // GraphQL query to get PRs with review state
+      const query = `
+        query($requestedQuery: String!, $reviewedQuery: String!) {
+          requested: search(query: $requestedQuery, type: ISSUE, first: 100) {
+            nodes {
+              ... on PullRequest {
+                number
+                title
+                url
+                isDraft
+                createdAt
+                repository { name, nameWithOwner }
+                author { login }
+                reviews(last: 20) {
+                  nodes { author { login }, state }
+                }
+              }
+            }
+          }
+          reviewed: search(query: $reviewedQuery, type: ISSUE, first: 100) {
+            nodes {
+              ... on PullRequest {
+                number
+                title
+                url
+                isDraft
+                createdAt
+                repository { name, nameWithOwner }
+                author { login }
+                reviews(last: 20) {
+                  nodes { author { login }, state }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const graphqlCmd = Command.make(
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        `query=${query}`,
+        "-f",
+        "requestedQuery=is:pr is:open review-requested:@me",
+        "-f",
+        "reviewedQuery=is:pr is:open reviewed-by:@me",
+      );
+      const result = yield* Command.string(graphqlCmd);
+      const data = JSON.parse(result) as {
+        data: {
+          requested: { nodes: GraphQLPr[] };
+          reviewed: { nodes: GraphQLPr[] };
+        };
+      };
+
+      interface GraphQLPr {
+        number: number;
+        title: string;
+        url: string;
+        isDraft: boolean;
+        createdAt: string;
+        repository: { name: string; nameWithOwner: string };
+        author: { login: string };
+        reviews: { nodes: { author: { login: string }; state: string }[] };
+      }
+
+      // Helper to get user's latest review state
+      const getMyReviewState = (pr: GraphQLPr): ReviewState => {
+        const myReviews = pr.reviews.nodes.filter(
+          (r) => r.author.login === currentUser
+        );
+        if (myReviews.length === 0) return null;
+        // Return the last review state
+        return myReviews[myReviews.length - 1].state as ReviewState;
+      };
+
+      // Helper to convert GraphQL PR to SearchedPr
+      const toSearchedPr = (pr: GraphQLPr): SearchedPr => ({
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        isDraft: pr.isDraft,
+        createdAt: pr.createdAt,
+        repository: pr.repository,
+        author: pr.author,
+        myReviewState: getMyReviewState(pr),
+      });
+
+      // Merge and deduplicate by URL
+      const seen = new Set<string>();
+      const merged: SearchedPr[] = [];
+
+      for (const pr of data.data.requested.nodes) {
+        if (pr && !seen.has(pr.url)) {
+          seen.add(pr.url);
+          merged.push(toSearchedPr(pr));
+        }
+      }
+
+      for (const pr of data.data.reviewed.nodes) {
+        if (pr && !seen.has(pr.url)) {
+          seen.add(pr.url);
+          merged.push(toSearchedPr(pr));
+        }
+      }
+
+      return merged;
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "searchReviewRequested", cause })),
+      Effect.withSpan("GhService.searchReviewRequested"),
       Effect.provide(BunContext.layer),
     ),
 });

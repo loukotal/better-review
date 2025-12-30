@@ -97,6 +97,17 @@ process.on("SIGTERM", cleanup);
 const server = Bun.serve({
   port: 3001,
   routes: {
+    "/api/prs": {
+      GET: async () => {
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const prs = yield* gh.searchReviewRequested();
+            return { prs };
+          }),
+        );
+      },
+    },
     "/api/pr/diff": {
       GET: async (req) => {
         const url = new URL(req.url);
