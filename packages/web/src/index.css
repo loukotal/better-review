@@ -17,8 +17,8 @@
   
   /* Text hierarchy - white/gray spectrum */
   --color-text: #e5e5e5;
-  --color-text-muted: #737373;
-  --color-text-faint: #404040;
+  --color-text-muted: #a3a3a3;
+  --color-text-faint: #6b6b6b;
   
   /* Borders - subtle grays */
   --color-border: #1a1a1a;
