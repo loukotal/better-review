@@ -1,5 +1,5 @@
-import { Component, createSignal, createResource, For, Show } from "solid-js";
-import { A } from "@solidjs/router";
+import { Component, createResource, For, Show } from "solid-js";
+import { A, useSearchParams } from "@solidjs/router";
 
 type ReviewState = "PENDING" | "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | null;
 
@@ -21,13 +21,30 @@ interface SearchedPr {
   reviewRequested: boolean;
 }
 
+const PR_CACHE_KEY = "prListCache";
+
+function getCachedPrs(): SearchedPr[] | undefined {
+  try {
+    const cached = localStorage.getItem(PR_CACHE_KEY);
+    return cached ? JSON.parse(cached) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function setCachedPrs(prs: SearchedPr[]): void {
+  localStorage.setItem(PR_CACHE_KEY, JSON.stringify(prs));
+}
+
 async function fetchPrs(): Promise<SearchedPr[]> {
   const res = await fetch("/api/prs");
   const data = await res.json();
   if (data.error) {
     throw new Error(data.error);
   }
-  return data.prs ?? [];
+  const prs = data.prs ?? [];
+  setCachedPrs(prs);
+  return prs;
 }
 
 function formatRelativeTime(dateString: string): string {
@@ -52,12 +69,21 @@ function formatRelativeTime(dateString: string): string {
 }
 
 const PrListPage: Component = () => {
-  const [prs, { refetch }] = createResource(fetchPrs);
-  
-  // Filter state
-  const [showMyPrs, setShowMyPrs] = createSignal(false);
-  const [showDrafts, setShowDrafts] = createSignal(true);
-  const [showNeedsReview, setShowNeedsReview] = createSignal(false);
+  const cachedPrs = getCachedPrs();
+  const [prs, { refetch }] = createResource(fetchPrs, { initialValue: cachedPrs });
+
+  // Filter state from URL params
+  const [searchParams, setSearchParams] = useSearchParams();
+  const showMyPrs = () => searchParams.mine === "1";
+  const showDrafts = () => searchParams.drafts !== "0"; // default true
+  const showNeedsReview = () => searchParams.needsReview === "1";
+  const repoFilter = () => searchParams.repo ?? "";
+
+  // Get unique repos from PR list
+  const uniqueRepos = () => {
+    const repos = (prs() ?? []).map(pr => pr.repository.nameWithOwner);
+    return [...new Set(repos)].sort();
+  };
   
   // Filtered PR list
   const filteredPrs = () => {
@@ -75,13 +101,18 @@ const PrListPage: Component = () => {
     
     // "Needs Review" filter - only show PRs where I need to review
     if (showNeedsReview()) {
-      result = result.filter(pr => 
-        pr.reviewRequested && 
-        pr.myReviewState !== 'APPROVED' && 
+      result = result.filter(pr =>
+        pr.reviewRequested &&
+        pr.myReviewState !== 'APPROVED' &&
         pr.myReviewState !== 'CHANGES_REQUESTED'
       );
     }
-    
+
+    // Repo filter
+    if (repoFilter()) {
+      result = result.filter(pr => pr.repository.nameWithOwner === repoFilter());
+    }
+
     return result;
   };
 
@@ -127,7 +158,7 @@ const PrListPage: Component = () => {
         <div class="flex items-center gap-2 mb-6">
           <span class="text-xs text-text-faint mr-1">Filters:</span>
           <button
-            onClick={() => setShowMyPrs(!showMyPrs())}
+            onClick={() => setSearchParams({ mine: showMyPrs() ? undefined : "1" })}
             class={`px-3 py-1 text-xs border transition-colors ${
               showMyPrs()
                 ? "border-accent bg-accent/10 text-accent"
@@ -137,7 +168,7 @@ const PrListPage: Component = () => {
             My PRs
           </button>
           <button
-            onClick={() => setShowDrafts(!showDrafts())}
+            onClick={() => setSearchParams({ drafts: showDrafts() ? "0" : undefined })}
             class={`px-3 py-1 text-xs border transition-colors ${
               showDrafts()
                 ? "border-accent bg-accent/10 text-accent"
@@ -147,7 +178,7 @@ const PrListPage: Component = () => {
             Drafts
           </button>
           <button
-            onClick={() => setShowNeedsReview(!showNeedsReview())}
+            onClick={() => setSearchParams({ needsReview: showNeedsReview() ? undefined : "1" })}
             class={`px-3 py-1 text-xs border transition-colors ${
               showNeedsReview()
                 ? "border-accent bg-accent/10 text-accent"
@@ -156,6 +187,20 @@ const PrListPage: Component = () => {
           >
             Needs Review
           </button>
+          <select
+            value={repoFilter()}
+            onChange={(e) => setSearchParams({ repo: e.currentTarget.value || undefined })}
+            class={`px-3 py-1 text-xs border bg-bg transition-colors cursor-pointer ${
+              repoFilter()
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border text-text-faint hover:border-text-faint"
+            }`}
+          >
+            <option value="">All repos</option>
+            <For each={uniqueRepos()}>
+              {(repo) => <option value={repo}>{repo}</option>}
+            </For>
+          </select>
         </div>
 
         {/* Loading state */}
