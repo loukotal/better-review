@@ -1,5 +1,6 @@
 import { createSignal, createMemo, For, Show } from "solid-js";
 import type { FileDiffMetadata } from "@pierre/diffs";
+import { ApproveButton } from "./components/ApproveButton";
 
 interface FileTreePanelProps {
   files: FileDiffMetadata[];
@@ -238,6 +239,9 @@ export function FileTreePanel(props: FileTreePanelProps) {
     <div class="w-[220px] border-l border-border flex flex-col bg-bg-surface">
       {/* Panel Header */}
       <div class="px-2 py-2 border-b border-border">
+        <div class="flex justify-end mb-2">
+          <ApproveButton />
+        </div>
         <input
           type="text"
           value={searchQuery()}

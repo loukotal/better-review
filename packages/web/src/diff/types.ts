@@ -93,7 +93,7 @@ export interface PRComment {
 
 export type AnnotationMetadata =
   | { type: "thread"; rootComment: PRComment; replies: PRComment[] }
-  | { type: "pending"; line: number; side: "LEFT" | "RIGHT" }
+  | { type: "pending"; startLine: number; endLine: number; side: "LEFT" | "RIGHT" }
   | {
       type: "pending-reply";
       rootCommentId: number;

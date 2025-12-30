@@ -9,9 +9,9 @@ interface AnnotationBlockProps {
 
 const severityStyles: Record<AnnotationSeverity, { bg: string; border: string; icon: string; label: string }> = {
   info: {
-    bg: "bg-accent/10",
-    border: "border-accent/30",
-    icon: "text-accent",
+    bg: "bg-info/10",
+    border: "border-info/30",
+    icon: "text-info",
     label: "Info",
   },
   warning: {

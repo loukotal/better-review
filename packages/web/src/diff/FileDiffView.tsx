@@ -3,6 +3,7 @@ import {
   FileDiff,
   type FileDiffMetadata,
   type AnnotationSide,
+  type SelectedLineRange,
 } from "@pierre/diffs";
 import {
   type DiffSettings,
@@ -71,7 +72,7 @@ export function FileDiffView(props: FileDiffViewProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let instance: any;
   const [collapsed, setCollapsed] = createSignal(false);
-  const [pendingComment, setPendingComment] = createSignal<{ line: number; side: "LEFT" | "RIGHT" } | null>(null);
+  const [pendingComment, setPendingComment] = createSignal<{ startLine: number; endLine: number; side: "LEFT" | "RIGHT" } | null>(null);
   const [pendingReply, setPendingReply] = createSignal<{ commentId: number; line: number; side: "LEFT" | "RIGHT" } | null>(null);
   const [submitting, setSubmitting] = createSignal(false);
   
@@ -99,8 +100,8 @@ export function FileDiffView(props: FileDiffViewProps) {
     if (pending) {
       result.push({
         side: (pending.side === "LEFT" ? "deletions" : "additions") as AnnotationSide,
-        lineNumber: pending.line,
-        metadata: { type: "pending", line: pending.line, side: pending.side },
+        lineNumber: pending.endLine, // Attach annotation to the last line of selection
+        metadata: { type: "pending", startLine: pending.startLine, endLine: pending.endLine, side: pending.side },
       });
     }
     
@@ -146,7 +147,7 @@ export function FileDiffView(props: FileDiffViewProps) {
     (line) => {
       if (!instance || !line) return;
       
-      // Use the setSelectedLines API to highlight the line
+      // Try to highlight on additions side first (most common for annotations)
       instance.setSelectedLines({ 
         start: line, 
         end: line, 
@@ -158,12 +159,32 @@ export function FileDiffView(props: FileDiffViewProps) {
         const container = instance.getFileContainer?.() as HTMLElement | undefined;
         const shadowRoot = container?.shadowRoot;
         if (shadowRoot) {
-          // Try data-line attribute first, then data-alt-line
-          let lineEl = shadowRoot.querySelector(`[data-line="${line}"]`);
-          if (!lineEl) {
-            lineEl = shadowRoot.querySelector(`[data-alt-line="${line}"]`);
+          // Try multiple selectors to find the line element
+          // The diff component may use different attributes depending on view mode
+          const selectors = [
+            `[data-line="${line}"]`,
+            `[data-alt-line="${line}"]`,
+            `[data-new-line="${line}"]`,
+            `.line-new-${line}`,
+            `tr[data-line="${line}"]`,
+          ];
+          
+          let lineEl: Element | null = null;
+          for (const selector of selectors) {
+            lineEl = shadowRoot.querySelector(selector);
+            if (lineEl) break;
           }
-          lineEl?.scrollIntoView({ behavior: "smooth", block: "center" });
+          
+          if (lineEl) {
+            lineEl.scrollIntoView({ behavior: "smooth", block: "center" });
+          } else {
+            // Fallback: try to highlight on deletions side if additions didn't work
+            instance.setSelectedLines({ 
+              start: line, 
+              end: line, 
+              side: "deletions" as const 
+            });
+          }
         }
       }, 100);
     },
@@ -261,11 +282,18 @@ export function FileDiffView(props: FileDiffViewProps) {
       disableFileHeader: true,
       enableLineSelection: true,
       unsafeCSS: getFontCSS(),
-      onLineClick: (clickProps: { lineNumber: number; annotationSide: AnnotationSide }) => {
-        const { lineNumber, annotationSide } = clickProps;
-        if (lineNumber) {
-          const side = annotationSide === "deletions" ? "LEFT" : "RIGHT";
-          setPendingComment({ line: lineNumber, side });
+      onLineSelectionEnd: (range: SelectedLineRange | null) => {
+        // If user has selected text (for copying), don't open comment form
+        const textSelection = window.getSelection()?.toString().trim();
+        if (textSelection) {
+          return;
+        }
+        
+        if (range && range.start && range.end) {
+          const side = range.side === "deletions" ? "LEFT" : "RIGHT";
+          const startLine = Math.min(range.start, range.end);
+          const endLine = Math.max(range.start, range.end);
+          setPendingComment({ startLine, endLine, side });
           setPendingReply(null); // Clear any pending reply
           // Re-render to show the pending comment form
           setTimeout(rerender, 0);
@@ -371,10 +399,13 @@ export function FileDiffView(props: FileDiffViewProps) {
           
         } else if (metadata.type === "pending") {
           // Pending comment form (new comment, not a reply)
+          const lineLabel = metadata.startLine === metadata.endLine 
+            ? `Line ${metadata.startLine}` 
+            : `Lines ${metadata.startLine}-${metadata.endLine}`;
           div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
           div.innerHTML = `
             <div class="text-[10px] text-accent mb-2">
-              Line ${metadata.line}
+              ${lineLabel}
             </div>
             <textarea
               placeholder="Write a comment..."
@@ -425,7 +456,9 @@ export function FileDiffView(props: FileDiffViewProps) {
               setSubmitting(true);
               
               try {
-                await props.onAddComment(metadata.line, metadata.side, body);
+                // GitHub API uses the end line for single-line comments
+                // For multi-line, we'd need start_line + line params (future enhancement)
+                await props.onAddComment(metadata.endLine, metadata.side, body);
                 setPendingComment(null);
                 setTimeout(rerender, 0);
               } finally {

@@ -38,6 +38,8 @@
   --color-error: #ef4444;
   --color-warning: #ff6b00;
   --color-success: #22c55e;
+  --color-info: #3b82f6;
+  --color-merged: #a855f7;
 }
 
 /* === BASE STYLES === */
@@ -131,4 +133,99 @@ input, textarea, select {
 body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* === MARKDOWN CONTENT STYLING === */
+.markdown-content {
+  /* Reset default margins */
+  & > *:first-child {
+    margin-top: 0;
+  }
+  & > *:last-child {
+    margin-bottom: 0;
+  }
+  
+  /* Paragraphs */
+  & p {
+    margin: 0.5em 0;
+  }
+  
+  /* Headers - smaller sizes for chat context */
+  & h1, & h2, & h3, & h4, & h5, & h6 {
+    font-weight: 600;
+    margin: 0.75em 0 0.25em 0;
+    color: var(--color-text);
+  }
+  & h1 { font-size: 1.1em; }
+  & h2 { font-size: 1.05em; }
+  & h3 { font-size: 1em; }
+  
+  /* Code - inline */
+  & code {
+    background: var(--color-bg-elevated);
+    padding: 0.1em 0.3em;
+    border-radius: 2px;
+    font-size: 0.9em;
+  }
+  
+  /* Code blocks */
+  & pre {
+    background: var(--color-bg-elevated);
+    padding: 0.5em;
+    margin: 0.5em 0;
+    overflow-x: auto;
+    border: 1px solid var(--color-border);
+  }
+  & pre code {
+    background: none;
+    padding: 0;
+  }
+  
+  /* Lists */
+  & ul, & ol {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+  }
+  & li {
+    margin: 0.25em 0;
+  }
+  & ul {
+    list-style-type: disc;
+  }
+  & ol {
+    list-style-type: decimal;
+  }
+  
+  /* Blockquotes */
+  & blockquote {
+    border-left: 2px solid var(--color-accent);
+    margin: 0.5em 0;
+    padding-left: 0.75em;
+    color: var(--color-text-muted);
+  }
+  
+  /* Links */
+  & a {
+    color: var(--color-accent);
+    text-decoration: none;
+  }
+  & a:hover {
+    text-decoration: underline;
+  }
+  
+  /* Emphasis */
+  & strong {
+    font-weight: 600;
+    color: var(--color-text);
+  }
+  & em {
+    font-style: italic;
+  }
+  
+  /* Horizontal rules */
+  & hr {
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin: 0.75em 0;
+  }
 }

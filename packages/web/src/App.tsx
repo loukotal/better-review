@@ -6,6 +6,8 @@ import { ChatPanel } from "./ChatPanel";
 import { SettingsPanel } from "./diff/SettingsPanel";
 import { THEME_LABELS, type DiffTheme } from "./diff/types";
 import type { Annotation } from "./utils/parseReviewTokens";
+import { PrProvider, usePrContext } from "./context/PrContext";
+import { PrStatusBar, type PrStatus } from "./components/PrStatusBar";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
@@ -95,10 +97,13 @@ function saveAnnotations(prUrl: string, annotations: Annotation[]): void {
   }
 }
 
-const App: Component = () => {
+const AppContent: Component = () => {
+  const { setPrUrl: setContextPrUrl } = usePrContext();
   const [prUrl, setPrUrl] = createSignal("");
   const [loadedPrUrl, setLoadedPrUrl] = createSignal<string | null>(null);
   const [prInfo, setPrInfo] = createSignal<PrInfo | null>(null);
+  const [prStatus, setPrStatus] = createSignal<PrStatus | null>(null);
+  const [loadingStatus, setLoadingStatus] = createSignal(false);
   const [loading, setLoading] = createSignal(false);
   const [loadingComments, setLoadingComments] = createSignal(false);
   const [diff, setDiff] = createSignal<string | null>(null);
@@ -212,6 +217,7 @@ const App: Component = () => {
     setComments([]);
     setLoadedPrUrl(null);
     setPrInfo(null);
+    setPrStatus(null);
 
     try {
       // Load diff and PR info in parallel
@@ -230,6 +236,7 @@ const App: Component = () => {
       
       setDiff(diffData.diff);
       setLoadedPrUrl(prUrl());
+      setContextPrUrl(prUrl());
       
       // Set PR info if available
       if (infoData.owner && infoData.repo && infoData.number) {
@@ -241,14 +248,28 @@ const App: Component = () => {
       
       setLoading(false);
 
-      // Then load comments
+      // Then load comments and status in parallel
       setLoadingComments(true);
-      const commentsRes = await fetch(`/api/pr/comments?url=${encodeURIComponent(prUrl())}`);
-      const commentsData = await commentsRes.json();
+      setLoadingStatus(true);
+      
+      const [commentsRes, statusRes] = await Promise.all([
+        fetch(`/api/pr/comments?url=${encodeURIComponent(prUrl())}`),
+        fetch(`/api/pr/status?url=${encodeURIComponent(prUrl())}`),
+      ]);
+      
+      const [commentsData, statusData] = await Promise.all([
+        commentsRes.json(),
+        statusRes.json(),
+      ]);
       
       if (!commentsData.error) {
         setComments(commentsData.comments ?? []);
       }
+      
+      if (!statusData.error) {
+        setPrStatus(statusData);
+      }
+      setLoadingStatus(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load PR");
     } finally {
@@ -322,6 +343,13 @@ const App: Component = () => {
             </div>
           )}
         </div>
+        
+        {/* PR Status Bar */}
+        <Show when={loadedPrUrl()}>
+          <div class="px-4 py-2 border-t border-border bg-bg">
+            <PrStatusBar status={prStatus()} loading={loadingStatus()} />
+          </div>
+        </Show>
       </header>
 
       {/* Main content */}
@@ -377,6 +405,14 @@ const App: Component = () => {
         </Show>
       </div>
     </div>
+  );
+};
+
+const App: Component = () => {
+  return (
+    <PrProvider>
+      <AppContent />
+    </PrProvider>
   );
 };
 

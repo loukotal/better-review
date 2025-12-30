@@ -35,18 +35,44 @@ export interface AddReplyParams {
   body: string;
 }
 
+export interface ApprovePrParams {
+  prUrl: string;
+  body?: string;
+}
+
 export interface PrInfo {
   owner: string;
   repo: string;
   number: string;
 }
 
+export type PrState = "open" | "closed" | "merged";
+
+export interface CheckRun {
+  name: string;
+  status: "queued" | "in_progress" | "completed";
+  conclusion: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required" | null;
+}
+
+export interface PrStatus {
+  state: PrState;
+  draft: boolean;
+  mergeable: boolean | null;
+  title: string;
+  body: string;
+  author: string;
+  url: string;
+  checks: CheckRun[];
+}
+
 interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError>;
   getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError>;
+  getPrStatus: (urlOrNumber: string) => Effect.Effect<PrStatus, GhError>;
   listComments: (prUrl: string) => Effect.Effect<PRComment[], GhError>;
   addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError>;
   replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError>;
+  approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError>;
 }
 
 export class GhService extends Context.Tag("GHService")<GhService, GhCli>() {}
@@ -92,6 +118,63 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getDiff", cause })),
       Effect.withSpan("GhService.getDiff", { attributes: { urlOrNumber } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getPrStatus: (urlOrNumber: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
+      
+      // Get PR details
+      const prCmd = Command.make(
+        "gh",
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}`,
+        "--jq",
+        "{ state, draft, mergeable, title, body, author: .user.login, merged: .merged, html_url }",
+      );
+      const prData = JSON.parse(yield* Command.string(prCmd)) as {
+        state: string;
+        draft: boolean;
+        mergeable: boolean | null;
+        title: string;
+        body: string | null;
+        author: string;
+        merged: boolean;
+        html_url: string;
+      };
+
+      // Get check runs for the PR's head commit
+      const checksCmd = Command.make(
+        "gh",
+        "api",
+        `repos/${owner}/${repo}/commits/${yield* Effect.tryPromise(() =>
+          Bun.$`gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha'`.text().then(s => s.trim())
+        )}/check-runs`,
+        "--jq",
+        ".check_runs | map({ name, status, conclusion })",
+      );
+      const checksResult = yield* Command.string(checksCmd).pipe(
+        Effect.catchAll(() => Effect.succeed("[]")),
+      );
+      const checks = JSON.parse(checksResult) as CheckRun[];
+
+      // Determine actual state (open/closed/merged)
+      const state: PrState = prData.merged ? "merged" : prData.state as PrState;
+
+      return {
+        state,
+        draft: prData.draft,
+        mergeable: prData.mergeable,
+        title: prData.title,
+        body: prData.body ?? "",
+        author: prData.author,
+        url: prData.html_url,
+        checks,
+      } satisfies PrStatus;
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getPrStatus", cause })),
+      Effect.withSpan("GhService.getPrStatus", { attributes: { urlOrNumber } }),
       Effect.provide(BunContext.layer),
     ),
 
@@ -175,6 +258,27 @@ export const GhServiceLive = Layer.succeed(GhService, {
           prUrl: params.prUrl,
           commentId: params.commentId,
         },
+      }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  approvePr: (params: ApprovePrParams) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(params.prUrl);
+
+      const payload = JSON.stringify({
+        event: "APPROVE",
+        body: params.body ?? "",
+      });
+
+      // Create a review with APPROVE event
+      yield* Effect.tryPromise(() =>
+        Bun.$`echo ${payload} | gh api repos/${owner}/${repo}/pulls/${number}/reviews -X POST -H "Accept: application/vnd.github+json" --input -`.text(),
+      );
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "approvePr", cause })),
+      Effect.withSpan("GhService.approvePr", {
+        attributes: { prUrl: params.prUrl },
       }),
       Effect.provide(BunContext.layer),
     ),

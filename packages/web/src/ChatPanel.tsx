@@ -1,9 +1,17 @@
-import { createSignal, createEffect, For, Show, Switch, Match, createMemo } from "solid-js";
+import { createSignal, createEffect, For, Show, Switch, Match, createMemo, onMount, onCleanup } from "solid-js";
+import { marked } from "marked";
+import remend from "remend";
 import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
 import { FileLink } from "./components/FileLink";
 import { AnnotationBlock } from "./components/AnnotationBlock";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { useStreamingChat, type StreamingMessage, type ToolCall } from "./hooks/useStreamingChat";
+
+// Configure marked for safe, minimal output
+marked.setOptions({
+  gfm: true,
+  breaks: true,
+});
 
 interface ChatPanelProps {
   prUrl: string | null;
@@ -16,11 +24,35 @@ interface ChatPanelProps {
   onAddAnnotationAsComment?: (annotation: Annotation) => void;
 }
 
+const CHAT_WIDTH_KEY = "chat-panel-width";
+const DEFAULT_WIDTH = 320;
+const MIN_WIDTH = 240;
+const MAX_WIDTH = 600;
+
+function loadSavedWidth(): number {
+  try {
+    const saved = localStorage.getItem(CHAT_WIDTH_KEY);
+    if (saved) {
+      const width = parseInt(saved, 10);
+      if (width >= MIN_WIDTH && width <= MAX_WIDTH) {
+        return width;
+      }
+    }
+  } catch {
+    // Ignore
+  }
+  return DEFAULT_WIDTH;
+}
+
 export function ChatPanel(props: ChatPanelProps) {
   const [input, setInput] = createSignal("");
   const [sessionId, setSessionId] = createSignal<string | null>(null);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [initializing, setInitializing] = createSignal(false);
+  
+  // Resize state
+  const [width, setWidth] = createSignal(loadSavedWidth());
+  const [isResizing, setIsResizing] = createSignal(false);
 
   // Use the streaming chat hook
   const chat = useStreamingChat({
@@ -175,14 +207,29 @@ export function ChatPanel(props: ChatPanelProps) {
     props.onAddAnnotationAsComment?.(annotation);
   };
 
+  // Render markdown text (with streaming support via remend)
+  function MarkdownText(mdProps: { content: string; streaming?: boolean }) {
+    const html = () => {
+      try {
+        // Use remend to complete incomplete markdown during streaming
+        const preprocessed = mdProps.streaming ? remend(mdProps.content) : mdProps.content;
+        return marked.parse(preprocessed, { async: false }) as string;
+      } catch {
+        return mdProps.content;
+      }
+    };
+    
+    return (
+      <span class="markdown-content" innerHTML={html()} />
+    );
+  }
+
   // Render a message segment
   function MessageSegmentView(segmentProps: { segment: MessageSegment }) {
     return (
       <Switch>
         <Match when={segmentProps.segment.type === "text"}>
-          <span class="whitespace-pre-wrap">
-            {(segmentProps.segment as { type: "text"; content: string }).content}
-          </span>
+          <MarkdownText content={(segmentProps.segment as { type: "text"; content: string }).content} />
         </Match>
         <Match when={segmentProps.segment.type === "file-ref"}>
           <FileLink
@@ -277,6 +324,40 @@ export function ChatPanel(props: ChatPanelProps) {
   // Combine error from session and streaming
   const displayError = createMemo(() => sessionError() || chat.error());
 
+  // Resize handlers
+  const handleMouseDown = (e: MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  const handleMouseMove = (e: MouseEvent) => {
+    if (!isResizing()) return;
+    const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, e.clientX));
+    setWidth(newWidth);
+  };
+
+  const handleMouseUp = () => {
+    if (isResizing()) {
+      setIsResizing(false);
+      // Save width to localStorage
+      try {
+        localStorage.setItem(CHAT_WIDTH_KEY, width().toString());
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  };
+
+  onMount(() => {
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  });
+
+  onCleanup(() => {
+    document.removeEventListener("mousemove", handleMouseMove);
+    document.removeEventListener("mouseup", handleMouseUp);
+  });
+
   // Connection status text
   const connectionStatus = createMemo(() => {
     if (sessionId()) {
@@ -297,7 +378,17 @@ export function ChatPanel(props: ChatPanelProps) {
   });
 
   return (
-    <div class="w-[320px] border-r border-border flex flex-col bg-bg-surface">
+    <div 
+      class="border-r border-border flex flex-col bg-bg-surface relative"
+      style={{ width: `${width()}px`, "min-width": `${MIN_WIDTH}px`, "max-width": `${MAX_WIDTH}px` }}
+    >
+      {/* Resize handle */}
+      <div
+        class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-accent/50 transition-colors z-10"
+        classList={{ "bg-accent": isResizing() }}
+        onMouseDown={handleMouseDown}
+      />
+      
       {/* Header */}
       <div class="px-3 py-2 border-b border-border">
         <div class="flex items-center justify-between">
@@ -433,10 +524,10 @@ export function ChatPanel(props: ChatPanelProps) {
                 </div>
               </Show>
               
-              {/* Streaming content - use plain text while streaming for reactivity */}
+              {/* Streaming content - render markdown with remend for incomplete blocks */}
               <Show when={chat.streamingContent()}>
-                <div class="text-text break-words leading-relaxed whitespace-pre-wrap">
-                  {chat.streamingContent()}
+                <div class="text-xs text-text break-words leading-relaxed">
+                  <MarkdownText content={chat.streamingContent()!} streaming={true} />
                 </div>
               </Show>
               

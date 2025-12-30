@@ -34,10 +34,12 @@ export interface ParsedMessage {
   annotations: Annotation[];
 }
 
-// Regex patterns
-const REVIEW_ORDER_PATTERN = /<<REVIEW_ORDER>>([\s\S]*?)<\/REVIEW_ORDER>>/g;
-const ANNOTATION_PATTERN = /<<ANNOTATION\s+file="([^"]+)"\s+line="(\d+)"\s+severity="(info|warning|critical)">>(.+?)<\/ANNOTATION>>/gs;
+// Regex patterns - note: closing tags use << >> not </ >>
+const REVIEW_ORDER_PATTERN = /<<REVIEW_ORDER>>([\s\S]*?)<<\/REVIEW_ORDER>>/g;
+const ANNOTATION_PATTERN = /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
 const FILE_REF_PATTERN = /\[\[file:([^\]:\s]+)(?::(\d+))?\]\]/g;
+// Pattern to clean up hallucinated placeholder-like strings from the AI
+const HALLUCINATED_PLACEHOLDER_PATTERN = /#{1,3}\s*__FILE_REF_[^_\s]+_[^_\s]+__\s*\n?/g;
 
 let annotationIdCounter = 0;
 
@@ -53,6 +55,9 @@ export function parseReviewTokens(content: string): ParsedMessage {
   // First pass: Extract review order and annotations, replace with placeholders
   let processedContent = content;
   const placeholders: Map<string, MessageSegment> = new Map();
+  
+  // Clean up any hallucinated placeholder-like strings from the AI
+  processedContent = processedContent.replace(HALLUCINATED_PLACEHOLDER_PATTERN, '');
   
   // Extract review order
   processedContent = processedContent.replace(REVIEW_ORDER_PATTERN, (match, jsonContent) => {
@@ -71,11 +76,15 @@ export function parseReviewTokens(content: string): ParsedMessage {
   });
   
   // Extract annotations
-  processedContent = processedContent.replace(ANNOTATION_PATTERN, (match, file, line, severity, message) => {
+  processedContent = processedContent.replace(ANNOTATION_PATTERN, (match, file, lineStr, severity, message) => {
+    // Handle line ranges like "15-16" by taking the first number
+    const lineMatch = lineStr.match(/^(\d+)/);
+    const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
+    
     const annotation: Annotation = {
       id: generateAnnotationId(),
       file,
-      line: parseInt(line, 10),
+      line,
       severity: severity as AnnotationSeverity,
       message: message.trim(),
     };
@@ -150,7 +159,7 @@ export function hasReviewTokens(content: string): boolean {
  * Extract just the review order from content (for quick access)
  */
 export function extractReviewOrder(content: string): string[] | null {
-  const match = content.match(/<<REVIEW_ORDER>>([\s\S]*?)<\/REVIEW_ORDER>>/);
+  const match = content.match(/<<REVIEW_ORDER>>([\s\S]*?)<<\/REVIEW_ORDER>>/);
   if (match) {
     try {
       const files = JSON.parse(match[1].trim());
@@ -169,14 +178,18 @@ export function extractReviewOrder(content: string): string[] | null {
  */
 export function extractAnnotations(content: string): Annotation[] {
   const annotations: Annotation[] = [];
-  const pattern = /<<ANNOTATION\s+file="([^"]+)"\s+line="(\d+)"\s+severity="(info|warning|critical)">>(.+?)<\/ANNOTATION>>/gs;
+  const pattern = /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
   let match: RegExpExecArray | null;
   
   while ((match = pattern.exec(content)) !== null) {
+    // Handle line ranges like "15-16" by taking the first number
+    const lineMatch = match[2].match(/^(\d+)/);
+    const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
+    
     annotations.push({
       id: generateAnnotationId(),
       file: match[1],
-      line: parseInt(match[2], 10),
+      line,
       severity: match[3] as AnnotationSeverity,
       message: match[4].trim(),
     });
