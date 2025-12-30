@@ -261,6 +261,8 @@ export function FileDiffView(props: FileDiffViewProps) {
       try {
         await props.onReplyToComment(commentId, body);
         setPendingReply(null);
+        // Clear any text selection so next line click can open comment form
+        window.getSelection()?.removeAllRanges();
         setTimeout(rerender, 0);
       } finally {
         setSubmitting(false);
@@ -283,13 +285,10 @@ export function FileDiffView(props: FileDiffViewProps) {
       enableLineSelection: true,
       unsafeCSS: getFontCSS(),
       onLineSelectionEnd: (range: SelectedLineRange | null) => {
-        // If user has selected text (for copying), don't open comment form
-        const textSelection = window.getSelection()?.toString().trim();
-        if (textSelection) {
-          return;
-        }
-        
         if (range && range.start && range.end) {
+          // Clear any existing text selection so it doesn't block future interactions
+          window.getSelection()?.removeAllRanges();
+
           const side = range.side === "deletions" ? "LEFT" : "RIGHT";
           const startLine = Math.min(range.start, range.end);
           const endLine = Math.max(range.start, range.end);
@@ -460,6 +459,8 @@ export function FileDiffView(props: FileDiffViewProps) {
                 // For multi-line, we'd need start_line + line params (future enhancement)
                 await props.onAddComment(metadata.endLine, metadata.side, body);
                 setPendingComment(null);
+                // Clear any text selection so next line click can open comment form
+                window.getSelection()?.removeAllRanges();
                 setTimeout(rerender, 0);
               } finally {
                 setSubmitting(false);
