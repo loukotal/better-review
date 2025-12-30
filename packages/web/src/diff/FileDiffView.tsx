@@ -1,4 +1,4 @@
-import { createSignal, Show, createEffect, on, onCleanup } from "solid-js";
+import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "solid-js";
 import {
   FileDiff,
   type FileDiffMetadata,
@@ -12,6 +12,21 @@ import {
   FONT_FAMILY_MAP,
 } from "./types";
 import { GITHUB_ICON } from "../icons";
+
+// Large file thresholds
+const LARGE_FILE_LINE_THRESHOLD = 2000;
+
+// Patterns for generated/lock files that are rarely useful to review
+const GENERATED_FILE_PATTERNS = [
+  /package-lock\.json$/,
+  /yarn\.lock$/,
+  /pnpm-lock\.yaml$/,
+  /Podfile\.lock$/,
+  /Gemfile\.lock$/,
+  /composer\.lock$/,
+  /\.min\.js$/,
+  /\.min\.css$/,
+];
 
 interface FileDiffViewProps {
   file: FileDiffMetadata;
@@ -75,7 +90,18 @@ export function FileDiffView(props: FileDiffViewProps) {
   let containerRef: HTMLDivElement | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let instance: any;
-  const [collapsed, setCollapsed] = createSignal(false);
+
+  // Detect large or generated files
+  const totalLines = createMemo(() =>
+    props.file.hunks?.reduce((acc, h) => acc + (h.additionLines ?? 0) + (h.deletionLines ?? 0), 0) ?? 0
+  );
+  const isLargeFile = createMemo(() => totalLines() > LARGE_FILE_LINE_THRESHOLD);
+  const isGeneratedFile = createMemo(() =>
+    GENERATED_FILE_PATTERNS.some(p => p.test(props.file.name))
+  );
+  const shouldAutoCollapse = createMemo(() => isLargeFile() || isGeneratedFile());
+
+  const [collapsed, setCollapsed] = createSignal(shouldAutoCollapse());
   const [pendingComment, setPendingComment] = createSignal<{ startLine: number; endLine: number; side: "LEFT" | "RIGHT" } | null>(null);
   const [pendingReply, setPendingReply] = createSignal<{ commentId: number; line: number; side: "LEFT" | "RIGHT" } | null>(null);
   const [pendingEdit, setPendingEdit] = createSignal<{ commentId: number; body: string } | null>(null);
@@ -692,6 +718,13 @@ export function FileDiffView(props: FileDiffViewProps) {
           )}
         </span>
         
+        {/* Large/generated file indicator */}
+        <Show when={shouldAutoCollapse()}>
+          <span class="text-[10px] text-text-faint">
+            {isGeneratedFile() ? "generated" : `${totalLines()} lines`}
+          </span>
+        </Show>
+
         {/* Comment count */}
         <Show when={props.comments.length > 0}>
           <span class="text-[10px] text-accent">
