@@ -1,4 +1,3 @@
-import { runtime } from "./runtime";
 import {
   GhService,
   type AddCommentParams,
@@ -7,16 +6,16 @@ import {
 } from "./gh/gh";
 import { Effect } from "effect";
 import {
-  type OpencodeClient,
-  type Event as OpenCodeEvent,
-} from "@opencode-ai/sdk";
-import {
-  transformEvent,
-  formatSSE,
-  formatSSEComment,
-  type StreamEvent,
+  createOpenCodeStream,
+  streamToSSEResponse,
 } from "./stream";
 import { OpencodeService } from "./opencode";
+import {
+  handleEffect,
+  handleEffectResponse,
+  validationError,
+} from "./handler";
+import { runtime } from "./runtime";
 
 // Session storage: prUrl -> sessionId
 const prSessions = new Map<string, string>();
@@ -27,15 +26,6 @@ const diffCache = new Map<string, Map<string, string>>();
 // Current PR context (for the tool to access)
 let currentPrUrl: string | null = null;
 let currentPrFiles: string[] = [];
-
-async function getOpencode() {
-  return runtime.runPromise(
-    Effect.gen(function* () {
-      const { client, server, baseUrl } = yield* OpencodeService;
-      return { client, server, baseUrl };
-    }),
-  );
-}
 
 // Fetch and cache all diffs for a PR
 async function cachePrDiffs(prUrl: string): Promise<Map<string, string>> {
@@ -113,23 +103,16 @@ const server = Bun.serve({
         const prUrl = url.searchParams.get("url");
 
         if (!prUrl) {
-          return Response.json(
-            { error: "Missing url parameter" },
-            { status: 400 },
-          );
+          return validationError("Missing url parameter");
         }
 
-        const result = await runtime
-          .runPromise(
-            Effect.gen(function* () {
-              const gh = yield* GhService;
-              const diff = yield* gh.getDiff(prUrl);
-              return { diff };
-            }),
-          )
-          .catch((e) => ({ error: String(e) }));
-
-        return Response.json(result);
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const diff = yield* gh.getDiff(prUrl);
+            return { diff };
+          }),
+        );
       },
     },
     "/api/pr/info": {
@@ -138,23 +121,15 @@ const server = Bun.serve({
         const prUrl = url.searchParams.get("url");
 
         if (!prUrl) {
-          return Response.json(
-            { error: "Missing url parameter" },
-            { status: 400 },
-          );
+          return validationError("Missing url parameter");
         }
 
-        const result = await runtime
-          .runPromise(
-            Effect.gen(function* () {
-              const gh = yield* GhService;
-              const info = yield* gh.getPrInfo(prUrl);
-              return info;
-            }),
-          )
-          .catch((e) => ({ error: String(e) }));
-
-        return Response.json(result);
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            return yield* gh.getPrInfo(prUrl);
+          }),
+        );
       },
     },
     "/api/pr/comments": {
@@ -163,23 +138,16 @@ const server = Bun.serve({
         const prUrl = url.searchParams.get("url");
 
         if (!prUrl) {
-          return Response.json(
-            { error: "Missing url parameter" },
-            { status: 400 },
-          );
+          return validationError("Missing url parameter");
         }
 
-        const result = await runtime
-          .runPromise(
-            Effect.gen(function* () {
-              const gh = yield* GhService;
-              const comments = yield* gh.listComments(prUrl);
-              return { comments };
-            }),
-          )
-          .catch((e) => ({ error: String(e) }));
-
-        return Response.json(result);
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const comments = yield* gh.listComments(prUrl);
+            return { comments };
+          }),
+        );
       },
     },
     "/api/pr/status": {
@@ -188,23 +156,15 @@ const server = Bun.serve({
         const prUrl = url.searchParams.get("url");
 
         if (!prUrl) {
-          return Response.json(
-            { error: "Missing url parameter" },
-            { status: 400 },
-          );
+          return validationError("Missing url parameter");
         }
 
-        const result = await runtime
-          .runPromise(
-            Effect.gen(function* () {
-              const gh = yield* GhService;
-              const status = yield* gh.getPrStatus(prUrl);
-              return status;
-            }),
-          )
-          .catch((e) => ({ error: String(e) }));
-
-        return Response.json(result);
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            return yield* gh.getPrStatus(prUrl);
+          }),
+        );
       },
     },
     "/api/pr/comment": {
@@ -212,23 +172,18 @@ const server = Bun.serve({
         const body = (await req.json()) as AddCommentParams;
 
         if (!body.prUrl || !body.filePath || !body.line || !body.body) {
-          return Response.json(
-            { error: "Missing required fields: prUrl, filePath, line, body" },
-            { status: 400 },
+          return validationError(
+            "Missing required fields: prUrl, filePath, line, body",
           );
         }
 
-        const result = await runtime
-          .runPromise(
-            Effect.gen(function* () {
-              const gh = yield* GhService;
-              const comment = yield* gh.addComment(body);
-              return { comment };
-            }),
-          )
-          .catch((e) => ({ error: String(e) }));
-
-        return Response.json(result);
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const comment = yield* gh.addComment(body);
+            return { comment };
+          }),
+        );
       },
     },
     "/api/pr/comment/reply": {
@@ -236,23 +191,18 @@ const server = Bun.serve({
         const body = (await req.json()) as AddReplyParams;
 
         if (!body.prUrl || !body.commentId || !body.body) {
-          return Response.json(
-            { error: "Missing required fields: prUrl, commentId, body" },
-            { status: 400 },
+          return validationError(
+            "Missing required fields: prUrl, commentId, body",
           );
         }
 
-        const result = await runtime
-          .runPromise(
-            Effect.gen(function* () {
-              const gh = yield* GhService;
-              const comment = yield* gh.replyToComment(body);
-              return { comment };
-            }),
-          )
-          .catch((e) => ({ error: String(e) }));
-
-        return Response.json(result);
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const comment = yield* gh.replyToComment(body);
+            return { comment };
+          }),
+        );
       },
     },
 
@@ -261,23 +211,16 @@ const server = Bun.serve({
         const body = (await req.json()) as ApprovePrParams;
 
         if (!body.prUrl) {
-          return Response.json(
-            { error: "Missing required field: prUrl" },
-            { status: 400 },
-          );
+          return validationError("Missing required field: prUrl");
         }
 
-        const result = await runtime
-          .runPromise(
-            Effect.gen(function* () {
-              const gh = yield* GhService;
-              yield* gh.approvePr(body);
-              return { success: true };
-            }),
-          )
-          .catch((e) => ({ error: String(e) }));
-
-        return Response.json(result);
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            yield* gh.approvePr(body);
+            return { success: true };
+          }),
+        );
       },
     },
 
@@ -361,16 +304,6 @@ const server = Bun.serve({
 
     "/api/opencode/session": {
       POST: async (req) => {
-        const { client, server } = await getOpencode();
-
-        if (!client) {
-          console.log("[API] OpenCode client not initialized");
-          return Response.json(
-            { error: "OpenCode not initialized" },
-            { status: 503 },
-          );
-        }
-
         const body = (await req.json()) as {
           prUrl: string;
           prNumber: number;
@@ -378,103 +311,101 @@ const server = Bun.serve({
           repoName: string;
           files: string[];
         };
-        console.log("[API] Request body:", {
-          ...body,
-          files: `[${body.files?.length || 0} files]`,
-        });
 
         if (!body.prUrl) {
-          console.log("[API] Missing prUrl");
-          return Response.json({ error: "Missing prUrl" }, { status: 400 });
+          return validationError("Missing prUrl");
         }
 
-        try {
-          // Check if we already have a session for this PR
-          const existingSessionId = prSessions.get(body.prUrl);
-          console.log("[API] Existing session ID:", existingSessionId);
+        return handleEffect(
+          Effect.gen(function* () {
+            const { client } = yield* OpencodeService;
 
-          // Set current PR context for the file-diff endpoint
-          currentPrUrl = body.prUrl;
-          currentPrFiles = body.files;
-
-          // Pre-cache all diffs for this PR
-          console.log("[API] Pre-caching diffs...");
-          await cachePrDiffs(body.prUrl);
-
-          // Write PR context file for custom tools (always, even for existing sessions)
-          console.log("[API] Writing PR context file...");
-          await Bun.write(
-            ".opencode/.current-pr.json",
-            JSON.stringify({
-              url: body.prUrl,
-              owner: body.repoOwner,
-              repo: body.repoName,
-              number: body.prNumber,
-              files: body.files,
-            }),
-          );
-
-          if (existingSessionId) {
-            console.log("[API] Fetching existing session...");
-            const existingSession = await client.session.get({
-              path: { id: existingSessionId },
+            yield* Effect.log("[API] Request body:", {
+              ...body,
+              files: `[${body.files?.length || 0} files]`,
             });
-            console.log(
-              "[API] Existing session result:",
-              existingSession.data?.id,
+
+            // Check if we already have a session for this PR
+            const existingSessionId = prSessions.get(body.prUrl);
+            yield* Effect.log("[API] Existing session ID:", existingSessionId);
+
+            // Set current PR context for the file-diff endpoint
+            currentPrUrl = body.prUrl;
+            currentPrFiles = body.files;
+
+            // Pre-cache all diffs for this PR
+            yield* Effect.log("[API] Pre-caching diffs...");
+            yield* Effect.tryPromise(() => cachePrDiffs(body.prUrl));
+
+            // Write PR context file for custom tools
+            yield* Effect.log("[API] Writing PR context file...");
+            yield* Effect.tryPromise(() =>
+              Bun.write(
+                ".opencode/.current-pr.json",
+                JSON.stringify({
+                  url: body.prUrl,
+                  owner: body.repoOwner,
+                  repo: body.repoName,
+                  number: body.prNumber,
+                  files: body.files,
+                }),
+              ),
             );
-            if (existingSession.data) {
-              return Response.json({
-                session: existingSession.data,
-                existing: true,
-              });
+
+            if (existingSessionId) {
+              yield* Effect.log("[API] Fetching existing session...");
+              const existingSession = yield* Effect.tryPromise(() =>
+                client.session.get({ path: { id: existingSessionId } }),
+              );
+              yield* Effect.log(
+                "[API] Existing session result:",
+                existingSession.data?.id,
+              );
+              if (existingSession.data) {
+                return { session: existingSession.data, existing: true };
+              }
             }
-          }
 
-          // Create a new session
-          console.log("[API] Creating new session...");
-          const session = await client.session.create({
-            body: {
-              title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
-            },
-          });
-          console.log("[API] Session created:", session.data?.id);
-
-          if (!session.data) {
-            console.log("[API] Failed to create session - no data returned");
-            return Response.json(
-              { error: "Failed to create session" },
-              { status: 500 },
+            // Create a new session
+            yield* Effect.log("[API] Creating new session...");
+            const session = yield* Effect.tryPromise(() =>
+              client.session.create({
+                body: {
+                  title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
+                },
+              }),
             );
-          }
+            yield* Effect.log("[API] Session created:", session.data?.id);
 
-          // Store the session mapping
-          prSessions.set(body.prUrl, session.data.id);
+            if (!session.data) {
+              return yield* Effect.fail(new Error("Failed to create session"));
+            }
 
-          // Inject initial context (without expecting a reply)
-          console.log("[API] Injecting context...");
-          const contextMessage = buildReviewContext(body);
-          await client.session.prompt({
-            path: { id: session.data.id },
-            body: {
-              parts: [{ type: "text", text: contextMessage }],
-              noReply: true,
-            },
-          });
-          console.log("[API] Context injected successfully");
+            // Store the session mapping
+            prSessions.set(body.prUrl, session.data.id);
 
-          return Response.json({ session: session.data, existing: false });
-        } catch (error) {
-          console.error("[API] Error creating OpenCode session:", error);
-          return Response.json({ error: String(error) }, { status: 500 });
-        }
+            // Inject initial context (without expecting a reply)
+            yield* Effect.log("[API] Injecting context...");
+            const contextMessage = buildReviewContext(body);
+            yield* Effect.tryPromise(() =>
+              client.session.prompt({
+                path: { id: session.data!.id },
+                body: {
+                  parts: [{ type: "text", text: contextMessage }],
+                  noReply: true,
+                },
+              }),
+            );
+            yield* Effect.log("[API] Context injected successfully");
+
+            return { session: session.data, existing: false };
+          }),
+        );
       },
     },
 
     "/api/opencode/prompt": {
       POST: async (req) => {
-        const { client } = await getOpencode();
-
         const body = (await req.json()) as {
           sessionId: string;
           message: string;
@@ -482,234 +413,125 @@ const server = Bun.serve({
         };
 
         if (!body.sessionId || !body.message) {
-          return Response.json(
-            { error: "Missing sessionId or message" },
-            { status: 400 },
-          );
+          return validationError("Missing sessionId or message");
         }
 
-        try {
-          // Use a better model when using the review agent
-          const modelID =
-            body.agent === "review"
-              ? "claude-sonnet-4-20250514"
-              : "claude-3-5-haiku-latest";
+        return handleEffect(
+          Effect.gen(function* () {
+            const { client } = yield* OpencodeService;
 
-          const result = await client.session.prompt({
-            path: { id: body.sessionId },
-            body: {
-              model: {
-                providerID: "anthropic",
-                modelID,
-              },
-              agent: body.agent,
-              parts: [{ type: "text", text: body.message }],
-              // Disable tools for read-only mode
-              tools: {
-                bash: false,
-                edit: false,
-                write: false,
-                glob: true,
-                grep: true,
-                read: true,
-                todoread: false,
-                todowrite: false,
-                webfetch: false,
-              },
-            },
-          });
+            // Use a better model when using the review agent
+            const modelID =
+              body.agent === "review"
+                ? "claude-sonnet-4-20250514"
+                : "claude-3-5-haiku-latest";
 
-          return Response.json({ result: result.data });
-        } catch (error) {
-          console.error("Error sending prompt:", error);
-          return Response.json({ error: String(error) }, { status: 500 });
-        }
+            const result = yield* Effect.tryPromise(() =>
+              client.session.prompt({
+                path: { id: body.sessionId },
+                body: {
+                  model: {
+                    providerID: "anthropic",
+                    modelID,
+                  },
+                  agent: body.agent,
+                  parts: [{ type: "text", text: body.message }],
+                  // Disable tools for read-only mode
+                  tools: {
+                    bash: false,
+                    edit: false,
+                    write: false,
+                    glob: true,
+                    grep: true,
+                    read: true,
+                    todoread: false,
+                    todowrite: false,
+                    webfetch: false,
+                  },
+                },
+              }),
+            );
+
+            return { result: result.data };
+          }),
+        );
       },
     },
 
     "/api/opencode/messages": {
       GET: async (req) => {
-        const { client } = await runtime.runPromise(
-          Effect.gen(function* () {
-            const { client } = yield* OpencodeService;
-            return { client };
-          }),
-        );
-        if (!client) {
-          return Response.json(
-            { error: "OpenCode not initialized" },
-            { status: 503 },
-          );
-        }
-
         const url = new URL(req.url);
         const sessionId = url.searchParams.get("sessionId");
 
         if (!sessionId) {
-          return Response.json({ error: "Missing sessionId" }, { status: 400 });
+          return validationError("Missing sessionId");
         }
 
-        try {
-          const messages = await client.session.messages({
-            path: { id: sessionId },
-          });
+        return handleEffect(
+          Effect.gen(function* () {
+            const { client } = yield* OpencodeService;
 
-          return Response.json({ messages: messages.data });
-        } catch (error) {
-          console.error("Error fetching messages:", error);
-          return Response.json({ error: String(error) }, { status: 500 });
-        }
+            const messages = yield* Effect.tryPromise(() =>
+              client.session.messages({ path: { id: sessionId } }),
+            );
+
+            return { messages: messages.data };
+          }),
+        );
       },
     },
 
     "/api/opencode/abort": {
       POST: async (req) => {
-        const { client } = await getOpencode();
-        if (!client) {
-          return Response.json(
-            { error: "OpenCode not initialized" },
-            { status: 503 },
-          );
-        }
-
         const body = (await req.json()) as { sessionId: string };
 
         if (!body.sessionId) {
-          return Response.json({ error: "Missing sessionId" }, { status: 400 });
+          return validationError("Missing sessionId");
         }
 
-        try {
-          await client.session.abort({
-            path: { id: body.sessionId },
-          });
+        return handleEffect(
+          Effect.gen(function* () {
+            const { client } = yield* OpencodeService;
 
-          return Response.json({ success: true });
-        } catch (error) {
-          console.error("Error aborting session:", error);
-          return Response.json({ error: String(error) }, { status: 500 });
-        }
+            yield* Effect.tryPromise(() =>
+              client.session.abort({ path: { id: body.sessionId } }),
+            );
+
+            return { success: true };
+          }),
+        );
       },
     },
 
     // SSE endpoint for streaming events
     "/api/opencode/events": {
       GET: async (req) => {
-        const { client, baseUrl: opencodeBaseUrl } = await getOpencode();
-        if (!client || !opencodeBaseUrl) {
-          return Response.json(
-            { error: "OpenCode not initialized" },
-            { status: 503 },
-          );
-        }
-
         const url = new URL(req.url);
         const sessionId = url.searchParams.get("sessionId");
 
         if (!sessionId) {
-          return Response.json({ error: "Missing sessionId" }, { status: 400 });
+          return validationError("Missing sessionId");
         }
 
-        console.log(`[SSE] Starting event stream for session: ${sessionId}`);
+        return handleEffectResponse(
+          Effect.gen(function* () {
+            const { baseUrl } = yield* OpencodeService;
 
-        const encoder = new TextEncoder();
+            yield* Effect.log(
+              `[SSE] Starting event stream for session: ${sessionId}`,
+            );
 
-        // Create a readable stream that proxies OpenCode events
-        const readable = new ReadableStream({
-          async start(controller) {
-            // Send initial comment
-            controller.enqueue(encoder.encode(formatSSEComment("connected")));
-
-            // Send connected event
-            const connectedEvent: StreamEvent = { type: "connected" };
-            controller.enqueue(encoder.encode(formatSSE(connectedEvent)));
-
-            // Connect to OpenCode's event stream
-            const eventUrl = `${opencodeBaseUrl}/event`;
-            console.log(`[SSE] Connecting to OpenCode: ${eventUrl}`);
-
-            try {
-              const response = await fetch(eventUrl, {
-                headers: { Accept: "text/event-stream" },
-              });
-
-              if (!response.ok || !response.body) {
-                throw new Error(`Failed to connect: ${response.status}`);
-              }
-
-              const reader = response.body.getReader();
-              const decoder = new TextDecoder();
-              let buffer = "";
-
-              while (true) {
-                const { done, value } = await reader.read();
-
-                if (done) {
-                  console.log("[SSE] OpenCode stream ended");
-                  break;
-                }
-
-                buffer += decoder.decode(value, { stream: true });
-
-                // Process complete SSE messages
-                const lines = buffer.split("\n");
-                buffer = lines.pop() || ""; // Keep incomplete line in buffer
-
-                for (const line of lines) {
-                  if (line.startsWith("data: ")) {
-                    try {
-                      const data = line.slice(6);
-                      const event = JSON.parse(data) as OpenCodeEvent;
-
-                      // Transform and filter for this session
-                      const streamEvent = transformEvent(event, sessionId);
-
-                      if (streamEvent) {
-                        controller.enqueue(
-                          encoder.encode(formatSSE(streamEvent)),
-                        );
-                      }
-                    } catch (e) {
-                      // Ignore parse errors for malformed events
-                    }
-                  }
-                }
-              }
-            } catch (error) {
-              console.error("[SSE] Stream error:", error);
-              const errorEvent: StreamEvent = {
-                type: "error",
-                code: "connection_error",
-                message:
-                  error instanceof Error ? error.message : "Connection failed",
-              };
-              controller.enqueue(encoder.encode(formatSSE(errorEvent)));
-            }
-
-            controller.close();
-          },
-        });
-
-        return new Response(readable, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            Connection: "keep-alive",
-          },
-        });
+            // Create Effect Stream from OpenCode SSE and convert to Response
+            const stream = createOpenCodeStream(baseUrl, sessionId);
+            return streamToSSEResponse(stream);
+          }),
+        );
       },
     },
 
     // Async prompt endpoint (fire-and-forget, use with SSE)
     "/api/opencode/prompt-start": {
       POST: async (req) => {
-        const { client, baseUrl: opencodeBaseUrl } = await getOpencode();
-        if (!client || !opencodeBaseUrl) {
-          return Response.json(
-            { error: "OpenCode not initialized" },
-            { status: 503 },
-          );
-        }
-
         const body = (await req.json()) as {
           sessionId: string;
           message: string;
@@ -717,60 +539,62 @@ const server = Bun.serve({
         };
 
         if (!body.sessionId || !body.message) {
-          return Response.json(
-            { error: "Missing sessionId or message" },
-            { status: 400 },
-          );
+          return validationError("Missing sessionId or message");
         }
 
-        try {
-          // Use a better model when using the review agent
-          const modelID =
-            body.agent === "review"
-              ? "claude-sonnet-4-20250514"
-              : "claude-3-5-haiku-latest";
+        return handleEffect(
+          Effect.gen(function* () {
+            const { baseUrl: opencodeBaseUrl } = yield* OpencodeService;
 
-          // Use the async endpoint (prompt_async) - fire and forget
-          const response = await fetch(
-            `${opencodeBaseUrl}/session/${body.sessionId}/prompt_async`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: {
-                  providerID: "anthropic",
-                  modelID,
+            // Use a better model when using the review agent
+            const modelID =
+              body.agent === "review"
+                ? "claude-sonnet-4-20250514"
+                : "claude-3-5-haiku-latest";
+
+            // Use the async endpoint (prompt_async) - fire and forget
+            const response = yield* Effect.tryPromise(() =>
+              fetch(
+                `${opencodeBaseUrl}/session/${body.sessionId}/prompt_async`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    model: {
+                      providerID: "anthropic",
+                      modelID,
+                    },
+                    agent: body.agent,
+                    parts: [{ type: "text", text: body.message }],
+                    // Disable local file tools - they would search the wrong repo
+                    // The pr_diff custom tool is enabled by default
+                    tools: {
+                      bash: false,
+                      edit: false,
+                      write: false,
+                      glob: false,
+                      grep: false,
+                      read: false,
+                      todoread: false,
+                      todowrite: false,
+                      webfetch: false,
+                    },
+                  }),
                 },
-                agent: body.agent,
-                parts: [{ type: "text", text: body.message }],
-                // Disable local file tools - they would search the wrong repo
-                // The pr_diff custom tool is enabled by default
-                tools: {
-                  bash: false,
-                  edit: false,
-                  write: false,
-                  glob: false,
-                  grep: false,
-                  read: false,
-                  todoread: false,
-                  todowrite: false,
-                  webfetch: false,
-                },
-              }),
-            },
-          );
+              ),
+            );
 
-          if (!response.ok) {
-            const text = await response.text();
-            throw new Error(`OpenCode error: ${response.status} - ${text}`);
-          }
+            if (!response.ok) {
+              const text = yield* Effect.tryPromise(() => response.text());
+              return yield* Effect.fail(
+                new Error(`OpenCode error: ${response.status} - ${text}`),
+              );
+            }
 
-          // Returns 204 No Content on success
-          return Response.json({ success: true });
-        } catch (error) {
-          console.error("Error starting prompt:", error);
-          return Response.json({ error: String(error) }, { status: 500 });
-        }
+            // Returns 204 No Content on success
+            return { success: true };
+          }),
+        );
       },
     },
   },

@@ -4,10 +4,11 @@ import { OpencodeService } from "./opencode";
 import { UnknownException } from "effect/Cause";
 
 const layers = Layer.mergeAll(GhServiceLive, OpencodeService.Default);
-type AppRuntime = ManagedRuntime.ManagedRuntime<
-  Layer.Layer.Success<typeof layers>,
-  UnknownException
->;
+
+/** The requirements (services) available in the runtime */
+export type AppRequirements = Layer.Layer.Success<typeof layers>;
+
+type AppRuntime = ManagedRuntime.ManagedRuntime<AppRequirements, UnknownException>;
 declare global {
   var __runtime: AppRuntime | undefined;
 }

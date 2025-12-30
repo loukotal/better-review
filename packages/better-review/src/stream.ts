@@ -1,12 +1,8 @@
 import { Effect, Stream, Queue, Data, Option, Fiber } from "effect";
 import type {
   Event as OpenCodeEvent,
-  Part,
   ToolState,
-  SessionStatus,
-  TextPart,
   ToolPart,
-  ReasoningPart,
 } from "@opencode-ai/sdk";
 
 // Type alias for error data with optional message
@@ -79,7 +75,7 @@ function transformToolState(
   callId: string,
   state: ToolState,
   messageId: string,
-  partId: string
+  partId: string,
 ): StreamEvent | null {
   switch (state.status) {
     case "pending":
@@ -126,7 +122,7 @@ function transformToolState(
 
 export function transformEvent(
   event: OpenCodeEvent,
-  sessionId: string
+  sessionId: string,
 ): StreamEvent | null {
   // Filter events for this session
   const props = event.properties as Record<string, unknown>;
@@ -168,7 +164,7 @@ export function transformEvent(
           toolPart.callID,
           toolPart.state,
           part.messageID,
-          part.id
+          part.id,
         );
       }
 
@@ -204,10 +200,13 @@ export function transformEvent(
       }
 
       const errorData = error.data as ErrorData | undefined;
-      const errorMessage: string = (errorData && "message" in errorData && typeof errorData.message === "string") 
-        ? errorData.message 
-        : "Unknown error";
-      
+      const errorMessage: string =
+        errorData &&
+        "message" in errorData &&
+        typeof errorData.message === "string"
+          ? errorData.message
+          : "Unknown error";
+
       return {
         type: "error",
         code: error.name,
@@ -247,182 +246,121 @@ export function formatSSEComment(comment: string): string {
 }
 
 // =============================================================================
-// OpenCode Event Stream Connection
+// OpenCode Event Stream (Server-side with fetch)
 // =============================================================================
 
-export interface OpenCodeEventSource {
-  readonly subscribe: (
-    sessionId: string
-  ) => Stream.Stream<StreamEvent, StreamError>;
-  readonly close: () => Effect.Effect<void>;
-}
-
 /**
- * Creates a persistent connection to OpenCode's event stream.
- * Returns a service that can be used to subscribe to events for specific sessions.
+ * Creates an Effect Stream that connects to OpenCode's SSE endpoint
+ * and emits transformed events for a specific session.
  */
-export function createEventSource(
-  baseUrl: string
-): Effect.Effect<OpenCodeEventSource, ConnectionError> {
-  return Effect.gen(function* () {
-    // Create a queue to distribute events to multiple subscribers
-    const subscribers = new Map<
-      string,
-      Queue.Queue<StreamEvent | null>
-    >();
+export function createOpenCodeStream(
+  baseUrl: string,
+  sessionId: string,
+): Stream.Stream<StreamEvent, StreamError> {
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      const eventUrl = `${baseUrl}/event`;
+      yield* Effect.log(`[SSE] Connecting to OpenCode: ${eventUrl}`);
 
-    let eventSource: EventSource | null = null;
-    let connected = false;
-
-    const connect = () =>
-      Effect.async<void, ConnectionError>((resume) => {
-        if (eventSource) {
-          resume(Effect.void);
-          return;
-        }
-
-        const url = `${baseUrl}/event`;
-        console.log(`[Stream] Connecting to OpenCode events: ${url}`);
-
-        eventSource = new EventSource(url);
-
-        eventSource.onopen = () => {
-          console.log("[Stream] Connected to OpenCode event stream");
-          connected = true;
-          resume(Effect.void);
-        };
-
-        eventSource.onerror = (err) => {
-          console.error("[Stream] EventSource error:", err);
-          if (!connected) {
-            resume(Effect.fail(new ConnectionError({ cause: err })));
-          }
-          // If already connected, the browser will auto-reconnect
-        };
-
-        eventSource.onmessage = (msg) => {
-          try {
-            const event = JSON.parse(msg.data) as OpenCodeEvent;
-
-            // Distribute to all subscribers
-            for (const [sessionId, queue] of subscribers) {
-              const transformed = transformEvent(event, sessionId);
-              if (transformed) {
-                // Fire and forget - don't block on slow consumers
-                Effect.runPromise(Queue.offer(queue, transformed)).catch(() => {
-                  // Queue might be full or closed
-                });
-              }
-            }
-          } catch (e) {
-            console.error("[Stream] Failed to parse event:", e);
-          }
-        };
+      const response = yield* Effect.tryPromise({
+        try: () =>
+          fetch(eventUrl, { headers: { Accept: "text/event-stream" } }),
+        catch: (cause) =>
+          new StreamError({ cause, message: "Failed to connect to OpenCode" }),
       });
 
-    // Connect immediately
-    yield* connect();
+      if (!response.ok || !response.body) {
+        return yield* Effect.fail(
+          new StreamError({
+            cause: null,
+            message: `Failed to connect: ${response.status}`,
+          }),
+        );
+      }
 
-    const subscribe = (sessionId: string): Stream.Stream<StreamEvent, StreamError> => {
-      return Stream.unwrapScoped(
-        Effect.gen(function* () {
-          // Create a queue for this subscriber
-          const queue = yield* Queue.bounded<StreamEvent | null>(100);
-
-          // Register subscriber
-          subscribers.set(sessionId, queue);
-
-          // Send initial connected event
-          yield* Queue.offer(queue, { type: "connected" } as StreamEvent);
-
-          // Cleanup on scope end
-          yield* Effect.addFinalizer(() =>
-            Effect.sync(() => {
-              subscribers.delete(sessionId);
-              Effect.runSync(Queue.shutdown(queue));
-            })
-          );
-
-          // Stream from queue until null
-          return Stream.fromQueue(queue).pipe(
-            Stream.takeWhile((event): event is StreamEvent => event !== null)
-          );
-        })
+      // Create a stream from the response body
+      const byteStream = Stream.fromReadableStream<Uint8Array, StreamError>(
+        () => response.body!,
+        (cause) => new StreamError({ cause, message: "Stream read error" }),
       );
-    };
 
-    const close = (): Effect.Effect<void> =>
-      Effect.sync(() => {
-        if (eventSource) {
-          eventSource.close();
-          eventSource = null;
-          connected = false;
-        }
-        // Signal all subscribers to close
-        for (const [_, queue] of subscribers) {
-          Effect.runSync(Queue.offer(queue, null));
-        }
-        subscribers.clear();
-      });
+      const eventStream: Stream.Stream<StreamEvent, StreamError> =
+        byteStream.pipe(
+          // Decode bytes to text
+          Stream.decodeText(),
+          // Parse SSE lines
+          Stream.mapAccum("", (buffer, chunk) => {
+            const combined = buffer + chunk;
+            const lines = combined.split("\n");
+            // Keep the last incomplete line in the buffer
+            const newBuffer = lines.pop() || "";
+            return [newBuffer, lines] as const;
+          }),
+          Stream.flatMap((lines) => Stream.fromIterable(lines)),
+          // Filter and parse data lines
+          Stream.filter((line) => line.startsWith("data: ")),
+          Stream.map((line) => line.slice(6)),
+          Stream.filterMap((data) => {
+            try {
+              const event = JSON.parse(data) as OpenCodeEvent;
+              const transformed = transformEvent(event, sessionId);
+              return transformed ? Option.some(transformed) : Option.none();
+            } catch {
+              return Option.none();
+            }
+          }),
+        );
 
-    return { subscribe, close };
-  });
+      // Prepend connected event
+      const connectedEvent: StreamEvent = { type: "connected" };
+      return Stream.concat(Stream.make(connectedEvent), eventStream);
+    }),
+  );
 }
 
 // =============================================================================
 // SSE Response Helper for Bun
 // =============================================================================
 
-export function createSSEResponse(
+/**
+ * Converts an Effect Stream of events into an SSE Response.
+ * Handles error events and cleanup automatically.
+ */
+export function streamToSSEResponse(
   stream: Stream.Stream<StreamEvent, StreamError>,
-  signal?: AbortSignal
 ): Response {
   const encoder = new TextEncoder();
 
-  const readable = new ReadableStream({
-    async start(controller) {
-      // Send initial comment to establish connection
-      controller.enqueue(encoder.encode(formatSSEComment("connected")));
-
-      const fiber = Effect.runFork(
-        stream.pipe(
-          Stream.tap((event) =>
-            Effect.sync(() => {
-              const data = formatSSE(event);
-              controller.enqueue(encoder.encode(data));
-            })
-          ),
-          Stream.runDrain,
-          Effect.catchAll((error) =>
-            Effect.sync(() => {
-              const errorEvent: StreamEvent = {
+  // Convert the Effect Stream to a web ReadableStream
+  const readable = Stream.toReadableStream(
+    Stream.concat(
+      // Start with connection comment
+      Stream.make(encoder.encode(formatSSEComment("connected"))),
+      // Then the actual events
+      stream.pipe(
+        // Format each event as SSE
+        Stream.map((event) => encoder.encode(formatSSE(event))),
+        // Handle errors by sending error event then ending
+        Stream.catchAll((error) =>
+          Stream.make(
+            encoder.encode(
+              formatSSE({
                 type: "error",
                 code: "stream_error",
                 message: error.message,
-              };
-              controller.enqueue(encoder.encode(formatSSE(errorEvent)));
-              controller.close();
-            })
-          )
-        )
-      );
-
-      // Handle abort signal
-      if (signal) {
-        signal.addEventListener("abort", () => {
-          Effect.runFork(Fiber.interrupt(fiber));
-          controller.close();
-        });
-      }
-    },
-  });
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 
   return new Response(readable, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*",
     },
   });
 }
