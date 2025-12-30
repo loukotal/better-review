@@ -13,6 +13,7 @@ export interface PRComment {
   line: number;
   side: "LEFT" | "RIGHT";
   body: string;
+  html_url: string;
   user: {
     login: string;
     avatar_url: string;

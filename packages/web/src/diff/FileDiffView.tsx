@@ -11,6 +11,7 @@ import {
   type AnnotationMetadata,
   FONT_FAMILY_MAP,
 } from "./types";
+import { GITHUB_ICON } from "../icons";
 
 interface FileDiffViewProps {
   file: FileDiffMetadata;
@@ -258,11 +259,22 @@ export function FileDiffView(props: FileDiffViewProps) {
     ` : "";
 
     return `
-      <div class="${indentClass}">
+      <div class="${indentClass}" id="comment-${comment.id}">
         <div class="flex items-center gap-2 mb-1">
           <img src="${escapeHtml(comment.user.avatar_url)}" class="w-4 h-4 rounded-sm" />
           <span class="text-[11px] text-text">${escapeHtml(comment.user.login)}</span>
-          <span class="text-[10px] text-text-faint">${new Date(comment.created_at).toLocaleDateString()}</span>
+          <a
+            href="#comment-${comment.id}"
+            class="text-[10px] text-text-faint hover:text-accent transition-colors"
+            title="Link to comment"
+          >${new Date(comment.created_at).toLocaleDateString()}</a>
+          <a
+            href="${escapeHtml(comment.html_url)}"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-text-faint hover:text-accent transition-colors"
+            title="View on GitHub"
+          >${GITHUB_ICON}</a>
           ${actionsHtml}
         </div>
         <div class="text-[11px] text-text-muted whitespace-pre-wrap leading-relaxed">${escapeHtml(comment.body)}</div>
