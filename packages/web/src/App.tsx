@@ -15,6 +15,7 @@ const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
 const ANNOTATIONS_STORAGE_KEY = "review-annotations";
 const PANELS_STORAGE_KEY = "panel-visibility";
+const COMMENTS_CACHE_KEY = "pr-comments-cache";
 
 // Valid theme keys for validation
 const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
@@ -119,6 +120,31 @@ function savePanelVisibility(visibility: PanelVisibility): void {
   try {
     localStorage.setItem(PANELS_STORAGE_KEY, JSON.stringify(visibility));
   } catch {}
+}
+
+// Load cached comments from localStorage (keyed by PR URL)
+function loadCommentsCache(prUrl: string): PRComment[] | null {
+  try {
+    const stored = localStorage.getItem(COMMENTS_CACHE_KEY);
+    if (stored) {
+      const data = JSON.parse(stored);
+      return data[prUrl] ?? null;
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
+
+function saveCommentsCache(prUrl: string, comments: PRComment[]): void {
+  try {
+    const stored = localStorage.getItem(COMMENTS_CACHE_KEY);
+    const data = stored ? JSON.parse(stored) : {};
+    data[prUrl] = comments;
+    localStorage.setItem(COMMENTS_CACHE_KEY, JSON.stringify(data));
+  } catch {
+    // Ignore
+  }
 }
 
 interface QueuedPr {
@@ -348,7 +374,7 @@ const AppContent: Component = () => {
       setDiff(diffData.diff);
       setLoadedPrUrl(prUrl());
       setContextPrUrl(prUrl());
-      
+
       // Set PR info if available
       if (infoData.owner && infoData.repo && infoData.number) {
         console.log("[App] PR info loaded:", infoData);
@@ -356,27 +382,36 @@ const AppContent: Component = () => {
       } else {
         console.log("[App] PR info not available:", infoData);
       }
-      
+
+      // Load cached comments immediately
+      const currentPrUrl = prUrl();
+      const cachedComments = loadCommentsCache(currentPrUrl);
+      if (cachedComments) {
+        setComments(cachedComments);
+      }
+
       setLoading(false);
 
-      // Then load comments and status in parallel
+      // Then load fresh comments and status in parallel (background refresh)
       setLoadingComments(true);
       setLoadingStatus(true);
-      
+
       const [commentsRes, statusRes] = await Promise.all([
-        fetch(`/api/pr/comments?url=${encodeURIComponent(prUrl())}`),
-        fetch(`/api/pr/status?url=${encodeURIComponent(prUrl())}`),
+        fetch(`/api/pr/comments?url=${encodeURIComponent(currentPrUrl)}`),
+        fetch(`/api/pr/status?url=${encodeURIComponent(currentPrUrl)}`),
       ]);
-      
+
       const [commentsData, statusData] = await Promise.all([
         commentsRes.json(),
         statusRes.json(),
       ]);
-      
+
       if (!commentsData.error) {
-        setComments(commentsData.comments ?? []);
+        const freshComments = commentsData.comments ?? [];
+        setComments(freshComments);
+        saveCommentsCache(currentPrUrl, freshComments);
       }
-      
+
       if (!statusData.error) {
         setPrStatus(statusData);
       }
@@ -397,7 +432,10 @@ const AppContent: Component = () => {
     });
     const data = await res.json();
     if (data.comment) {
-      setComments([...comments(), data.comment]);
+      const newComments = [...comments(), data.comment];
+      setComments(newComments);
+      const url = loadedPrUrl();
+      if (url) saveCommentsCache(url, newComments);
     }
     return data;
   };
@@ -410,7 +448,10 @@ const AppContent: Component = () => {
     });
     const data = await res.json();
     if (data.comment) {
-      setComments([...comments(), data.comment]);
+      const newComments = [...comments(), data.comment];
+      setComments(newComments);
+      const url = loadedPrUrl();
+      if (url) saveCommentsCache(url, newComments);
     }
     return data;
   };
@@ -428,9 +469,12 @@ const AppContent: Component = () => {
     }
     if (data.comment) {
       // Only update the body, preserve other fields from original comment
-      setComments(comments().map(c =>
+      const newComments = comments().map(c =>
         c.id === commentId ? { ...c, body: data.comment.body } : c
-      ));
+      );
+      setComments(newComments);
+      const url = loadedPrUrl();
+      if (url) saveCommentsCache(url, newComments);
     }
     return data;
   };
@@ -447,7 +491,10 @@ const AppContent: Component = () => {
       return data;
     }
     // Remove the comment from local state
-    setComments(comments().filter(c => c.id !== commentId));
+    const newComments = comments().filter(c => c.id !== commentId);
+    setComments(newComments);
+    const url = loadedPrUrl();
+    if (url) saveCommentsCache(url, newComments);
     return data;
   };
 
