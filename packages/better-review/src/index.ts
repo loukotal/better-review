@@ -1,9 +1,12 @@
 import { runtime } from "./runtime";
-import { GhService, type AddCommentParams, type AddReplyParams } from "./gh/gh";
-import { Effect, Stream } from "effect";
 import {
-  createOpencodeClient,
-  createOpencode,
+  GhService,
+  type AddCommentParams,
+  type AddReplyParams,
+  type ApprovePrParams,
+} from "./gh/gh";
+import { Effect } from "effect";
+import {
   type OpencodeClient,
   type Event as OpenCodeEvent,
 } from "@opencode-ai/sdk";
@@ -13,11 +16,7 @@ import {
   formatSSEComment,
   type StreamEvent,
 } from "./stream";
-
-// OpenCode client instance
-let opencodeClient: OpencodeClient | null = null;
-let opencodeBaseUrl: string | null = null;
-let opencodeServer: { url: string; close(): void } | null = null;
+import { OpencodeService } from "./opencode";
 
 // Session storage: prUrl -> sessionId
 const prSessions = new Map<string, string>();
@@ -29,24 +28,13 @@ const diffCache = new Map<string, Map<string, string>>();
 let currentPrUrl: string | null = null;
 let currentPrFiles: string[] = [];
 
-// Initialize OpenCode client using SDK
-async function initOpencode() {
-  console.log("[OpenCode] Starting opencode server...");
-
-  try {
-    const { client, server } = await createOpencode({
-      port: 4097,
-    });
-    opencodeBaseUrl = server.url;
-    opencodeClient = client;
-
-    console.log(`[OpenCode] Server running at ${opencodeBaseUrl}`);
-  } catch (error) {
-    console.error(
-      "[OpenCode] Failed to start server:",
-      error instanceof Error ? error.message : error,
-    );
-  }
+async function getOpencode() {
+  return runtime.runPromise(
+    Effect.gen(function* () {
+      const { client, server, baseUrl } = yield* OpencodeService;
+      return { client, server, baseUrl };
+    }),
+  );
 }
 
 // Fetch and cache all diffs for a PR
@@ -54,7 +42,9 @@ async function cachePrDiffs(prUrl: string): Promise<Map<string, string>> {
   // Check if already cached
   const existing = diffCache.get(prUrl);
   if (existing) {
-    console.log(`[cache] Using cached diffs for ${prUrl} (${existing.size} files)`);
+    console.log(
+      `[cache] Using cached diffs for ${prUrl} (${existing.size} files)`,
+    );
     return existing;
   }
 
@@ -104,24 +94,15 @@ async function cachePrDiffs(prUrl: string): Promise<Map<string, string>> {
 }
 
 // Cleanup function to stop opencode server on shutdown
-function cleanup() {
+async function cleanup() {
   console.log("\n[Shutdown] Cleaning up...");
 
-  if (opencodeServer) {
-    console.log("[Shutdown] Stopping opencode server...");
-    opencodeServer.close();
-    console.log("[Shutdown] OpenCode server stopped");
-  }
-
-  process.exit(0);
+  await runtime.dispose().then(() => process.exit(0));
 }
 
 // Register cleanup handlers
 process.on("SIGINT", cleanup);
 process.on("SIGTERM", cleanup);
-
-// Start OpenCode server on init
-initOpencode();
 
 const server = Bun.serve({
   port: 3001,
@@ -201,6 +182,31 @@ const server = Bun.serve({
         return Response.json(result);
       },
     },
+    "/api/pr/status": {
+      GET: async (req) => {
+        const url = new URL(req.url);
+        const prUrl = url.searchParams.get("url");
+
+        if (!prUrl) {
+          return Response.json(
+            { error: "Missing url parameter" },
+            { status: 400 },
+          );
+        }
+
+        const result = await runtime
+          .runPromise(
+            Effect.gen(function* () {
+              const gh = yield* GhService;
+              const status = yield* gh.getPrStatus(prUrl);
+              return status;
+            }),
+          )
+          .catch((e) => ({ error: String(e) }));
+
+        return Response.json(result);
+      },
+    },
     "/api/pr/comment": {
       POST: async (req) => {
         const body = (await req.json()) as AddCommentParams;
@@ -250,6 +256,31 @@ const server = Bun.serve({
       },
     },
 
+    "/api/pr/approve": {
+      POST: async (req) => {
+        const body = (await req.json()) as ApprovePrParams;
+
+        if (!body.prUrl) {
+          return Response.json(
+            { error: "Missing required field: prUrl" },
+            { status: 400 },
+          );
+        }
+
+        const result = await runtime
+          .runPromise(
+            Effect.gen(function* () {
+              const gh = yield* GhService;
+              yield* gh.approvePr(body);
+              return { success: true };
+            }),
+          )
+          .catch((e) => ({ error: String(e) }));
+
+        return Response.json(result);
+      },
+    },
+
     // File diff endpoint for the pr_diff tool
     "/api/pr/file-diff": {
       GET: async (req) => {
@@ -261,7 +292,10 @@ const server = Bun.serve({
         console.log(`[file-diff] Available files: ${currentPrFiles.length}`);
 
         if (!file) {
-          return Response.json({ error: "Missing file parameter" }, { status: 400 });
+          return Response.json(
+            { error: "Missing file parameter" },
+            { status: 400 },
+          );
         }
 
         if (!currentPrUrl) {
@@ -299,7 +333,9 @@ const server = Bun.serve({
           );
         }
 
-        console.log(`[file-diff] Returning diff for ${file} (${fileDiff.length} chars)`);
+        console.log(
+          `[file-diff] Returning diff for ${file} (${fileDiff.length} chars)`,
+        );
         return Response.json({ diff: fileDiff });
       },
     },
@@ -307,32 +343,27 @@ const server = Bun.serve({
     // OpenCode API routes
     "/api/opencode/health": {
       GET: async () => {
-        if (!opencodeClient) {
-          return Response.json(
-            { healthy: false, error: "OpenCode not initialized" },
-            { status: 503 },
-          );
-        }
-        try {
-          await opencodeClient.global.event();
-          return Response.json({ healthy: true });
-        } catch (error) {
-          return Response.json(
-            { healthy: false, error: String(error) },
-            { status: 503 },
-          );
-        }
+        return runtime.runPromise(
+          Effect.gen(function* () {
+            const { client } = yield* OpencodeService;
+            yield* Effect.tryPromise(() => client.global.event());
+            return Response.json({ healthy: true });
+          }).pipe(
+            Effect.catchAll((e) =>
+              Effect.succeed(
+                Response.json({ healthy: false, error: String(e) }),
+              ),
+            ),
+          ),
+        );
       },
     },
 
     "/api/opencode/session": {
       POST: async (req) => {
-        console.log(
-          "[API] POST /api/opencode/session - opencodeClient:",
-          !!opencodeClient,
-        );
+        const { client, server } = await getOpencode();
 
-        if (!opencodeClient) {
+        if (!client) {
           console.log("[API] OpenCode client not initialized");
           return Response.json(
             { error: "OpenCode not initialized" },
@@ -385,7 +416,7 @@ const server = Bun.serve({
 
           if (existingSessionId) {
             console.log("[API] Fetching existing session...");
-            const existingSession = await opencodeClient.session.get({
+            const existingSession = await client.session.get({
               path: { id: existingSessionId },
             });
             console.log(
@@ -402,7 +433,7 @@ const server = Bun.serve({
 
           // Create a new session
           console.log("[API] Creating new session...");
-          const session = await opencodeClient.session.create({
+          const session = await client.session.create({
             body: {
               title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
             },
@@ -423,7 +454,7 @@ const server = Bun.serve({
           // Inject initial context (without expecting a reply)
           console.log("[API] Injecting context...");
           const contextMessage = buildReviewContext(body);
-          await opencodeClient.session.prompt({
+          await client.session.prompt({
             path: { id: session.data.id },
             body: {
               parts: [{ type: "text", text: contextMessage }],
@@ -442,12 +473,7 @@ const server = Bun.serve({
 
     "/api/opencode/prompt": {
       POST: async (req) => {
-        if (!opencodeClient) {
-          return Response.json(
-            { error: "OpenCode not initialized" },
-            { status: 503 },
-          );
-        }
+        const { client } = await getOpencode();
 
         const body = (await req.json()) as {
           sessionId: string;
@@ -469,7 +495,7 @@ const server = Bun.serve({
               ? "claude-sonnet-4-20250514"
               : "claude-3-5-haiku-latest";
 
-          const result = await opencodeClient.session.prompt({
+          const result = await client.session.prompt({
             path: { id: body.sessionId },
             body: {
               model: {
@@ -503,7 +529,13 @@ const server = Bun.serve({
 
     "/api/opencode/messages": {
       GET: async (req) => {
-        if (!opencodeClient) {
+        const { client } = await runtime.runPromise(
+          Effect.gen(function* () {
+            const { client } = yield* OpencodeService;
+            return { client };
+          }),
+        );
+        if (!client) {
           return Response.json(
             { error: "OpenCode not initialized" },
             { status: 503 },
@@ -518,7 +550,7 @@ const server = Bun.serve({
         }
 
         try {
-          const messages = await opencodeClient.session.messages({
+          const messages = await client.session.messages({
             path: { id: sessionId },
           });
 
@@ -532,7 +564,8 @@ const server = Bun.serve({
 
     "/api/opencode/abort": {
       POST: async (req) => {
-        if (!opencodeClient) {
+        const { client } = await getOpencode();
+        if (!client) {
           return Response.json(
             { error: "OpenCode not initialized" },
             { status: 503 },
@@ -546,7 +579,7 @@ const server = Bun.serve({
         }
 
         try {
-          await opencodeClient.session.abort({
+          await client.session.abort({
             path: { id: body.sessionId },
           });
 
@@ -561,7 +594,8 @@ const server = Bun.serve({
     // SSE endpoint for streaming events
     "/api/opencode/events": {
       GET: async (req) => {
-        if (!opencodeClient || !opencodeBaseUrl) {
+        const { client, baseUrl: opencodeBaseUrl } = await getOpencode();
+        if (!client || !opencodeBaseUrl) {
           return Response.json(
             { error: "OpenCode not initialized" },
             { status: 503 },
@@ -668,7 +702,8 @@ const server = Bun.serve({
     // Async prompt endpoint (fire-and-forget, use with SSE)
     "/api/opencode/prompt-start": {
       POST: async (req) => {
-        if (!opencodeClient || !opencodeBaseUrl) {
+        const { client, baseUrl: opencodeBaseUrl } = await getOpencode();
+        if (!client || !opencodeBaseUrl) {
           return Response.json(
             { error: "OpenCode not initialized" },
             { status: 503 },
