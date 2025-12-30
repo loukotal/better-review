@@ -1,15 +1,17 @@
-import { type Component, createSignal, createEffect, createMemo, Show, onMount } from "solid-js";
+import { type Component, createSignal, createEffect, createMemo, Show, onMount, on } from "solid-js";
 import { useSearchParams, A } from "@solidjs/router";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { DiffViewer, getFileElementId, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
 import { ChatPanel } from "./ChatPanel";
 import { SettingsPanel } from "./diff/SettingsPanel";
-import { THEME_LABELS, type DiffTheme } from "./diff/types";
+import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
 import type { Annotation } from "./utils/parseReviewTokens";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { PrStatusBar, type PrStatus } from "./components/PrStatusBar";
 import { ApproveButton } from "./components/ApproveButton";
+import { ReviewModeToggle } from "./components/ReviewModeToggle";
+import { CommitNavigator } from "./components/CommitNavigator";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
@@ -170,7 +172,7 @@ const AppContent: Component = () => {
   const [comments, setComments] = createSignal<PRComment[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [settings, setSettings] = createSignal<DiffSettings>(loadSettings());
-  
+
   // Review state
   const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
   const [annotations, setAnnotations] = createSignal<Annotation[]>([]);
@@ -197,15 +199,27 @@ const AppContent: Component = () => {
       .catch(() => {});
   });
 
+  // Commit mode state
+  const [reviewMode, setReviewMode] = createSignal<ReviewMode>("full");
+  const [commits, setCommits] = createSignal<PrCommit[]>([]);
+  const [currentCommitIndex, setCurrentCommitIndex] = createSignal(0);
+  const [commitDiff, setCommitDiff] = createSignal<string | null>(null);
+  const [loadingCommits, setLoadingCommits] = createSignal(false);
+
+  // Active diff based on review mode
+  const activeDiff = createMemo(() => {
+    return reviewMode() === "full" ? diff() : commitDiff();
+  });
+
   // File names for the chat panel
   const fileNames = createMemo(() => files().map((f) => f.name));
-  
+
   // Ordered files - respects reviewOrder when set
   const orderedFiles = createMemo(() => {
     const order = reviewOrder();
     const allFiles = files();
     if (!order || order.length === 0) return allFiles;
-    
+
     // Sort files by review order (files not in order go at the end)
     return [...allFiles].sort((a, b) => {
       const aIdx = order.indexOf(a.name);
@@ -216,16 +230,13 @@ const AppContent: Component = () => {
       return aIdx - bIdx;
     });
   });
-  
-  // Ordered file names for FileTreePanel
-  const orderedFileNames = createMemo(() => orderedFiles().map((f) => f.name));
-  
+
   // Find the next PR in the queue
   const nextPr = createMemo(() => {
     const queue = prQueue();
     const current = loadedPrUrl();
     if (!current || queue.length === 0) return null;
-    
+
     const currentIndex = queue.findIndex((pr) => pr.url === current);
     if (currentIndex === -1) {
       // Current PR not in queue, return first in queue
@@ -241,7 +252,7 @@ const AppContent: Component = () => {
     const element = document.getElementById(elementId);
     if (element) {
       element.scrollIntoView({ behavior: "instant", block: "start" });
-      
+
       // If line is specified, highlight it
       if (line) {
         setHighlightedLine({ file: fileName, line });
@@ -250,7 +261,7 @@ const AppContent: Component = () => {
       }
     }
   };
-  
+
   // Apply review order
   const applyReviewOrder = (order: string[]) => {
     setReviewOrder(order);
@@ -259,25 +270,94 @@ const AppContent: Component = () => {
       saveReviewOrder(url, order);
     }
   };
-  
+
   // Add annotation as GitHub comment
   const addAnnotationAsComment = async (annotation: Annotation) => {
     // Scroll to the file and line first
     scrollToFile(annotation.file, annotation.line);
-    
+
     // Format the comment body with severity prefix
-    const severityPrefix = annotation.severity === "critical" 
-      ? "[CRITICAL] " 
-      : annotation.severity === "warning" 
-        ? "[WARNING] " 
+    const severityPrefix = annotation.severity === "critical"
+      ? "[CRITICAL] "
+      : annotation.severity === "warning"
+        ? "[WARNING] "
         : "";
     const body = `${severityPrefix}${annotation.message}`;
-    
+
     // Add the comment via the existing addComment function
     // Default to RIGHT side (additions) for now
     await addComment(annotation.file, annotation.line, "RIGHT", body);
   };
-  
+
+  // Load commit diff
+  const loadCommitDiff = async (sha: string) => {
+    const url = loadedPrUrl();
+    if (!url) return;
+
+    setLoadingCommits(true);
+    try {
+      const res = await fetch(`/api/pr/commit-diff?url=${encodeURIComponent(url)}&sha=${sha}`);
+      const data = await res.json();
+      if (!data.error) {
+        setCommitDiff(data.diff);
+      }
+    } finally {
+      setLoadingCommits(false);
+    }
+  };
+
+  // Navigate to next commit
+  const goToNextCommit = async () => {
+    const idx = currentCommitIndex();
+    const c = commits();
+    if (idx < c.length - 1) {
+      setCurrentCommitIndex(idx + 1);
+      await loadCommitDiff(c[idx + 1].sha);
+    }
+  };
+
+  // Navigate to previous commit
+  const goToPrevCommit = async () => {
+    const idx = currentCommitIndex();
+    const c = commits();
+    if (idx > 0) {
+      setCurrentCommitIndex(idx - 1);
+      await loadCommitDiff(c[idx - 1].sha);
+    }
+  };
+
+  // Select specific commit
+  const selectCommit = async (index: number) => {
+    const c = commits();
+    if (index >= 0 && index < c.length) {
+      setCurrentCommitIndex(index);
+      await loadCommitDiff(c[index].sha);
+    }
+  };
+
+  // Switch to commit mode
+  const switchToCommitMode = async () => {
+    setReviewMode("commit");
+    const c = commits();
+    if (c.length > 0 && !commitDiff()) {
+      await loadCommitDiff(c[0].sha);
+    }
+  };
+
+  // Switch to full mode
+  const switchToFullMode = () => {
+    setReviewMode("full");
+  };
+
+  // Handle mode change
+  const handleModeChange = (mode: ReviewMode) => {
+    if (mode === "commit") {
+      switchToCommitMode();
+    } else {
+      switchToFullMode();
+    }
+  };
+
   // Fetch PR queue on mount
   onMount(async () => {
     try {
@@ -294,7 +374,7 @@ const AppContent: Component = () => {
       // Silently fail - queue is optional
     }
   });
-  
+
   // Load PR from URL query param on mount
   onMount(() => {
     const urlPr = searchParams.prUrl;
@@ -311,7 +391,7 @@ const AppContent: Component = () => {
       }, 0);
     }
   });
-  
+
   // Sync URL when PR is loaded
   createEffect(() => {
     const loaded = loadedPrUrl();
@@ -319,7 +399,7 @@ const AppContent: Component = () => {
       setSearchParams({ prUrl: loaded });
     }
   });
-  
+
   // Load saved review state when PR changes
   createEffect(() => {
     const url = loadedPrUrl();
@@ -330,7 +410,7 @@ const AppContent: Component = () => {
       } else {
         setReviewOrder(null);
       }
-      
+
       const savedAnnotations = loadAnnotations(url);
       setAnnotations(savedAnnotations);
     } else {
@@ -338,6 +418,21 @@ const AppContent: Component = () => {
       setAnnotations([]);
     }
   });
+
+  // Sync commit mode to URL params (using commit SHA for stable/shareable URLs)
+  createEffect(on(
+    () => [reviewMode(), currentCommitIndex(), commits()] as const,
+    ([mode, idx, c]) => {
+      if (loadedPrUrl()) {
+        if (mode === "commit" && c[idx]) {
+          setSearchParams({ prUrl: loadedPrUrl()!, mode: "commit", commit: c[idx].sha.slice(0, 7) });
+        } else {
+          setSearchParams({ prUrl: loadedPrUrl()!, mode: undefined, commit: undefined });
+        }
+      }
+    },
+    { defer: true }
+  ));
 
   // Persist settings to localStorage when they change
   createEffect(() => {
@@ -355,25 +450,52 @@ const AppContent: Component = () => {
     setLoadedPrUrl(null);
     setPrInfo(null);
     setPrStatus(null);
+    // Reset commit mode state
+    setReviewMode("full");
+    setCommits([]);
+    setCurrentCommitIndex(0);
+    setCommitDiff(null);
 
     try {
-      // Load diff and PR info in parallel
-      const [diffRes, infoRes] = await Promise.all([
+      // Load diff, PR info, and commits in parallel
+      const [diffRes, infoRes, commitsRes] = await Promise.all([
         fetch(`/api/pr/diff?url=${encodeURIComponent(prUrl())}`),
         fetch(`/api/pr/info?url=${encodeURIComponent(prUrl())}`),
+        fetch(`/api/pr/commits?url=${encodeURIComponent(prUrl())}`),
       ]);
 
       const diffData = await diffRes.json();
       const infoData = await infoRes.json();
+      const commitsData = await commitsRes.json();
 
       if (diffData.error || infoData.error) {
         setError(diffData.error || infoData.error);
         return;
       }
-      
+
       setDiff(diffData.diff);
       setLoadedPrUrl(prUrl());
       setContextPrUrl(prUrl());
+
+      // Set commits if available
+      const loadedCommits = commitsData.commits ?? [];
+      setCommits(loadedCommits);
+
+      // Restore commit mode from URL params (commit is a SHA prefix)
+      const urlMode = searchParams.mode;
+      const urlCommitSha = searchParams.commit as string | undefined;
+      if (urlMode === "commit" && loadedCommits.length > 0) {
+        // Find commit by SHA prefix
+        let idx = urlCommitSha
+          ? loadedCommits.findIndex((c: PrCommit) => c.sha.startsWith(urlCommitSha))
+          : 0;
+        if (idx === -1) idx = 0; // Fallback to first commit if not found
+        setCurrentCommitIndex(idx);
+        // Load commit diff in background, then switch mode
+        loadCommitDiff(loadedCommits[idx].sha).then(() => {
+          setReviewMode("commit");
+        });
+      }
 
       // Set PR info if available
       if (infoData.owner && infoData.repo && infoData.number) {
@@ -396,18 +518,18 @@ const AppContent: Component = () => {
       setLoadingComments(true);
       setLoadingStatus(true);
 
-      const [commentsRes, statusRes] = await Promise.all([
+      const [commentsRes2, statusRes] = await Promise.all([
         fetch(`/api/pr/comments?url=${encodeURIComponent(currentPrUrl)}`),
         fetch(`/api/pr/status?url=${encodeURIComponent(currentPrUrl)}`),
       ]);
 
-      const [commentsData, statusData] = await Promise.all([
-        commentsRes.json(),
+      const [commentsData2, statusData] = await Promise.all([
+        commentsRes2.json(),
         statusRes.json(),
       ]);
 
-      if (!commentsData.error) {
-        const freshComments = commentsData.comments ?? [];
+      if (!commentsData2.error) {
+        const freshComments = commentsData2.comments ?? [];
         setComments(freshComments);
         saveCommentsCache(currentPrUrl, freshComments);
       }
@@ -580,12 +702,20 @@ const AppContent: Component = () => {
             </div>
           )}
         </div>
-        
+
         {/* PR Status Bar */}
         <Show when={loadedPrUrl()}>
           <div class="px-4 py-2 border-t border-border bg-bg flex items-center justify-between">
             <PrStatusBar status={prStatus()} loading={loadingStatus()} />
-            <ApproveButton />
+            <div class="flex items-center gap-2">
+              <ReviewModeToggle
+                mode={reviewMode()}
+                onModeChange={handleModeChange}
+                commitCount={commits().length}
+                disabled={loading()}
+              />
+              <ApproveButton />
+            </div>
           </div>
         </Show>
       </header>
@@ -622,21 +752,45 @@ const AppContent: Component = () => {
           }
         >
           {/* Diff viewer (center) */}
-          <div class="flex-1 overflow-y-auto px-4 py-3">
-            <DiffViewer
-              rawDiff={diff()!}
-              comments={comments()}
-              loadingComments={loadingComments()}
-              onAddComment={addComment}
-              onReplyToComment={replyToComment}
-              onEditComment={editComment}
-              onDeleteComment={deleteComment}
-              currentUser={currentUser()}
-              settings={settings()}
-              onFilesLoaded={setFiles}
-              fileOrder={reviewOrder()}
-              highlightedLine={highlightedLine()}
-            />
+          <div class="flex-1 overflow-y-auto flex flex-col">
+            {/* Commit navigator (when in commit mode) */}
+            <Show when={reviewMode() === "commit" && commits().length > 0}>
+              <CommitNavigator
+                commits={commits()}
+                currentIndex={currentCommitIndex()}
+                onSelectCommit={selectCommit}
+                onPrev={goToPrevCommit}
+                onNext={goToNextCommit}
+                loading={loadingCommits()}
+              />
+            </Show>
+
+            {/* Diff content */}
+            <div class="flex-1 overflow-y-auto px-4 py-3">
+              <Show
+                when={activeDiff()}
+                fallback={
+                  <Show when={reviewMode() === "commit" && loadingCommits()}>
+                    <div class="text-text-faint text-xs">Loading commit diff...</div>
+                  </Show>
+                }
+              >
+                <DiffViewer
+                  rawDiff={activeDiff()!}
+                  comments={comments()}
+                  loadingComments={loadingComments()}
+                  onAddComment={addComment}
+                  onReplyToComment={replyToComment}
+                  onEditComment={editComment}
+                  onDeleteComment={deleteComment}
+                  currentUser={currentUser()}
+                  settings={settings()}
+                  onFilesLoaded={setFiles}
+                  fileOrder={reviewOrder()}
+                  highlightedLine={highlightedLine()}
+                />
+              </Show>
+            </div>
           </div>
 
           {/* File tree panel (right) */}

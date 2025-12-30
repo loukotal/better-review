@@ -100,6 +100,16 @@ export interface SearchedPr {
   reviewRequested: boolean;
 }
 
+export interface PrCommit {
+  sha: string;
+  message: string;
+  author: {
+    login: string;
+    avatar_url: string;
+  };
+  date: string;
+}
+
 interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError>;
   getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError>;
@@ -112,6 +122,8 @@ interface GhCli {
   getCurrentUser: () => Effect.Effect<string, GhError>;
   approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError>;
   searchReviewRequested: () => Effect.Effect<SearchedPr[], GhError>;
+  listCommits: (prUrl: string) => Effect.Effect<PrCommit[], GhError>;
+  getCommitDiff: (params: { owner: string; repo: string; sha: string }) => Effect.Effect<string, GhError>;
 }
 
 export class GhService extends Context.Tag("GHService")<GhService, GhCli>() { }
@@ -393,6 +405,58 @@ export const GhServiceLive = Layer.succeed(GhService, {
       Effect.withSpan("GhService.approvePr", {
         attributes: { prUrl: params.prUrl },
       }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  listCommits: (prUrl: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(prUrl);
+      const cmd = Command.make(
+        "gh",
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}/commits`,
+        "--jq",
+        ".",
+      );
+      const result = yield* Command.string(cmd);
+      const rawCommits = JSON.parse(result) as Array<{
+        sha: string;
+        commit: {
+          message: string;
+          author: { date: string };
+        };
+        author: { login: string; avatar_url: string } | null;
+      }>;
+
+      return rawCommits.map((c) => ({
+        sha: c.sha,
+        message: c.commit.message,
+        author: {
+          login: c.author?.login ?? "unknown",
+          avatar_url: c.author?.avatar_url ?? "",
+        },
+        date: c.commit.author.date,
+      })) satisfies PrCommit[];
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "listCommits", cause })),
+      Effect.withSpan("GhService.listCommits", { attributes: { prUrl } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getCommitDiff: (params: { owner: string; repo: string; sha: string }) =>
+    Effect.gen(function* () {
+      // Use Accept header to get diff format
+      const cmd = Command.make(
+        "gh",
+        "api",
+        `repos/${params.owner}/${params.repo}/commits/${params.sha}`,
+        "-H",
+        "Accept: application/vnd.github.diff",
+      );
+      return yield* Command.string(cmd);
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getCommitDiff", cause })),
+      Effect.withSpan("GhService.getCommitDiff", { attributes: { sha: params.sha } }),
       Effect.provide(BunContext.layer),
     ),
 

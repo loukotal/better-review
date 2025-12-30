@@ -101,3 +101,17 @@ export type AnnotationMetadata =
       line: number;
       side: "LEFT" | "RIGHT";
     };
+
+// ============ Review Mode Types ============
+
+export type ReviewMode = "full" | "commit";
+
+export interface PrCommit {
+  sha: string;
+  message: string;
+  author: {
+    login: string;
+    avatar_url: string;
+  };
+  date: string;
+}

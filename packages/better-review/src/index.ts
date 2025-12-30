@@ -267,6 +267,44 @@ const server = Bun.serve({
         );
       },
     },
+    "/api/pr/commits": {
+      GET: async (req) => {
+        const url = new URL(req.url);
+        const prUrl = url.searchParams.get("url");
+
+        if (!prUrl) {
+          return validationError("Missing url parameter");
+        }
+
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const commits = yield* gh.listCommits(prUrl);
+            return { commits };
+          }),
+        );
+      },
+    },
+    "/api/pr/commit-diff": {
+      GET: async (req) => {
+        const url = new URL(req.url);
+        const prUrl = url.searchParams.get("url");
+        const sha = url.searchParams.get("sha");
+
+        if (!prUrl || !sha) {
+          return validationError("Missing url or sha parameter");
+        }
+
+        return handleEffect(
+          Effect.gen(function* () {
+            const gh = yield* GhService;
+            const { owner, repo } = yield* gh.getPrInfo(prUrl);
+            const diff = yield* gh.getCommitDiff({ owner, repo, sha });
+            return { diff, sha };
+          }),
+        );
+      },
+    },
     "/api/pr/comment": {
       POST: async (req) => {
         const body = (await req.json()) as AddCommentParams;
