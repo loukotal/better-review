@@ -19,6 +19,9 @@ interface Props {
   loadingComments?: boolean;
   onAddComment: (filePath: string, line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
+  onEditComment: (commentId: number, body: string) => Promise<unknown>;
+  onDeleteComment: (commentId: number) => Promise<unknown>;
+  currentUser: string | null;
   settings: DiffSettings;
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
   fileOrder?: string[] | null;
@@ -93,6 +96,9 @@ export function DiffViewer(props: Props) {
                   comments={commentsForFile(file.name)}
                   onAddComment={(line, side, body) => props.onAddComment(file.name, line, side, body)}
                   onReplyToComment={props.onReplyToComment}
+                  onEditComment={props.onEditComment}
+                  onDeleteComment={props.onDeleteComment}
+                  currentUser={props.currentUser}
                   settings={props.settings}
                   highlightedLine={highlightLine()}
                 />

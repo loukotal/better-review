@@ -17,6 +17,9 @@ interface FileDiffViewProps {
   comments: PRComment[];
   onAddComment: (line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
+  onEditComment: (commentId: number, body: string) => Promise<unknown>;
+  onDeleteComment: (commentId: number) => Promise<unknown>;
+  currentUser: string | null;
   settings: DiffSettings;
   highlightedLine?: number;
 }
@@ -74,6 +77,8 @@ export function FileDiffView(props: FileDiffViewProps) {
   const [collapsed, setCollapsed] = createSignal(false);
   const [pendingComment, setPendingComment] = createSignal<{ startLine: number; endLine: number; side: "LEFT" | "RIGHT" } | null>(null);
   const [pendingReply, setPendingReply] = createSignal<{ commentId: number; line: number; side: "LEFT" | "RIGHT" } | null>(null);
+  const [pendingEdit, setPendingEdit] = createSignal<{ commentId: number; body: string } | null>(null);
+  const [editError, setEditError] = createSignal<string | null>(null);
   const [submitting, setSubmitting] = createSignal(false);
   
   // Generate CSS for font injection into shadow DOM
@@ -118,9 +123,9 @@ export function FileDiffView(props: FileDiffViewProps) {
     }
   };
 
-  // Re-render when comments change
+  // Re-render when comments change (length or content)
   createEffect(on(
-    () => props.comments.length,
+    () => props.comments.map(c => `${c.id}:${c.body}`).join("|"),
     () => {
       setTimeout(rerender, 0);
     },
@@ -192,14 +197,73 @@ export function FileDiffView(props: FileDiffViewProps) {
   ));
 
   // Helper to render a single comment
-  const renderSingleComment = (comment: PRComment, isReply: boolean): string => {
+  const renderSingleComment = (comment: PRComment, isReply: boolean, isEditing: boolean): string => {
     const indentClass = isReply ? "ml-3 pl-3 border-l border-border" : "";
+
+    if (isEditing) {
+      const error = editError();
+      const errorHtml = error
+        ? `<div class="mt-2 px-2 py-1.5 border border-red-500/50 bg-red-500/10 text-red-400 text-[10px]">${escapeHtml(error)}</div>`
+        : "";
+      return `
+        <div class="${indentClass}">
+          <div class="flex items-center gap-2 mb-1">
+            <img src="${escapeHtml(comment.user.avatar_url)}" class="w-4 h-4 rounded-sm" />
+            <span class="text-[11px] text-text">${escapeHtml(comment.user.login)}</span>
+            <span class="text-[10px] text-accent">editing</span>
+          </div>
+          <textarea
+            class="w-full px-2 py-1.5 bg-bg border border-accent text-text focus:border-accent resize-y min-h-[60px] text-[11px]"
+            data-edit-input="${comment.id}"
+          >${escapeHtml(comment.body)}</textarea>
+          <div class="flex gap-2 mt-1.5">
+            <button
+              type="button"
+              data-submit-edit="${comment.id}"
+              class="px-2.5 py-1 bg-accent text-black text-[10px] hover:bg-accent-bright disabled:opacity-50 transition-colors"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              data-cancel-edit="${comment.id}"
+              class="px-2.5 py-1 text-text-faint text-[10px] hover:text-text transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+          ${errorHtml}
+        </div>
+      `;
+    }
+
+    const isOwnComment = props.currentUser && comment.user.login === props.currentUser;
+    const actionsHtml = isOwnComment ? `
+      <div class="flex items-center gap-2 ml-auto">
+        <button
+          type="button"
+          data-edit-comment="${comment.id}"
+          class="text-[10px] text-text-faint hover:text-accent transition-colors"
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          data-delete-comment="${comment.id}"
+          class="text-[10px] text-text-faint hover:text-red-400 transition-colors"
+        >
+          Delete
+        </button>
+      </div>
+    ` : "";
+
     return `
       <div class="${indentClass}">
         <div class="flex items-center gap-2 mb-1">
           <img src="${escapeHtml(comment.user.avatar_url)}" class="w-4 h-4 rounded-sm" />
           <span class="text-[11px] text-text">${escapeHtml(comment.user.login)}</span>
           <span class="text-[10px] text-text-faint">${new Date(comment.created_at).toLocaleDateString()}</span>
+          ${actionsHtml}
         </div>
         <div class="text-[11px] text-text-muted whitespace-pre-wrap leading-relaxed">${escapeHtml(comment.body)}</div>
       </div>
@@ -275,6 +339,56 @@ export function FileDiffView(props: FileDiffViewProps) {
     });
   };
 
+  // Helper to attach edit form event handlers
+  const attachEditFormHandlers = (div: HTMLElement, commentId: number) => {
+    const textarea = div.querySelector(`[data-edit-input="${commentId}"]`) as HTMLTextAreaElement;
+    const submitBtn = div.querySelector(`[data-submit-edit="${commentId}"]`) as HTMLButtonElement;
+    const cancelBtn = div.querySelector(`[data-cancel-edit="${commentId}"]`) as HTMLButtonElement;
+
+    textarea?.focus();
+    // Move cursor to end
+    if (textarea) {
+      textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+    }
+
+    // Cancel on Escape
+    textarea?.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setPendingEdit(null);
+        setTimeout(rerender, 0);
+      }
+    });
+
+    submitBtn?.addEventListener("click", async () => {
+      const body = textarea?.value?.trim();
+      if (!body) return;
+
+      setEditError(null);
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Saving...";
+
+      try {
+        const result = await props.onEditComment(commentId, body) as { error?: string };
+        if (result?.error) {
+          throw new Error(result.error);
+        }
+        setPendingEdit(null);
+        setEditError(null);
+        window.getSelection()?.removeAllRanges();
+        setTimeout(rerender, 0);
+      } catch (err) {
+        setEditError(err instanceof Error ? err.message : "Failed to save");
+        setTimeout(rerender, 0);
+      }
+    });
+
+    cancelBtn?.addEventListener("click", () => {
+      setPendingEdit(null);
+      setTimeout(rerender, 0);
+    });
+  };
+
   const createInstance = (el: HTMLDivElement) => {
     instance = new FileDiff({
       diffStyle: props.settings.diffStyle,
@@ -306,50 +420,54 @@ export function FileDiffView(props: FileDiffViewProps) {
           const { rootComment, replies } = metadata;
           const shouldCollapse = replies.length >= 3;
           const reply = pendingReply();
+          const edit = pendingEdit();
           const isReplyingToThis = reply?.commentId === rootComment.id;
-          
+          const allComments = [rootComment, ...replies];
+          const editingCommentId = edit?.commentId;
+
           div.className = "p-2.5 my-1 mx-2 bg-bg-elevated border border-border";
-          
+
           // Build thread HTML
           let html = `<div class="space-y-2">`;
-          
+
           // Render root comment
-          html += renderSingleComment(rootComment, false);
-          
+          html += renderSingleComment(rootComment, false, editingCommentId === rootComment.id);
+
           // Render replies (with collapse logic for 3+ replies)
           if (shouldCollapse) {
             // First reply
             if (replies.length > 0) {
-              html += `<div class="mt-2">${renderSingleComment(replies[0], true)}</div>`;
+              html += `<div class="mt-2">${renderSingleComment(replies[0], true, editingCommentId === replies[0].id)}</div>`;
             }
-            
+
             const hiddenCount = replies.length - 2;
-            
+
             // Collapsed indicator (if more than 2 replies total)
             if (hiddenCount > 0) {
               html += `
-                <button data-expand-thread="${rootComment.id}" 
+                <button data-expand-thread="${rootComment.id}"
                         class="ml-3 text-[10px] text-accent hover:text-accent-bright cursor-pointer">
                   +${hiddenCount} more
                 </button>
               `;
-              
+
               // Hidden replies (initially hidden)
               html += `<div data-hidden-replies="${rootComment.id}" class="hidden">`;
               for (let i = 1; i < replies.length - 1; i++) {
-                html += `<div class="mt-2">${renderSingleComment(replies[i], true)}</div>`;
+                html += `<div class="mt-2">${renderSingleComment(replies[i], true, editingCommentId === replies[i].id)}</div>`;
               }
               html += `</div>`;
             }
-            
+
             // Last reply (if more than 1)
             if (replies.length > 1) {
-              html += `<div class="mt-2">${renderSingleComment(replies[replies.length - 1], true)}</div>`;
+              const lastReply = replies[replies.length - 1];
+              html += `<div class="mt-2">${renderSingleComment(lastReply, true, editingCommentId === lastReply.id)}</div>`;
             }
           } else {
             // Show all replies
             for (const replyComment of replies) {
-              html += `<div class="mt-2">${renderSingleComment(replyComment, true)}</div>`;
+              html += `<div class="mt-2">${renderSingleComment(replyComment, true, editingCommentId === replyComment.id)}</div>`;
             }
           }
           
@@ -373,15 +491,46 @@ export function FileDiffView(props: FileDiffViewProps) {
             // Reply button
             const replyBtn = div.querySelector(`[data-reply-to="${rootComment.id}"]`);
             replyBtn?.addEventListener("click", () => {
-              setPendingReply({ 
-                commentId: rootComment.id, 
-                line: rootComment.line, 
-                side: rootComment.side 
+              setPendingReply({
+                commentId: rootComment.id,
+                line: rootComment.line,
+                side: rootComment.side
               });
-              setPendingComment(null); // Clear any pending new comment
+              setPendingComment(null);
+              setPendingEdit(null);
               setTimeout(rerender, 0);
             });
-            
+
+            // Edit buttons for all comments in thread
+            for (const comment of allComments) {
+              const editBtn = div.querySelector(`[data-edit-comment="${comment.id}"]`);
+              editBtn?.addEventListener("click", () => {
+                setPendingEdit({ commentId: comment.id, body: comment.body });
+                setPendingReply(null);
+                setPendingComment(null);
+                setEditError(null);
+                setTimeout(rerender, 0);
+              });
+
+              const deleteBtn = div.querySelector(`[data-delete-comment="${comment.id}"]`);
+              deleteBtn?.addEventListener("click", async () => {
+                if (!confirm("Delete this comment?")) return;
+                try {
+                  const result = await props.onDeleteComment(comment.id) as { error?: string };
+                  if (result?.error) {
+                    alert(result.error);
+                  }
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : "Failed to delete");
+                }
+              });
+
+              // If this comment is being edited, attach form handlers
+              if (editingCommentId === comment.id) {
+                attachEditFormHandlers(div, comment.id);
+              }
+            }
+
             // Expand thread button
             const expandBtn = div.querySelector(`[data-expand-thread="${rootComment.id}"]`);
             const hiddenReplies = div.querySelector(`[data-hidden-replies="${rootComment.id}"]`);
@@ -389,7 +538,7 @@ export function FileDiffView(props: FileDiffViewProps) {
               hiddenReplies?.classList.remove("hidden");
               expandBtn.classList.add("hidden");
             });
-            
+
             // Reply form handlers (if showing)
             if (isReplyingToThis) {
               attachReplyFormHandlers(div, rootComment.id);

@@ -35,6 +35,17 @@ export interface AddReplyParams {
   body: string;
 }
 
+export interface EditCommentParams {
+  prUrl: string;
+  commentId: number;
+  body: string;
+}
+
+export interface DeleteCommentParams {
+  prUrl: string;
+  commentId: number;
+}
+
 export interface ApprovePrParams {
   prUrl: string;
   body?: string;
@@ -95,6 +106,9 @@ interface GhCli {
   listComments: (prUrl: string) => Effect.Effect<PRComment[], GhError>;
   addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError>;
   replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError>;
+  editComment: (params: EditCommentParams) => Effect.Effect<PRComment, GhError>;
+  deleteComment: (params: DeleteCommentParams) => Effect.Effect<void, GhError>;
+  getCurrentUser: () => Effect.Effect<string, GhError>;
   approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError>;
   searchReviewRequested: () => Effect.Effect<SearchedPr[], GhError>;
 }
@@ -305,6 +319,58 @@ export const GhServiceLive = Layer.succeed(GhService, {
           commentId: params.commentId,
         },
       }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  editComment: (params: EditCommentParams) =>
+    Effect.gen(function* () {
+      const { owner, repo } = yield* getPrInfo(params.prUrl);
+
+      // Use gh api with field flag for the body
+      const result = yield* Effect.tryPromise(() =>
+        Bun.$`gh api repos/${owner}/${repo}/pulls/comments/${params.commentId} -X PATCH -f body=${params.body}`.text(),
+      );
+      return JSON.parse(result) as PRComment;
+    }).pipe(
+      Effect.mapError(
+        (cause) => new GhError({ command: "editComment", cause }),
+      ),
+      Effect.withSpan("GhService.editComment", {
+        attributes: {
+          prUrl: params.prUrl,
+          commentId: params.commentId,
+        },
+      }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  deleteComment: (params: DeleteCommentParams) =>
+    Effect.gen(function* () {
+      const { owner, repo } = yield* getPrInfo(params.prUrl);
+
+      yield* Effect.tryPromise(() =>
+        Bun.$`gh api repos/${owner}/${repo}/pulls/comments/${params.commentId} -X DELETE`.text(),
+      );
+    }).pipe(
+      Effect.mapError(
+        (cause) => new GhError({ command: "deleteComment", cause }),
+      ),
+      Effect.withSpan("GhService.deleteComment", {
+        attributes: {
+          prUrl: params.prUrl,
+          commentId: params.commentId,
+        },
+      }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getCurrentUser: () =>
+    Effect.gen(function* () {
+      const cmd = Command.make("gh", "api", "user", "--jq", ".login");
+      return (yield* Command.string(cmd)).trim();
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getCurrentUser", cause })),
+      Effect.withSpan("GhService.getCurrentUser"),
       Effect.provide(BunContext.layer),
     ),
 
