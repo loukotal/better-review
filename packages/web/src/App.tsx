@@ -9,10 +9,12 @@ import { THEME_LABELS, type DiffTheme } from "./diff/types";
 import type { Annotation } from "./utils/parseReviewTokens";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { PrStatusBar, type PrStatus } from "./components/PrStatusBar";
+import { ApproveButton } from "./components/ApproveButton";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
 const ANNOTATIONS_STORAGE_KEY = "review-annotations";
+const PANELS_STORAGE_KEY = "panel-visibility";
 
 // Valid theme keys for validation
 const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
@@ -98,6 +100,27 @@ function saveAnnotations(prUrl: string, annotations: Annotation[]): void {
   }
 }
 
+interface PanelVisibility {
+  chat: boolean;
+  files: boolean;
+}
+
+function loadPanelVisibility(): PanelVisibility {
+  try {
+    const stored = localStorage.getItem(PANELS_STORAGE_KEY);
+    if (stored) {
+      return { chat: true, files: true, ...JSON.parse(stored) };
+    }
+  } catch {}
+  return { chat: true, files: true };
+}
+
+function savePanelVisibility(visibility: PanelVisibility): void {
+  try {
+    localStorage.setItem(PANELS_STORAGE_KEY, JSON.stringify(visibility));
+  } catch {}
+}
+
 interface QueuedPr {
   url: string;
   title: string;
@@ -126,6 +149,14 @@ const AppContent: Component = () => {
   const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
   const [annotations, setAnnotations] = createSignal<Annotation[]>([]);
   const [highlightedLine, setHighlightedLine] = createSignal<{ file: string; line: number } | null>(null);
+
+  // Panel visibility
+  const [panelVisibility, setPanelVisibility] = createSignal<PanelVisibility>(loadPanelVisibility());
+  const togglePanel = (panel: keyof PanelVisibility) => {
+    const newVisibility = { ...panelVisibility(), [panel]: !panelVisibility()[panel] };
+    setPanelVisibility(newVisibility);
+    savePanelVisibility(newVisibility);
+  };
 
   // File names for the chat panel
   const fileNames = createMemo(() => files().map((f) => f.name));
@@ -383,6 +414,30 @@ const AppContent: Component = () => {
               <h1 class="text-sm text-text">better-review</h1>
             </div>
             <div class="flex items-center gap-4">
+              <div class="flex items-center gap-1 border-r border-border pr-4">
+                <button
+                  onClick={() => togglePanel("chat")}
+                  class={`px-2 py-1 text-[10px] border transition-colors ${
+                    panelVisibility().chat
+                      ? "border-accent/50 text-accent"
+                      : "border-border text-text-faint hover:text-text"
+                  }`}
+                  title="Toggle chat panel"
+                >
+                  Chat
+                </button>
+                <button
+                  onClick={() => togglePanel("files")}
+                  class={`px-2 py-1 text-[10px] border transition-colors ${
+                    panelVisibility().files
+                      ? "border-accent/50 text-accent"
+                      : "border-border text-text-faint hover:text-text"
+                  }`}
+                  title="Toggle file tree panel"
+                >
+                  Files
+                </button>
+              </div>
               <A
                 href="/prs"
                 class="text-xs text-text-faint hover:text-text transition-colors"
@@ -432,8 +487,9 @@ const AppContent: Component = () => {
         
         {/* PR Status Bar */}
         <Show when={loadedPrUrl()}>
-          <div class="px-4 py-2 border-t border-border bg-bg">
+          <div class="px-4 py-2 border-t border-border bg-bg flex items-center justify-between">
             <PrStatusBar status={prStatus()} loading={loadingStatus()} />
+            <ApproveButton />
           </div>
         </Show>
       </header>
@@ -441,16 +497,18 @@ const AppContent: Component = () => {
       {/* Main content */}
       <div class="flex-1 flex overflow-hidden">
         {/* Chat panel (left) */}
-        <ChatPanel
-          prUrl={loadedPrUrl()}
-          prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
-          repoOwner={prInfo()?.owner ?? null}
-          repoName={prInfo()?.repo ?? null}
-          files={fileNames()}
-          onScrollToFile={scrollToFile}
-          onApplyReviewOrder={applyReviewOrder}
-          onAddAnnotationAsComment={addAnnotationAsComment}
-        />
+        <Show when={panelVisibility().chat}>
+          <ChatPanel
+            prUrl={loadedPrUrl()}
+            prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
+            repoOwner={prInfo()?.owner ?? null}
+            repoName={prInfo()?.repo ?? null}
+            files={fileNames()}
+            onScrollToFile={scrollToFile}
+            onApplyReviewOrder={applyReviewOrder}
+            onAddAnnotationAsComment={addAnnotationAsComment}
+          />
+        </Show>
 
         {/* Center content */}
         <Show
@@ -483,11 +541,13 @@ const AppContent: Component = () => {
           </div>
 
           {/* File tree panel (right) */}
-          <FileTreePanel 
-            files={orderedFiles()} 
-            onFileSelect={(file) => scrollToFile(file)}
-            reviewOrder={reviewOrder()}
-          />
+          <Show when={panelVisibility().files}>
+            <FileTreePanel
+              files={orderedFiles()}
+              onFileSelect={(file) => scrollToFile(file)}
+              reviewOrder={reviewOrder()}
+            />
+          </Show>
         </Show>
       </div>
     </div>
