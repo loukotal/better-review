@@ -292,12 +292,12 @@ const AppContent: Component = () => {
         fetch(`/api/pr/diff?url=${encodeURIComponent(prUrl())}`),
         fetch(`/api/pr/info?url=${encodeURIComponent(prUrl())}`),
       ]);
-      
+
       const diffData = await diffRes.json();
       const infoData = await infoRes.json();
 
-      if (diffData.error) {
-        setError(diffData.error);
+      if (diffData.error || infoData.error) {
+        setError(diffData.error || infoData.error);
         return;
       }
       
