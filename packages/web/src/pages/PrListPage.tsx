@@ -17,6 +17,8 @@ interface SearchedPr {
   createdAt: string;
   isDraft: boolean;
   myReviewState: ReviewState;
+  isAuthor: boolean;
+  reviewRequested: boolean;
 }
 
 async function fetchPrs(): Promise<SearchedPr[]> {
@@ -51,6 +53,37 @@ function formatRelativeTime(dateString: string): string {
 
 const PrListPage: Component = () => {
   const [prs, { refetch }] = createResource(fetchPrs);
+  
+  // Filter state
+  const [showMyPrs, setShowMyPrs] = createSignal(false);
+  const [showDrafts, setShowDrafts] = createSignal(true);
+  const [showNeedsReview, setShowNeedsReview] = createSignal(false);
+  
+  // Filtered PR list
+  const filteredPrs = () => {
+    let result = prs() ?? [];
+    
+    // "My PRs" filter - only show PRs authored by me
+    if (showMyPrs()) {
+      result = result.filter(pr => pr.isAuthor);
+    }
+    
+    // "Drafts" filter - exclude drafts when off
+    if (!showDrafts()) {
+      result = result.filter(pr => !pr.isDraft);
+    }
+    
+    // "Needs Review" filter - only show PRs where I need to review
+    if (showNeedsReview()) {
+      result = result.filter(pr => 
+        pr.reviewRequested && 
+        pr.myReviewState !== 'APPROVED' && 
+        pr.myReviewState !== 'CHANGES_REQUESTED'
+      );
+    }
+    
+    return result;
+  };
 
   return (
     <div class="min-h-screen bg-bg text-text">
@@ -90,6 +123,41 @@ const PrListPage: Component = () => {
           </button>
         </div>
 
+        {/* Filter chips */}
+        <div class="flex items-center gap-2 mb-6">
+          <span class="text-xs text-text-faint mr-1">Filters:</span>
+          <button
+            onClick={() => setShowMyPrs(!showMyPrs())}
+            class={`px-3 py-1 text-xs border transition-colors ${
+              showMyPrs()
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border text-text-faint hover:border-text-faint"
+            }`}
+          >
+            My PRs
+          </button>
+          <button
+            onClick={() => setShowDrafts(!showDrafts())}
+            class={`px-3 py-1 text-xs border transition-colors ${
+              showDrafts()
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border text-text-faint hover:border-text-faint"
+            }`}
+          >
+            Drafts
+          </button>
+          <button
+            onClick={() => setShowNeedsReview(!showNeedsReview())}
+            class={`px-3 py-1 text-xs border transition-colors ${
+              showNeedsReview()
+                ? "border-accent bg-accent/10 text-accent"
+                : "border-border text-text-faint hover:border-text-faint"
+            }`}
+          >
+            Needs Review
+          </button>
+        </div>
+
         {/* Loading state */}
         <Show when={prs.loading && !prs()}>
           <div class="text-center py-12">
@@ -105,19 +173,19 @@ const PrListPage: Component = () => {
         </Show>
 
         {/* Empty state */}
-        <Show when={!prs.loading && prs()?.length === 0}>
+        <Show when={!prs.loading && filteredPrs().length === 0}>
           <div class="text-center py-12 border border-border">
-            <div class="text-text-faint text-sm">No review requests</div>
+            <div class="text-text-faint text-sm">No PRs match your filters</div>
             <p class="text-xs text-text-faint mt-2">
-              You're not requested as a reviewer on any open PRs
+              Try adjusting your filter settings
             </p>
           </div>
         </Show>
 
         {/* PR list */}
-        <Show when={prs()?.length}>
+        <Show when={filteredPrs().length > 0}>
           <div class="space-y-2">
-            <For each={prs()}>
+            <For each={filteredPrs()}>
               {(pr) => (
                 <A
                   href={`/?prUrl=${encodeURIComponent(pr.url)}`}

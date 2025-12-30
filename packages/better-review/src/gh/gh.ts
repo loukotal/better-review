@@ -82,6 +82,10 @@ export interface SearchedPr {
   isDraft: boolean;
   /** User's latest review state on this PR, null if not reviewed */
   myReviewState: ReviewState;
+  /** Whether the current user is the author of this PR */
+  isAuthor: boolean;
+  /** Whether a review is requested from the current user */
+  reviewRequested: boolean;
 }
 
 interface GhCli {
@@ -311,7 +315,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
 
       // GraphQL query to get PRs with review state
       const query = `
-        query($requestedQuery: String!, $reviewedQuery: String!) {
+        query($requestedQuery: String!, $reviewedQuery: String!, $authoredQuery: String!) {
           requested: search(query: $requestedQuery, type: ISSUE, first: 100) {
             nodes {
               ... on PullRequest {
@@ -344,6 +348,22 @@ export const GhServiceLive = Layer.succeed(GhService, {
               }
             }
           }
+          authored: search(query: $authoredQuery, type: ISSUE, first: 100) {
+            nodes {
+              ... on PullRequest {
+                number
+                title
+                url
+                isDraft
+                createdAt
+                repository { name, nameWithOwner }
+                author { login }
+                reviews(last: 20) {
+                  nodes { author { login }, state }
+                }
+              }
+            }
+          }
         }
       `;
 
@@ -357,12 +377,15 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "requestedQuery=is:pr is:open review-requested:@me",
         "-f",
         "reviewedQuery=is:pr is:open reviewed-by:@me",
+        "-f",
+        "authoredQuery=is:pr is:open author:@me",
       );
       const result = yield* Command.string(graphqlCmd);
       const data = JSON.parse(result) as {
         data: {
           requested: { nodes: GraphQLPr[] };
           reviewed: { nodes: GraphQLPr[] };
+          authored: { nodes: GraphQLPr[] };
         };
       };
 
@@ -387,6 +410,9 @@ export const GhServiceLive = Layer.succeed(GhService, {
         return myReviews[myReviews.length - 1].state as ReviewState;
       };
 
+      // Track which PRs came from which query
+      const requestedUrls = new Set(data.data.requested.nodes.filter(Boolean).map(pr => pr.url));
+
       // Helper to convert GraphQL PR to SearchedPr
       const toSearchedPr = (pr: GraphQLPr): SearchedPr => ({
         number: pr.number,
@@ -397,6 +423,8 @@ export const GhServiceLive = Layer.succeed(GhService, {
         repository: pr.repository,
         author: pr.author,
         myReviewState: getMyReviewState(pr),
+        isAuthor: pr.author.login === currentUser,
+        reviewRequested: requestedUrls.has(pr.url),
       });
 
       // Merge and deduplicate by URL
@@ -416,6 +444,16 @@ export const GhServiceLive = Layer.succeed(GhService, {
           merged.push(toSearchedPr(pr));
         }
       }
+
+      for (const pr of data.data.authored.nodes) {
+        if (pr && !seen.has(pr.url)) {
+          seen.add(pr.url);
+          merged.push(toSearchedPr(pr));
+        }
+      }
+
+      // Sort by createdAt descending (newest first)
+      merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
       return merged;
     }).pipe(
