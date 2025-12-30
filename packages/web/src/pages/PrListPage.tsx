@@ -234,9 +234,7 @@ const PrListPage: Component = () => {
               {(pr) => (
                 <A
                   href={`/?prUrl=${encodeURIComponent(pr.url)}`}
-                  class={`block border border-border hover:border-text-faint transition-colors ${
-                    pr.isDraft ? "opacity-50" : ""
-                  }`}
+                  class="block border border-border hover:border-text-faint transition-colors"
                 >
                   <div class="px-4 py-3">
                     <div class="flex items-start justify-between gap-4">
@@ -251,7 +249,7 @@ const PrListPage: Component = () => {
                             {pr.title}
                           </span>
                           <Show when={pr.isDraft}>
-                            <span class="px-1.5 py-0.5 text-[10px] border border-border text-text-faint">
+                            <span class="px-1.5 py-0.5 text-[10px] border border-text-faint/50 bg-text-faint/10 text-text-muted">
                               DRAFT
                             </span>
                           </Show>
