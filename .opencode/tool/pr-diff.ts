@@ -4,22 +4,39 @@ const API_BASE = "http://localhost:3001";
 
 export default tool({
   description:
-    "Get the diff for a specific file in the PR being reviewed. Use this to see what changed in a file. Only use files from the list of changed files provided in the context.",
+    "Get the diff for a specific file in the PR being reviewed. Use this to see what changed in a file. Only use files from the list of changed files provided in the context. You can optionally specify a line range to get only part of the diff.",
   args: {
     file: tool.schema
       .string()
       .describe(
         "The file path to get the diff for (must be from the list of changed files)",
       ),
+    startLine: tool.schema
+      .number()
+      .optional()
+      .describe(
+        "Optional: Start line number to filter the diff (shows hunks containing this line and after)",
+      ),
+    endLine: tool.schema
+      .number()
+      .optional()
+      .describe(
+        "Optional: End line number to filter the diff (shows hunks up to and containing this line)",
+      ),
   },
   async execute(args) {
-    console.log(`[pr-diff] Called with file: ${args.file}`);
+    console.log(`[pr-diff] Called with file: ${args.file}, startLine: ${args.startLine}, endLine: ${args.endLine}`);
 
     try {
-      const response = await fetch(
-        `${API_BASE}/api/pr/file-diff?file=${encodeURIComponent(args.file)}`,
-      );
+      let url = `${API_BASE}/api/pr/file-diff?file=${encodeURIComponent(args.file)}`;
+      if (args.startLine !== undefined) {
+        url += `&startLine=${args.startLine}`;
+      }
+      if (args.endLine !== undefined) {
+        url += `&endLine=${args.endLine}`;
+      }
 
+      const response = await fetch(url);
       const data = await response.json();
 
       if (!response.ok) {
