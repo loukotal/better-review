@@ -855,8 +855,29 @@ const main = Effect.gen(function* () {
 
 const runnable = main.pipe(Effect.scoped, Effect.provide(layers));
 
+// Store fiber and shutdown handler globally for HMR
+declare global {
+  var __appFiber: Fiber.RuntimeFiber<void, unknown> | undefined;
+  var __shutdownHandler: (() => void) | undefined;
+}
+
+// If there's an existing fiber from a previous HMR cycle, interrupt it first
+if (globalThis.__appFiber) {
+  console.log("[HMR] Stopping previous instance...");
+  await Effect.runPromise(Fiber.interrupt(globalThis.__appFiber)).catch(
+    () => {},
+  );
+}
+
+// Remove old signal handlers to avoid duplicates
+if (globalThis.__shutdownHandler) {
+  process.off("SIGINT", globalThis.__shutdownHandler);
+  process.off("SIGTERM", globalThis.__shutdownHandler);
+}
+
 // Run in a fiber so we can interrupt it
 const fiber = Effect.runFork(runnable);
+globalThis.__appFiber = fiber;
 
 // Handle shutdown signals by interrupting the fiber
 const shutdown = () => {
@@ -866,6 +887,16 @@ const shutdown = () => {
     process.exit(0);
   });
 };
+globalThis.__shutdownHandler = shutdown;
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+// HMR cleanup
+if (import.meta.hot) {
+  import.meta.hot.dispose(async () => {
+    console.log("[HMR] Disposing...");
+    await Effect.runPromise(Fiber.interrupt(fiber)).catch(() => {});
+    globalThis.__appFiber = undefined;
+  });
+}
