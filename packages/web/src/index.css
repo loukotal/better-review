@@ -5,10 +5,10 @@
 
 @theme {
   /* === MONOCHROME + ORANGE PALETTE === */
-  /* Deep blacks */
-  --color-bg: #000000;
-  --color-bg-surface: #080808;
-  --color-bg-elevated: #0e0e0e;
+  /* Soft blacks - easier on the eyes than pure black */
+  --color-bg: #0a0a0a;
+  --color-bg-surface: #111111;
+  --color-bg-elevated: #181818;
   
   /* Orange accent - used sparingly for interactive elements */
   --color-accent: #ff6b00;
@@ -21,7 +21,7 @@
   --color-text-faint: #888888;
   
   /* Borders - subtle grays */
-  --color-border: #1a1a1a;
+  --color-border: #222222;
   --color-border-focus: #ff6b00;
   
   /* Primary action - orange */
