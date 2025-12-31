@@ -2,10 +2,15 @@
 import './index.css';
 import { render } from 'solid-js/web';
 import { Router, Route } from '@solidjs/router';
+import { QueryClientProvider } from '@tanstack/solid-query';
 import 'solid-devtools';
 
 import App from './App';
 import PrListPage from './pages/PrListPage';
+import { queryClient, restoreCache } from './lib/query';
+
+// Restore cache from IndexedDB on startup
+restoreCache();
 
 const root = document.getElementById('root');
 
@@ -17,10 +22,12 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 
 render(
   () => (
-    <Router>
-      <Route path="/prs" component={PrListPage} />
-      <Route path="/" component={App} />
-    </Router>
+    <QueryClientProvider client={queryClient}>
+      <Router>
+        <Route path="/prs" component={PrListPage} />
+        <Route path="/" component={App} />
+      </Router>
+    </QueryClientProvider>
   ),
   root!
 );

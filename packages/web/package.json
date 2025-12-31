@@ -21,7 +21,10 @@
   "dependencies": {
     "@pierre/diffs": "^1.0.2",
     "@solidjs/router": "^0.15.4",
+    "@tanstack/query-persist-client-core": "^5.91.15",
+    "@tanstack/solid-query": "^5.90.19",
     "idb": "^8.0.3",
+    "idb-keyval": "^6.2.2",
     "marked": "^17.0.1",
     "remend": "^1.0.1",
     "solid-js": "^1.9.9"

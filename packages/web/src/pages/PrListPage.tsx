@@ -1,51 +1,7 @@
-import { Component, createResource, For, Show } from "solid-js";
+import { Component, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
-
-type ReviewState = "PENDING" | "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | null;
-
-interface SearchedPr {
-  number: number;
-  title: string;
-  url: string;
-  repository: {
-    name: string;
-    nameWithOwner: string;
-  };
-  author: {
-    login: string;
-  };
-  createdAt: string;
-  isDraft: boolean;
-  myReviewState: ReviewState;
-  isAuthor: boolean;
-  reviewRequested: boolean;
-}
-
-const PR_CACHE_KEY = "prListCache";
-
-function getCachedPrs(): SearchedPr[] | undefined {
-  try {
-    const cached = localStorage.getItem(PR_CACHE_KEY);
-    return cached ? JSON.parse(cached) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function setCachedPrs(prs: SearchedPr[]): void {
-  localStorage.setItem(PR_CACHE_KEY, JSON.stringify(prs));
-}
-
-async function fetchPrs(): Promise<SearchedPr[]> {
-  const res = await fetch("/api/prs");
-  const data = await res.json();
-  if (data.error) {
-    throw new Error(data.error);
-  }
-  const prs = data.prs ?? [];
-  setCachedPrs(prs);
-  return prs;
-}
+import { useQuery } from "@tanstack/solid-query";
+import { queryKeys, api, prefetchPr, type SearchedPr } from "../lib/query";
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -69,48 +25,64 @@ function formatRelativeTime(dateString: string): string {
 }
 
 const PrListPage: Component = () => {
-  const cachedPrs = getCachedPrs();
-  const [prs, { refetch }] = createResource(fetchPrs, { initialValue: cachedPrs });
+  // Use TanStack Query for PR list - automatically cached in IndexedDB
+  // staleTime: 0 ensures we always fetch fresh data on mount while showing cached immediately
+  const prsQuery = useQuery(() => ({
+    queryKey: queryKeys.prs.list,
+    queryFn: ({ signal }) => api.fetchPrList(signal),
+    staleTime: 0,
+  }));
+
+  // Debounced prefetch on hover
+  let hoverTimeout: ReturnType<typeof setTimeout> | null = null;
+  const handleHover = (prUrl: string) => {
+    if (hoverTimeout) clearTimeout(hoverTimeout);
+    hoverTimeout = setTimeout(() => {
+      prefetchPr(prUrl);
+    }, 150);
+  };
+  const handleHoverEnd = () => {
+    if (hoverTimeout) {
+      clearTimeout(hoverTimeout);
+      hoverTimeout = null;
+    }
+  };
 
   // Filter state from URL params
   const [searchParams, setSearchParams] = useSearchParams();
   const showMyPrs = () => searchParams.mine === "1";
-  const showDrafts = () => searchParams.drafts !== "0"; // default true
+  const showDrafts = () => searchParams.drafts !== "0";
   const showNeedsReview = () => searchParams.needsReview === "1";
   const repoFilter = () => searchParams.repo ?? "";
 
   // Get unique repos from PR list
   const uniqueRepos = () => {
-    const repos = (prs() ?? []).map(pr => pr.repository.nameWithOwner);
+    const repos = (prsQuery.data ?? []).map((pr: SearchedPr) => pr.repository.nameWithOwner);
     return [...new Set(repos)].sort();
   };
-  
+
   // Filtered PR list
   const filteredPrs = () => {
-    let result = prs() ?? [];
-    
-    // "My PRs" filter - only show PRs authored by me
+    let result = prsQuery.data ?? [];
+
     if (showMyPrs()) {
-      result = result.filter(pr => pr.isAuthor);
+      result = result.filter((pr: SearchedPr) => pr.isAuthor);
     }
-    
-    // "Drafts" filter - exclude drafts when off
+
     if (!showDrafts()) {
-      result = result.filter(pr => !pr.isDraft);
+      result = result.filter((pr: SearchedPr) => !pr.isDraft);
     }
-    
-    // "Needs Review" filter - only show PRs where I need to review
+
     if (showNeedsReview()) {
-      result = result.filter(pr =>
+      result = result.filter((pr: SearchedPr) =>
         pr.reviewRequested &&
         pr.myReviewState !== 'APPROVED' &&
         pr.myReviewState !== 'CHANGES_REQUESTED'
       );
     }
 
-    // Repo filter
     if (repoFilter()) {
-      result = result.filter(pr => pr.repository.nameWithOwner === repoFilter());
+      result = result.filter((pr: SearchedPr) => pr.repository.nameWithOwner === repoFilter());
     }
 
     return result;
@@ -146,11 +118,11 @@ const PrListPage: Component = () => {
             </p>
           </div>
           <button
-            onClick={() => refetch()}
-            disabled={prs.loading}
+            onClick={() => prsQuery.refetch()}
+            disabled={prsQuery.isFetching}
             class="px-3 py-1.5 text-xs border border-border hover:border-text-faint transition-colors disabled:opacity-50"
           >
-            {prs.loading ? "Loading..." : "Refresh"}
+            {prsQuery.isFetching ? "Loading..." : "Refresh"}
           </button>
         </div>
 
@@ -204,21 +176,21 @@ const PrListPage: Component = () => {
         </div>
 
         {/* Loading state */}
-        <Show when={prs.loading && !prs()}>
+        <Show when={prsQuery.isPending}>
           <div class="text-center py-12">
             <div class="text-text-faint text-sm">Loading PRs...</div>
           </div>
         </Show>
 
         {/* Error state */}
-        <Show when={prs.error}>
+        <Show when={prsQuery.isError}>
           <div class="border border-error/50 bg-diff-remove-bg px-4 py-3 text-sm text-error">
-            {prs.error?.message ?? "Failed to load PRs"}
+            {prsQuery.error?.message ?? "Failed to load PRs"}
           </div>
         </Show>
 
         {/* Empty state */}
-        <Show when={!prs.loading && filteredPrs().length === 0}>
+        <Show when={prsQuery.isSuccess && filteredPrs().length === 0}>
           <div class="text-center py-12 border border-border">
             <div class="text-text-faint text-sm">No PRs match your filters</div>
             <p class="text-xs text-text-faint mt-2">
@@ -235,15 +207,15 @@ const PrListPage: Component = () => {
                 <A
                   href={`/?prUrl=${encodeURIComponent(pr.url)}`}
                   class="block border border-border hover:border-text-faint transition-colors"
+                  onMouseEnter={() => handleHover(pr.url)}
+                  onMouseLeave={handleHoverEnd}
                 >
                   <div class="px-4 py-3">
                     <div class="flex items-start justify-between gap-4">
                       <div class="flex-1 min-w-0">
-                        {/* Repo name */}
                         <div class="text-xs text-text-faint mb-1">
                           {pr.repository.nameWithOwner}
                         </div>
-                        {/* PR title */}
                         <div class="flex items-center gap-2">
                           <span class="text-sm text-text truncate">
                             {pr.title}
@@ -264,13 +236,11 @@ const PrListPage: Component = () => {
                             </span>
                           </Show>
                         </div>
-                        {/* Meta */}
                         <div class="text-xs text-text-faint mt-1.5">
                           #{pr.number} opened {formatRelativeTime(pr.createdAt)}{" "}
                           by {pr.author.login}
                         </div>
                       </div>
-                      {/* Arrow indicator */}
                       <div class="text-text-faint text-sm mt-1">→</div>
                     </div>
                   </div>
