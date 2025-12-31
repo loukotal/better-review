@@ -258,7 +258,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
   getDiff: (urlOrNumber: string) =>
     Effect.gen(function* () {
       yield* validatePrUrl(urlOrNumber);
-      const cmd = Command.make("gh", "pr", "diff", urlOrNumber, "--patch");
+      const cmd = Command.make("gh", "pr", "diff", urlOrNumber);
       return yield* Command.string(cmd);
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getDiff", cause })),
