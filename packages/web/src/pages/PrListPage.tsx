@@ -1,7 +1,70 @@
 import { Component, For, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
-import { queryKeys, api, prefetchPr, type SearchedPr } from "../lib/query";
+import {
+  queryKeys,
+  api,
+  prefetchPr,
+  type SearchedPr,
+  type CiStatus,
+} from "../lib/query";
+
+// CI status indicator component
+const CiStatusBadge: Component<{ status: CiStatus | null }> = (props) => {
+  const statusColor = () => {
+    if (!props.status) return "text-text-faint";
+    const { state, passed, total } = props.status;
+    if (state === "SUCCESS" || passed === total) return "text-success";
+    if (
+      state === "FAILURE" ||
+      state === "ERROR" ||
+      (passed < total && state !== "PENDING" && state !== "EXPECTED")
+    )
+      return "text-error";
+    if (state === "PENDING" || state === "EXPECTED") return "text-yellow-500";
+    return "text-text-faint";
+  };
+
+  const statusIcon = () => {
+    if (!props.status) return "○";
+    const { state, passed, total } = props.status;
+    if (state === "SUCCESS" || passed === total) return "✓";
+    if (state === "FAILURE" || state === "ERROR") return "✗";
+    if (state === "PENDING" || state === "EXPECTED") return "◷";
+    return "○";
+  };
+
+  return (
+    <Show when={props.status} fallback={null}>
+      {(status) => (
+        <span
+          class={`${statusColor()}`}
+          title={`CI: ${status().passed}/${status().total} passed`}
+        >
+          {statusIcon()} {status().passed}/{status().total}
+        </span>
+      )}
+    </Show>
+  );
+};
+
+// Lines changed indicator
+const LinesChanged: Component<{ additions: number; deletions: number }> = (
+  props,
+) => {
+  const format = (n: number) => {
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+    return n.toString();
+  };
+
+  return (
+    <span class="font-mono">
+      <span class="text-diff-add-text">+{format(props.additions)}</span>
+      <span class="text-text-faint mx-0.5">/</span>
+      <span class="text-diff-remove-text">-{format(props.deletions)}</span>
+    </span>
+  );
+};
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -47,7 +110,9 @@ const PrListPage: Component = () => {
 
   // Get unique repos from PR list
   const uniqueRepos = () => {
-    const repos = (prsQuery.data ?? []).map((pr: SearchedPr) => pr.repository.nameWithOwner);
+    const repos = (prsQuery.data ?? []).map(
+      (pr: SearchedPr) => pr.repository.nameWithOwner,
+    );
     return [...new Set(repos)].sort();
   };
 
@@ -64,15 +129,18 @@ const PrListPage: Component = () => {
     }
 
     if (showNeedsReview()) {
-      result = result.filter((pr: SearchedPr) =>
-        pr.reviewRequested &&
-        pr.myReviewState !== 'APPROVED' &&
-        pr.myReviewState !== 'CHANGES_REQUESTED'
+      result = result.filter(
+        (pr: SearchedPr) =>
+          pr.reviewRequested &&
+          pr.myReviewState !== "APPROVED" &&
+          pr.myReviewState !== "CHANGES_REQUESTED",
       );
     }
 
     if (repoFilter()) {
-      result = result.filter((pr: SearchedPr) => pr.repository.nameWithOwner === repoFilter());
+      result = result.filter(
+        (pr: SearchedPr) => pr.repository.nameWithOwner === repoFilter(),
+      );
     }
 
     return result;
@@ -120,7 +188,9 @@ const PrListPage: Component = () => {
         <div class="flex items-center gap-2 mb-6">
           <span class="text-xs text-text-faint mr-1">Filters:</span>
           <button
-            onClick={() => setSearchParams({ mine: showMyPrs() ? undefined : "1" })}
+            onClick={() =>
+              setSearchParams({ mine: showMyPrs() ? undefined : "1" })
+            }
             class={`px-3 py-1 text-xs border transition-colors ${
               showMyPrs()
                 ? "border-accent bg-accent/10 text-accent"
@@ -130,7 +200,9 @@ const PrListPage: Component = () => {
             My PRs
           </button>
           <button
-            onClick={() => setSearchParams({ drafts: showDrafts() ? "0" : undefined })}
+            onClick={() =>
+              setSearchParams({ drafts: showDrafts() ? "0" : undefined })
+            }
             class={`px-3 py-1 text-xs border transition-colors ${
               showDrafts()
                 ? "border-accent bg-accent/10 text-accent"
@@ -140,7 +212,11 @@ const PrListPage: Component = () => {
             Drafts
           </button>
           <button
-            onClick={() => setSearchParams({ needsReview: showNeedsReview() ? undefined : "1" })}
+            onClick={() =>
+              setSearchParams({
+                needsReview: showNeedsReview() ? undefined : "1",
+              })
+            }
             class={`px-3 py-1 text-xs border transition-colors ${
               showNeedsReview()
                 ? "border-accent bg-accent/10 text-accent"
@@ -150,8 +226,11 @@ const PrListPage: Component = () => {
             Needs Review
           </button>
           <select
+            id="repo-filter"
             value={repoFilter()}
-            onChange={(e) => setSearchParams({ repo: e.currentTarget.value || undefined })}
+            onChange={(e) =>
+              setSearchParams({ repo: e.currentTarget.value || undefined })
+            }
             class={`px-3 py-1 text-xs border bg-bg transition-colors cursor-pointer ${
               repoFilter()
                 ? "border-accent bg-accent/10 text-accent"
@@ -225,9 +304,19 @@ const PrListPage: Component = () => {
                             </span>
                           </Show>
                         </div>
-                        <div class="text-xs text-text-faint mt-1.5">
-                          #{pr.number} opened {formatRelativeTime(pr.createdAt)}{" "}
-                          by {pr.author.login}
+                        <div class="text-xs text-text-faint mt-1.5 flex items-center justify-between">
+                          <span>
+                            #{pr.number} opened{" "}
+                            {formatRelativeTime(pr.createdAt)} by{" "}
+                            {pr.author.login}
+                          </span>
+                          <span class="flex items-center gap-3 text-[10px]">
+                            <LinesChanged
+                              additions={pr.additions}
+                              deletions={pr.deletions}
+                            />
+                            <CiStatusBadge status={pr.ciStatus} />
+                          </span>
                         </div>
                       </div>
                       <div class="text-text-faint text-sm mt-1">→</div>

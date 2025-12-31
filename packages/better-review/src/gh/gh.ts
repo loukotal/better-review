@@ -106,6 +106,13 @@ const AuthorSchema = Schema.Struct({
   login: Schema.String,
 })
 
+const CiStatusSchema = Schema.Struct({
+  passed: Schema.Number,
+  total: Schema.Number,
+  state: Schema.Literal("SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"),
+})
+export type CiStatus = typeof CiStatusSchema.Type
+
 const SearchedPrSchema = Schema.Struct({
   number: Schema.Number,
   title: Schema.String,
@@ -117,6 +124,9 @@ const SearchedPrSchema = Schema.Struct({
   myReviewState: ReviewStateSchema,
   isAuthor: Schema.Boolean,
   reviewRequested: Schema.Boolean,
+  additions: Schema.Number,
+  deletions: Schema.Number,
+  ciStatus: Schema.NullOr(CiStatusSchema),
 })
 export type SearchedPr = typeof SearchedPrSchema.Type
 
@@ -166,15 +176,41 @@ const GraphQLReviewSchema = Schema.Struct({
   state: Schema.String,
 })
 
+const GraphQLStatusContextSchema = Schema.Struct({
+  state: Schema.String,
+})
+
+const GraphQLCheckRunSchema = Schema.Struct({
+  conclusion: Schema.NullOr(Schema.String),
+  status: Schema.String,
+})
+
+const GraphQLStatusCheckRollupSchema = Schema.Struct({
+  state: Schema.String,
+  contexts: Schema.Struct({
+    nodes: Schema.Array(Schema.Union(
+      Schema.Struct({ __typename: Schema.Literal("StatusContext"), state: Schema.String }),
+      Schema.Struct({ __typename: Schema.Literal("CheckRun"), conclusion: Schema.NullOr(Schema.String), status: Schema.String }),
+    )),
+  }),
+})
+
+const GraphQLCommitSchema = Schema.Struct({
+  statusCheckRollup: Schema.NullOr(GraphQLStatusCheckRollupSchema),
+})
+
 const GraphQLPrSchema = Schema.Struct({
   number: Schema.Number,
   title: Schema.String,
   url: Schema.String,
   isDraft: Schema.Boolean,
   createdAt: Schema.String,
+  additions: Schema.Number,
+  deletions: Schema.Number,
   repository: Schema.Struct({ name: Schema.String, nameWithOwner: Schema.String }),
   author: Schema.Struct({ login: Schema.String }),
   reviews: Schema.Struct({ nodes: Schema.Array(GraphQLReviewSchema) }),
+  commits: Schema.Struct({ nodes: Schema.Array(Schema.Struct({ commit: GraphQLCommitSchema })) }),
 })
 
 const GraphQLSearchResponseSchema = Schema.Struct({
@@ -527,55 +563,53 @@ export const GhServiceLive = Layer.succeed(GhService, {
       const userCmd = Command.make("gh", "api", "user", "--jq", ".login");
       const currentUser = (yield* Command.string(userCmd)).trim();
 
-      // GraphQL query to get PRs with review state
+      // GraphQL query to get PRs with review state, CI status, and line counts
+      const prFields = `
+        number
+        title
+        url
+        isDraft
+        createdAt
+        additions
+        deletions
+        repository { name, nameWithOwner }
+        author { login }
+        reviews(last: 20) {
+          nodes { author { login }, state }
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 100) {
+                  nodes {
+                    __typename
+                    ... on StatusContext { state }
+                    ... on CheckRun { conclusion, status }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
       const query = `
         query($requestedQuery: String!, $reviewedQuery: String!, $authoredQuery: String!) {
           requested: search(query: $requestedQuery, type: ISSUE, first: 100) {
             nodes {
-              ... on PullRequest {
-                number
-                title
-                url
-                isDraft
-                createdAt
-                repository { name, nameWithOwner }
-                author { login }
-                reviews(last: 20) {
-                  nodes { author { login }, state }
-                }
-              }
+              ... on PullRequest { ${prFields} }
             }
           }
           reviewed: search(query: $reviewedQuery, type: ISSUE, first: 100) {
             nodes {
-              ... on PullRequest {
-                number
-                title
-                url
-                isDraft
-                createdAt
-                repository { name, nameWithOwner }
-                author { login }
-                reviews(last: 20) {
-                  nodes { author { login }, state }
-                }
-              }
+              ... on PullRequest { ${prFields} }
             }
           }
           authored: search(query: $authoredQuery, type: ISSUE, first: 100) {
             nodes {
-              ... on PullRequest {
-                number
-                title
-                url
-                isDraft
-                createdAt
-                repository { name, nameWithOwner }
-                author { login }
-                reviews(last: 20) {
-                  nodes { author { login }, state }
-                }
-              }
+              ... on PullRequest { ${prFields} }
             }
           }
         }
@@ -614,6 +648,34 @@ export const GhServiceLive = Layer.succeed(GhService, {
         data.data.requested.nodes.filter((pr): pr is GraphQLPr => pr !== null).map(pr => pr.url)
       );
 
+      // Helper to compute CI status from status check rollup
+      const getCiStatus = (pr: GraphQLPr): CiStatus | null => {
+        const lastCommit = pr.commits.nodes[0]?.commit;
+        const rollup = lastCommit?.statusCheckRollup;
+        if (!rollup) return null;
+
+        const contexts = rollup.contexts.nodes;
+        let passed = 0;
+        let total = 0;
+
+        for (const ctx of contexts) {
+          total++;
+          if (ctx.__typename === "StatusContext") {
+            if (ctx.state === "SUCCESS") passed++;
+          } else if (ctx.__typename === "CheckRun") {
+            if (ctx.conclusion === "SUCCESS" || ctx.conclusion === "NEUTRAL" || ctx.conclusion === "SKIPPED") {
+              passed++;
+            }
+          }
+        }
+
+        return {
+          passed,
+          total,
+          state: rollup.state as CiStatus["state"],
+        };
+      };
+
       // Helper to convert GraphQL PR to SearchedPr
       const toSearchedPr = (pr: GraphQLPr): SearchedPr => ({
         number: pr.number,
@@ -621,11 +683,14 @@ export const GhServiceLive = Layer.succeed(GhService, {
         url: pr.url,
         isDraft: pr.isDraft,
         createdAt: pr.createdAt,
+        additions: pr.additions,
+        deletions: pr.deletions,
         repository: pr.repository,
         author: pr.author,
         myReviewState: getMyReviewState(pr),
         isAuthor: pr.author.login === currentUser,
         reviewRequested: requestedUrls.has(pr.url),
+        ciStatus: getCiStatus(pr),
       });
 
       // Merge and deduplicate by URL

@@ -165,6 +165,12 @@ export async function prefetchCommitDiffs(url: string, commits: PrCommit[]): Pro
 }
 
 // Types for PR list
+export interface CiStatus {
+  passed: number;
+  total: number;
+  state: "SUCCESS" | "FAILURE" | "PENDING" | "EXPECTED" | "ERROR" | "NEUTRAL";
+}
+
 export interface SearchedPr {
   number: number;
   title: string;
@@ -176,4 +182,7 @@ export interface SearchedPr {
   myReviewState: string | null;
   isAuthor: boolean;
   reviewRequested: boolean;
+  additions: number;
+  deletions: number;
+  ciStatus: CiStatus | null;
 }
