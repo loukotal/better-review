@@ -12,12 +12,13 @@ import { PrStatusBar, type PrStatus } from "./components/PrStatusBar";
 import { ApproveButton } from "./components/ApproveButton";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
 import { CommitNavigator } from "./components/CommitNavigator";
+import { useCurrentUser } from "./hooks/usePrData";
+import { queryKeys, api, queryClient } from "./lib/query";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
 const ANNOTATIONS_STORAGE_KEY = "review-annotations";
 const PANELS_STORAGE_KEY = "panel-visibility";
-const COMMENTS_CACHE_KEY = "pr-comments-cache";
 
 // Valid theme keys for validation
 const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
@@ -124,31 +125,6 @@ function savePanelVisibility(visibility: PanelVisibility): void {
   } catch {}
 }
 
-// Load cached comments from localStorage (keyed by PR URL)
-function loadCommentsCache(prUrl: string): PRComment[] | null {
-  try {
-    const stored = localStorage.getItem(COMMENTS_CACHE_KEY);
-    if (stored) {
-      const data = JSON.parse(stored);
-      return data[prUrl] ?? null;
-    }
-  } catch {
-    // Ignore
-  }
-  return null;
-}
-
-function saveCommentsCache(prUrl: string, comments: PRComment[]): void {
-  try {
-    const stored = localStorage.getItem(COMMENTS_CACHE_KEY);
-    const data = stored ? JSON.parse(stored) : {};
-    data[prUrl] = comments;
-    localStorage.setItem(COMMENTS_CACHE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore
-  }
-}
-
 interface QueuedPr {
   url: string;
   title: string;
@@ -186,18 +162,8 @@ const AppContent: Component = () => {
     savePanelVisibility(newVisibility);
   };
 
-  // Current user (for showing edit/delete on own comments)
-  const [currentUser, setCurrentUser] = createSignal<string | null>(null);
-
-  // Fetch current user on mount
-  createEffect(() => {
-    fetch("/api/user")
-      .then(res => res.json())
-      .then(data => {
-        if (data.login) setCurrentUser(data.login);
-      })
-      .catch(() => {});
-  });
+  // Current user (for showing edit/delete on own comments) - using TanStack Query
+  const { user: currentUser } = useCurrentUser();
 
   // Commit mode state
   const [reviewMode, setReviewMode] = createSignal<ReviewMode>("full");
@@ -289,20 +255,32 @@ const AppContent: Component = () => {
     await addComment(annotation.file, annotation.line, "RIGHT", body);
   };
 
-  // Load commit diff
+  // Load commit diff using TanStack Query (auto-cached)
   const loadCommitDiff = async (sha: string) => {
     const url = loadedPrUrl();
     if (!url) return;
 
     setLoadingCommits(true);
     try {
-      const res = await fetch(`/api/pr/commit-diff?url=${encodeURIComponent(url)}&sha=${sha}`);
-      const data = await res.json();
-      if (!data.error) {
-        setCommitDiff(data.diff);
-      }
+      const diff = await queryClient.fetchQuery({
+        queryKey: queryKeys.pr.commitDiff(url, sha),
+        queryFn: () => api.fetchCommitDiff(url, sha),
+      });
+      setCommitDiff(diff);
+    } catch (err) {
+      console.error("Failed to load commit diff:", err);
     } finally {
       setLoadingCommits(false);
+    }
+  };
+
+  // Preload all commit diffs in background using TanStack Query
+  const preloadCommitDiffs = async (prUrl: string, commitList: PrCommit[]) => {
+    for (const commit of commitList) {
+      await queryClient.prefetchQuery({
+        queryKey: queryKeys.pr.commitDiff(prUrl, commit.sha),
+        queryFn: () => api.fetchCommitDiff(prUrl, commit.sha),
+      });
     }
   };
 
@@ -443,100 +421,108 @@ const AppContent: Component = () => {
     e.preventDefault();
     if (!prUrl() || loading()) return;
 
-    setLoading(true);
+    // Cancel any in-flight queries for other PRs
+    await queryClient.cancelQueries();
+
+    const currentPrUrl = prUrl();
     setError(null);
-    setDiff(null);
-    setComments([]);
-    setLoadedPrUrl(null);
-    setPrInfo(null);
-    setPrStatus(null);
     // Reset commit mode state
     setReviewMode("full");
-    setCommits([]);
     setCurrentCommitIndex(0);
     setCommitDiff(null);
 
+    // Show cached data immediately if available
+    const cachedDiff = queryClient.getQueryData<string>(queryKeys.pr.diff(currentPrUrl));
+    const cachedInfo = queryClient.getQueryData<{ owner: string; repo: string; number: string } | null>(queryKeys.pr.info(currentPrUrl));
+    const cachedCommits = queryClient.getQueryData<PrCommit[]>(queryKeys.pr.commits(currentPrUrl));
+    const cachedComments = queryClient.getQueryData<PRComment[]>(queryKeys.pr.comments(currentPrUrl));
+    const cachedStatus = queryClient.getQueryData<PrStatus>(queryKeys.pr.status(currentPrUrl));
+
+    if (cachedDiff) {
+      setDiff(cachedDiff);
+      setLoadedPrUrl(currentPrUrl);
+      setContextPrUrl(currentPrUrl);
+    }
+    if (cachedInfo) setPrInfo(cachedInfo);
+    if (cachedCommits) setCommits(cachedCommits);
+    if (cachedComments) setComments(cachedComments);
+    if (cachedStatus) setPrStatus(cachedStatus);
+
+    // Only show loading if no cached data
+    if (!cachedDiff) {
+      setLoading(true);
+      setLoadedPrUrl(null);
+      setPrInfo(null);
+      setPrStatus(null);
+      setCommits([]);
+    }
+
     try {
-      // Load diff, PR info, and commits in parallel
-      const [diffRes, infoRes, commitsRes] = await Promise.all([
-        fetch(`/api/pr/diff?url=${encodeURIComponent(prUrl())}`),
-        fetch(`/api/pr/info?url=${encodeURIComponent(prUrl())}`),
-        fetch(`/api/pr/commits?url=${encodeURIComponent(prUrl())}`),
+      // Fetch fresh data (staleTime: 0 forces refetch even if cached)
+      const [diffData, infoData, commitsData] = await Promise.all([
+        queryClient.fetchQuery({
+          queryKey: queryKeys.pr.diff(currentPrUrl),
+          queryFn: () => api.fetchDiff(currentPrUrl),
+          staleTime: 0, // Always fetch fresh
+        }),
+        queryClient.fetchQuery({
+          queryKey: queryKeys.pr.info(currentPrUrl),
+          queryFn: () => api.fetchInfo(currentPrUrl),
+          staleTime: 0,
+        }),
+        queryClient.fetchQuery({
+          queryKey: queryKeys.pr.commits(currentPrUrl),
+          queryFn: () => api.fetchCommits(currentPrUrl),
+          staleTime: 0,
+        }),
       ]);
 
-      const diffData = await diffRes.json();
-      const infoData = await infoRes.json();
-      const commitsData = await commitsRes.json();
-
-      if (diffData.error || infoData.error) {
-        setError(diffData.error || infoData.error);
-        return;
+      setDiff(diffData);
+      setLoadedPrUrl(currentPrUrl);
+      setContextPrUrl(currentPrUrl);
+      setCommits(commitsData);
+      if (infoData) {
+        setPrInfo(infoData);
       }
-
-      setDiff(diffData.diff);
-      setLoadedPrUrl(prUrl());
-      setContextPrUrl(prUrl());
-
-      // Set commits if available
-      const loadedCommits = commitsData.commits ?? [];
-      setCommits(loadedCommits);
 
       // Restore commit mode from URL params (commit is a SHA prefix)
       const urlMode = searchParams.mode;
       const urlCommitSha = searchParams.commit as string | undefined;
-      if (urlMode === "commit" && loadedCommits.length > 0) {
-        // Find commit by SHA prefix
+      if (urlMode === "commit" && commitsData.length > 0) {
         let idx = urlCommitSha
-          ? loadedCommits.findIndex((c: PrCommit) => c.sha.startsWith(urlCommitSha))
+          ? commitsData.findIndex((c: PrCommit) => c.sha.startsWith(urlCommitSha))
           : 0;
-        if (idx === -1) idx = 0; // Fallback to first commit if not found
+        if (idx === -1) idx = 0;
         setCurrentCommitIndex(idx);
-        // Load commit diff in background, then switch mode
-        loadCommitDiff(loadedCommits[idx].sha).then(() => {
+        loadCommitDiff(commitsData[idx].sha).then(() => {
           setReviewMode("commit");
         });
       }
 
-      // Set PR info if available
-      if (infoData.owner && infoData.repo && infoData.number) {
-        console.log("[App] PR info loaded:", infoData);
-        setPrInfo(infoData);
-      } else {
-        console.log("[App] PR info not available:", infoData);
-      }
-
-      // Load cached comments immediately
-      const currentPrUrl = prUrl();
-      const cachedComments = loadCommentsCache(currentPrUrl);
-      if (cachedComments) {
-        setComments(cachedComments);
-      }
-
       setLoading(false);
 
-      // Then load fresh comments and status in parallel (background refresh)
+      // Preload all commit diffs in background
+      if (commitsData.length > 0) {
+        preloadCommitDiffs(currentPrUrl, commitsData);
+      }
+
+      // Then load comments and status in parallel (background refresh)
       setLoadingComments(true);
       setLoadingStatus(true);
 
-      const [commentsRes2, statusRes] = await Promise.all([
-        fetch(`/api/pr/comments?url=${encodeURIComponent(currentPrUrl)}`),
-        fetch(`/api/pr/status?url=${encodeURIComponent(currentPrUrl)}`),
+      const [commentsData, statusData] = await Promise.all([
+        queryClient.fetchQuery({
+          queryKey: queryKeys.pr.comments(currentPrUrl),
+          queryFn: () => api.fetchComments(currentPrUrl),
+        }),
+        queryClient.fetchQuery({
+          queryKey: queryKeys.pr.status(currentPrUrl),
+          queryFn: () => api.fetchStatus(currentPrUrl),
+        }),
       ]);
 
-      const [commentsData2, statusData] = await Promise.all([
-        commentsRes2.json(),
-        statusRes.json(),
-      ]);
-
-      if (!commentsData2.error) {
-        const freshComments = commentsData2.comments ?? [];
-        setComments(freshComments);
-        saveCommentsCache(currentPrUrl, freshComments);
-      }
-
-      if (!statusData.error) {
-        setPrStatus(statusData);
-      }
+      setComments(commentsData);
+      setPrStatus(statusData);
       setLoadingStatus(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load PR");
@@ -544,6 +530,12 @@ const AppContent: Component = () => {
       setLoading(false);
       setLoadingComments(false);
     }
+  };
+
+  // Helper to update comments in both local state and TanStack Query cache
+  const updateCommentsCache = (url: string, newComments: PRComment[]) => {
+    setComments(newComments);
+    queryClient.setQueryData(queryKeys.pr.comments(url), newComments);
   };
 
   const addComment = async (filePath: string, line: number, side: "LEFT" | "RIGHT", body: string) => {
@@ -554,10 +546,8 @@ const AppContent: Component = () => {
     });
     const data = await res.json();
     if (data.comment) {
-      const newComments = [...comments(), data.comment];
-      setComments(newComments);
       const url = loadedPrUrl();
-      if (url) saveCommentsCache(url, newComments);
+      if (url) updateCommentsCache(url, [...comments(), data.comment]);
     }
     return data;
   };
@@ -570,10 +560,8 @@ const AppContent: Component = () => {
     });
     const data = await res.json();
     if (data.comment) {
-      const newComments = [...comments(), data.comment];
-      setComments(newComments);
       const url = loadedPrUrl();
-      if (url) saveCommentsCache(url, newComments);
+      if (url) updateCommentsCache(url, [...comments(), data.comment]);
     }
     return data;
   };
@@ -590,13 +578,13 @@ const AppContent: Component = () => {
       return data;
     }
     if (data.comment) {
-      // Only update the body, preserve other fields from original comment
-      const newComments = comments().map(c =>
-        c.id === commentId ? { ...c, body: data.comment.body } : c
-      );
-      setComments(newComments);
       const url = loadedPrUrl();
-      if (url) saveCommentsCache(url, newComments);
+      if (url) {
+        const newComments = comments().map(c =>
+          c.id === commentId ? { ...c, body: data.comment.body } : c
+        );
+        updateCommentsCache(url, newComments);
+      }
     }
     return data;
   };
@@ -612,11 +600,10 @@ const AppContent: Component = () => {
       console.error("Failed to delete comment:", data.error);
       return data;
     }
-    // Remove the comment from local state
-    const newComments = comments().filter(c => c.id !== commentId);
-    setComments(newComments);
     const url = loadedPrUrl();
-    if (url) saveCommentsCache(url, newComments);
+    if (url) {
+      updateCommentsCache(url, comments().filter(c => c.id !== commentId));
+    }
     return data;
   };
 
