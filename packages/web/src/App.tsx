@@ -2,6 +2,7 @@ import { type Component, createSignal, createEffect, createMemo, Show, onMount, 
 import { useSearchParams, A } from "@solidjs/router";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { DiffViewer, getFileElementId, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
+import { FONT_FAMILY_MAP } from "./diff/types";
 import { FileTreePanel } from "./FileTreePanel";
 import { ChatPanel } from "./ChatPanel";
 import { SettingsPanel } from "./diff/SettingsPanel";
@@ -415,6 +416,12 @@ const AppContent: Component = () => {
   // Persist settings to localStorage when they change
   createEffect(() => {
     saveSettings(settings());
+  });
+
+  // Sync font-mono CSS variable with settings
+  createEffect(() => {
+    const fontFamily = FONT_FAMILY_MAP[settings().fontFamily];
+    document.documentElement.style.setProperty('--font-mono', fontFamily);
   });
 
   const loadPr = async (e: Event) => {

@@ -4,6 +4,10 @@
 @import 'tailwindcss';
 
 @theme {
+  /* === FONT CONFIGURATION === */
+  /* Monospace font - controlled by settings */
+  --font-mono: 'JetBrains Mono', monospace;
+
   /* === MONOCHROME + ORANGE PALETTE === */
   /* Soft blacks - easier on the eyes than pure black */
   --color-bg: #0a0a0a;
@@ -44,7 +48,7 @@
 
 /* === BASE STYLES === */
 * {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
 }
 
 html {
