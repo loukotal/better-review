@@ -33,19 +33,9 @@ const PrListPage: Component = () => {
     staleTime: 0,
   }));
 
-  // Debounced prefetch on hover
-  let hoverTimeout: ReturnType<typeof setTimeout> | null = null;
-  const handleHover = (prUrl: string) => {
-    if (hoverTimeout) clearTimeout(hoverTimeout);
-    hoverTimeout = setTimeout(() => {
-      prefetchPr(prUrl);
-    }, 150);
-  };
-  const handleHoverEnd = () => {
-    if (hoverTimeout) {
-      clearTimeout(hoverTimeout);
-      hoverTimeout = null;
-    }
+  // Prefetch on mousedown (user intent to click)
+  const handleMouseDown = (prUrl: string) => {
+    prefetchPr(prUrl);
   };
 
   // Filter state from URL params
@@ -207,8 +197,7 @@ const PrListPage: Component = () => {
                 <A
                   href={`/?prUrl=${encodeURIComponent(pr.url)}`}
                   class="block border border-border hover:border-text-faint transition-colors"
-                  onMouseEnter={() => handleHover(pr.url)}
-                  onMouseLeave={handleHoverEnd}
+                  onMouseDown={() => handleMouseDown(pr.url)}
                 >
                   <div class="px-4 py-3">
                     <div class="flex items-start justify-between gap-4">
