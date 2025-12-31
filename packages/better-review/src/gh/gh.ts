@@ -185,20 +185,21 @@ const GraphQLSearchResponseSchema = Schema.Struct({
   }),
 })
 
+/** GhCli methods return Effect<A, GhError, never> - no requirements after construction */
 interface GhCli {
-  getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError>;
-  getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError>;
-  getPrStatus: (urlOrNumber: string) => Effect.Effect<PrStatus, GhError>;
-  listComments: (prUrl: string) => Effect.Effect<readonly PRComment[], GhError>;
-  addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError>;
-  replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError>;
-  editComment: (params: EditCommentParams) => Effect.Effect<PRComment, GhError>;
-  deleteComment: (params: DeleteCommentParams) => Effect.Effect<void, GhError>;
-  getCurrentUser: () => Effect.Effect<string, GhError>;
-  approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError>;
-  searchReviewRequested: () => Effect.Effect<readonly SearchedPr[], GhError>;
-  listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError>;
-  getCommitDiff: (params: { owner: string; repo: string; sha: string }) => Effect.Effect<string, GhError>;
+  getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError, never>;
+  getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError, never>;
+  getPrStatus: (urlOrNumber: string) => Effect.Effect<PrStatus, GhError, never>;
+  listComments: (prUrl: string) => Effect.Effect<readonly PRComment[], GhError, never>;
+  addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError, never>;
+  replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError, never>;
+  editComment: (params: EditCommentParams) => Effect.Effect<PRComment, GhError, never>;
+  deleteComment: (params: DeleteCommentParams) => Effect.Effect<void, GhError, never>;
+  getCurrentUser: () => Effect.Effect<string, GhError, never>;
+  approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError, never>;
+  searchReviewRequested: () => Effect.Effect<readonly SearchedPr[], GhError, never>;
+  listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError, never>;
+  getCommitDiff: (params: { owner: string; repo: string; sha: string }) => Effect.Effect<string, GhError, never>;
 }
 
 export class GhService extends Context.Tag("GHService")<GhService, GhCli>() { }
