@@ -21,3 +21,6 @@ This project was created using `bun init` in bun v1.2.23. [Bun](https://bun.com)
 - [ ] load opencode sessions based on PR link - allow switching between sessions if multiple exist
 - [ ] handle "project knowledge base"
 - [ ] simpler marks for warning/info UI elements & files (just use filenames instead of \[\[\]\])
+- [ ] better mobile ui
+- [ ] make it executable using bun
+- [ ] start web server on ".local" domain(?)
