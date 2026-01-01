@@ -43,22 +43,28 @@ const diffCache = new Map<string, Map<string, string>>();
 // Current PR context (for the tool to access)
 let currentPrUrl: string | null = null;
 let currentPrFiles: string[] = [];
-let currentPrInfo: { owner: string; repo: string; number: string } | null = null;
+let currentPrInfo: { owner: string; repo: string; number: string } | null =
+  null;
 
 // Parse line counts from a unified diff
 function getLineChanges(diff: string): { added: number; removed: number } {
-  let added = 0, removed = 0;
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+') && !line.startsWith('+++')) added++;
-    else if (line.startsWith('-') && !line.startsWith('---')) removed++;
+  let added = 0,
+    removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) added++;
+    else if (line.startsWith("-") && !line.startsWith("---")) removed++;
   }
   return { added, removed };
 }
 
 // Filter a unified diff to only include hunks that overlap with the specified line range
 // Line numbers refer to the NEW file (right side of diff)
-function filterDiffByLineRange(diff: string, startLine?: number, endLine?: number): string {
-  const lines = diff.split('\n');
+function filterDiffByLineRange(
+  diff: string,
+  startLine?: number,
+  endLine?: number,
+): string {
+  const lines = diff.split("\n");
   const result: string[] = [];
   let inHeader = true;
   let currentHunk: string[] = [];
@@ -68,7 +74,7 @@ function filterDiffByLineRange(diff: string, startLine?: number, endLine?: numbe
   for (const line of lines) {
     // Keep diff header lines (diff --git, index, ---, +++)
     if (inHeader) {
-      if (line.startsWith('@@')) {
+      if (line.startsWith("@@")) {
         inHeader = false;
       } else {
         result.push(line);
@@ -82,7 +88,7 @@ function filterDiffByLineRange(diff: string, startLine?: number, endLine?: numbe
       // Save previous hunk if it overlaps with our range
       if (currentHunk.length > 0) {
         const hunkNewEnd = hunkNewStart + hunkNewCount - 1;
-        const overlaps = 
+        const overlaps =
           (startLine === undefined || hunkNewEnd >= startLine) &&
           (endLine === undefined || hunkNewStart <= endLine);
         if (overlaps) {
@@ -102,7 +108,7 @@ function filterDiffByLineRange(diff: string, startLine?: number, endLine?: numbe
   // Don't forget the last hunk
   if (currentHunk.length > 0) {
     const hunkNewEnd = hunkNewStart + hunkNewCount - 1;
-    const overlaps = 
+    const overlaps =
       (startLine === undefined || hunkNewEnd >= startLine) &&
       (endLine === undefined || hunkNewStart <= endLine);
     if (overlaps) {
@@ -110,7 +116,7 @@ function filterDiffByLineRange(diff: string, startLine?: number, endLine?: numbe
     }
   }
 
-  return result.join('\n');
+  return result.join("\n");
 }
 
 // Fetch and cache all diffs for a PR
@@ -558,10 +564,14 @@ const main = Effect.gen(function* () {
           const startLineParam = url.searchParams.get("startLine");
           const endLineParam = url.searchParams.get("endLine");
 
-          const startLine = startLineParam ? parseInt(startLineParam, 10) : undefined;
+          const startLine = startLineParam
+            ? parseInt(startLineParam, 10)
+            : undefined;
           const endLine = endLineParam ? parseInt(endLineParam, 10) : undefined;
 
-          console.log(`[file-diff] Request for file: ${file}, startLine: ${startLine}, endLine: ${endLine}`);
+          console.log(
+            `[file-diff] Request for file: ${file}, startLine: ${startLine}, endLine: ${endLine}`,
+          );
           console.log(`[file-diff] Current PR: ${currentPrUrl}`);
           console.log(`[file-diff] Available files: ${currentPrFiles.length}`);
 
@@ -718,7 +728,11 @@ ${fileStats.join("\n")}`;
               // Set current PR context for the file-diff endpoint
               currentPrUrl = body.prUrl;
               currentPrFiles = body.files;
-              currentPrInfo = { owner: body.repoOwner, repo: body.repoName, number: String(body.prNumber) };
+              currentPrInfo = {
+                owner: body.repoOwner,
+                repo: body.repoName,
+                number: String(body.prNumber),
+              };
 
               // Pre-cache all diffs for this PR
               yield* Effect.log("[API] Pre-caching diffs...");
