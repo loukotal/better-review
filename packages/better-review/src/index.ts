@@ -10,6 +10,14 @@ import { Effect, Layer, Fiber } from "effect";
 import { createOpenCodeStream, streamToSSEResponse } from "./stream";
 import { OpencodeService } from "./opencode";
 import { GhServiceLive } from "./gh/gh";
+import { filterDiffByLineRange } from "./diff";
+import { DiffCacheService, PrContextService } from "./state";
+import {
+  validationError,
+  runJson,
+  runResponse,
+  buildReviewContext,
+} from "./response";
 
 // =============================================================================
 // Model/Provider Types and State
@@ -31,454 +39,21 @@ let currentModel: ModelEntry = {
 };
 
 // =============================================================================
-// Session and Cache State
-// =============================================================================
-
-// Hunk info extracted from diff headers
-interface HunkInfo {
-  newStart: number; // Starting line in new file
-  newCount: number; // Number of lines in new file
-  oldStart: number; // Starting line in old file
-  oldCount: number;
-}
-
-// Metadata for a file's diff
-interface FileDiffMeta {
-  diff: string;
-  hunks: HunkInfo[];
-  totalAdded: number;
-  totalRemoved: number;
-}
-
-// Session storage: prUrl -> sessionId
-const prSessions = new Map<string, string>();
-
-// Diff cache: prUrl -> { fileName -> FileDiffMeta }
-const diffCache = new Map<string, Map<string, FileDiffMeta>>();
-
-// Current PR context (for the tool to access)
-let currentPrUrl: string | null = null;
-let currentPrFiles: string[] = [];
-let currentPrInfo: { owner: string; repo: string; number: string } | null =
-  null;
-
-// Parse line counts from a unified diff
-function getLineChanges(diff: string): { added: number; removed: number } {
-  let added = 0,
-    removed = 0;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) added++;
-    else if (line.startsWith("-") && !line.startsWith("---")) removed++;
-  }
-  return { added, removed };
-}
-
-// Filter a unified diff to only include lines within the specified line range
-// Line numbers refer to the NEW file (right side of diff)
-// This filters at the LINE level, not just hunk level
-function filterDiffByLineRange(
-  diff: string,
-  startLine?: number,
-  endLine?: number,
-): string {
-  if (startLine === undefined && endLine === undefined) {
-    return diff;
-  }
-
-  const lines = diff.split("\n");
-  const result: string[] = [];
-  let inHeader = true;
-
-  // Collect lines for current hunk being processed
-  let currentHunkHeader = "";
-  let currentHunkLines: Array<{
-    line: string;
-    newLineNum: number | null; // null for deleted lines
-  }> = [];
-  let hunkOldStart = 0;
-  let hunkNewStart = 0;
-
-  const flushHunk = () => {
-    if (currentHunkLines.length === 0) return;
-
-    // Filter lines to only those within range
-    const filteredLines = currentHunkLines.filter(({ newLineNum }) => {
-      // Always include deleted lines if they're near the range (context)
-      if (newLineNum === null) return true;
-      const afterStart = startLine === undefined || newLineNum >= startLine;
-      const beforeEnd = endLine === undefined || newLineNum <= endLine;
-      return afterStart && beforeEnd;
-    });
-
-    // Also filter out deleted lines that aren't adjacent to kept lines
-    // by checking if any non-deleted lines were kept
-    const hasKeptLines = filteredLines.some((l) => l.newLineNum !== null);
-    if (!hasKeptLines) {
-      currentHunkLines = [];
-      return;
-    }
-
-    // Recalculate hunk header based on filtered lines
-    let newOldCount = 0;
-    let newNewCount = 0;
-    let newOldStart = hunkOldStart;
-    let newNewStart = hunkNewStart;
-    let foundFirst = false;
-
-    // Track current line numbers as we iterate
-    let currentOldLine = hunkOldStart;
-    let currentNewLine = hunkNewStart;
-
-    const finalLines: string[] = [];
-    for (const { line, newLineNum } of currentHunkLines) {
-      const isInRange =
-        newLineNum !== null &&
-        (startLine === undefined || newLineNum >= startLine) &&
-        (endLine === undefined || newLineNum <= endLine);
-
-      // For deleted lines, check if adjacent new lines are in range
-      const isDeletedNearRange =
-        newLineNum === null &&
-        (startLine === undefined || currentNewLine >= startLine - 1) &&
-        (endLine === undefined || currentNewLine <= endLine + 1);
-
-      if (isInRange || isDeletedNearRange) {
-        if (!foundFirst) {
-          newOldStart = currentOldLine;
-          newNewStart = currentNewLine;
-          foundFirst = true;
-        }
-        finalLines.push(line);
-        if (line.startsWith("+")) {
-          newNewCount++;
-        } else if (line.startsWith("-")) {
-          newOldCount++;
-        } else {
-          // Context line
-          newOldCount++;
-          newNewCount++;
-        }
-      }
-
-      // Update current line trackers
-      if (line.startsWith("+")) {
-        currentNewLine++;
-      } else if (line.startsWith("-")) {
-        currentOldLine++;
-      } else {
-        currentOldLine++;
-        currentNewLine++;
-      }
-    }
-
-    if (finalLines.length > 0) {
-      // Generate new hunk header
-      const oldPart =
-        newOldCount === 1 ? `${newOldStart}` : `${newOldStart},${newOldCount}`;
-      const newPart =
-        newNewCount === 1 ? `${newNewStart}` : `${newNewStart},${newNewCount}`;
-      result.push(`@@ -${oldPart} +${newPart} @@`);
-      result.push(...finalLines);
-    }
-
-    currentHunkLines = [];
-  };
-
-  for (const line of lines) {
-    // Keep diff header lines (diff --git, index, ---, +++)
-    if (inHeader) {
-      if (line.startsWith("@@")) {
-        inHeader = false;
-      } else {
-        result.push(line);
-        continue;
-      }
-    }
-
-    // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
-    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-    if (hunkMatch) {
-      // Flush previous hunk
-      flushHunk();
-
-      // Start new hunk tracking
-      currentHunkHeader = line;
-      hunkOldStart = parseInt(hunkMatch[1], 10);
-      hunkNewStart = parseInt(hunkMatch[3], 10);
-      currentHunkLines = [];
-    } else {
-      // Track each line with its new file line number
-      const lastEntry = currentHunkLines[currentHunkLines.length - 1];
-      let currentNewLine: number;
-
-      if (!lastEntry) {
-        currentNewLine = hunkNewStart;
-      } else if (lastEntry.newLineNum === null) {
-        // Previous was a deletion, new line number stays same
-        currentNewLine = hunkNewStart;
-        for (const e of currentHunkLines) {
-          if (e.newLineNum !== null) currentNewLine = e.newLineNum + 1;
-          else if (!e.line.startsWith("-")) currentNewLine++;
-        }
-      } else {
-        currentNewLine =
-          lastEntry.newLineNum + (lastEntry.line.startsWith("-") ? 0 : 1);
-      }
-
-      if (line.startsWith("-")) {
-        // Deleted line - no new line number
-        currentHunkLines.push({ line, newLineNum: null });
-      } else if (line.startsWith("+")) {
-        // Added line
-        const newLineNum =
-          currentHunkLines.filter((e) => !e.line.startsWith("-")).length +
-          hunkNewStart;
-        currentHunkLines.push({ line, newLineNum });
-      } else {
-        // Context line
-        const newLineNum =
-          currentHunkLines.filter((e) => !e.line.startsWith("-")).length +
-          hunkNewStart;
-        currentHunkLines.push({ line, newLineNum });
-      }
-    }
-  }
-
-  // Don't forget the last hunk
-  flushHunk();
-
-  return result.join("\n");
-}
-
-// Parse a diff string to extract hunk info and line counts
-function parseDiffMeta(diff: string): Omit<FileDiffMeta, "diff"> {
-  const hunks: HunkInfo[] = [];
-  let totalAdded = 0;
-  let totalRemoved = 0;
-
-  for (const line of diff.split("\n")) {
-    // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
-    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-    if (hunkMatch) {
-      hunks.push({
-        oldStart: parseInt(hunkMatch[1], 10),
-        oldCount: hunkMatch[2] ? parseInt(hunkMatch[2], 10) : 1,
-        newStart: parseInt(hunkMatch[3], 10),
-        newCount: hunkMatch[4] ? parseInt(hunkMatch[4], 10) : 1,
-      });
-    } else if (line.startsWith("+") && !line.startsWith("+++")) {
-      totalAdded++;
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      totalRemoved++;
-    }
-  }
-
-  return { hunks, totalAdded, totalRemoved };
-}
-
-// Fetch and cache all diffs for a PR
-async function cachePrDiffs(prUrl: string): Promise<Map<string, FileDiffMeta>> {
-  // Check if already cached
-  const existing = diffCache.get(prUrl);
-  if (existing) {
-    console.log(
-      `[cache] Using cached diffs for ${prUrl} (${existing.size} files)`,
-    );
-    return existing;
-  }
-
-  console.log(`[cache] Fetching full diff for ${prUrl}...`);
-
-  try {
-    const fullDiff = await Bun.$`gh pr diff ${prUrl}`.text();
-    console.log(`[cache] Full diff fetched (${fullDiff.length} chars)`);
-
-    // Parse the unified diff into per-file diffs
-    const fileDiffs = new Map<string, FileDiffMeta>();
-    const lines = fullDiff.split("\n");
-    let currentFile: string | null = null;
-    let currentDiff: string[] = [];
-
-    const saveCurrentFile = () => {
-      if (currentFile && currentDiff.length > 0) {
-        const diff = currentDiff.join("\n");
-        const meta = parseDiffMeta(diff);
-        fileDiffs.set(currentFile, { diff, ...meta });
-      }
-    };
-
-    for (const line of lines) {
-      // Check for diff header: "diff --git a/path/to/file b/path/to/file"
-      if (line.startsWith("diff --git ")) {
-        // Save previous file's diff
-        saveCurrentFile();
-
-        // Extract new file path
-        const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
-        if (match) {
-          currentFile = match[2]; // Use the "b" path (new file name)
-          currentDiff = [line];
-        }
-      } else if (currentFile) {
-        currentDiff.push(line);
-      }
-    }
-
-    // Don't forget the last file
-    saveCurrentFile();
-
-    console.log(`[cache] Cached ${fileDiffs.size} file diffs`);
-    diffCache.set(prUrl, fileDiffs);
-    return fileDiffs;
-  } catch (error) {
-    console.error(`[cache] Failed to fetch diff:`, error);
-    throw error;
-  }
-}
-
-// =============================================================================
-// Helper functions
-// =============================================================================
-
-const validationError = (message: string): Response =>
-  Response.json({ error: message }, { status: 400 });
-
-const getErrorMessage = (error: unknown): string => {
-  let current = error;
-
-  // Unwrap Effect Cause (Fail has .error, Die has .defect)
-  if (current && typeof current === "object") {
-    const obj = current as Record<string, unknown>;
-    if (obj._tag === "Fail" && obj.error) current = obj.error;
-    else if (obj._tag === "Die" && obj.defect) current = obj.defect;
-  }
-
-  // Unwrap nested .cause (GhError, etc)
-  while (current && typeof current === "object" && "cause" in current) {
-    const cause = (current as { cause: unknown }).cause;
-    if (typeof cause === "string") return cause;
-    current = cause;
-  }
-
-  // Check stderr first (shell errors)
-  if (current && typeof current === "object" && "stderr" in current) {
-    const stderr = String((current as { stderr: unknown }).stderr || "").trim();
-    if (stderr.includes("HTTP 404")) return "PR not found";
-    if (stderr) return stderr;
-  }
-
-  // For Error objects, use message
-  if (current instanceof Error) return current.message;
-
-  return String(current);
-};
-
-/** Run an effect and return JSON response */
-const runJson = <A>(
-  effect: Effect.Effect<A, unknown, never>,
-): Promise<Response> =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.map((data) => Response.json(data)),
-      Effect.catchAllCause((cause) =>
-        Effect.succeed(
-          Response.json({ error: getErrorMessage(cause) }, { status: 500 }),
-        ),
-      ),
-    ),
-  );
-
-/** Run an effect that returns a Response directly */
-const runResponse = (
-  effect: Effect.Effect<Response, unknown, never>,
-): Promise<Response> =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.catchAllCause((cause) =>
-        Effect.succeed(
-          Response.json({ error: getErrorMessage(cause) }, { status: 500 }),
-        ),
-      ),
-    ),
-  );
-
-// =============================================================================
-// Build context message for PR review
-// =============================================================================
-
-function buildReviewContext(params: {
-  prUrl: string;
-  prNumber: number;
-  repoOwner: string;
-  repoName: string;
-  files: string[];
-}): string {
-  // Filter out common noise files
-  const ignorePatterns = [
-    /package-lock\.json$/,
-    /yarn\.lock$/,
-    /bun\.lock$/,
-    /pnpm-lock\.yaml$/,
-    /\.lock$/,
-    /node_modules\//,
-    /\.min\.js$/,
-    /\.min\.css$/,
-    /dist\//,
-    /build\//,
-    /\.map$/,
-  ];
-
-  const relevantFiles = params.files.filter(
-    (file) => !ignorePatterns.some((pattern) => pattern.test(file)),
-  );
-
-  return `You are reviewing PR #${params.prNumber} in ${params.repoOwner}/${params.repoName}.
-
-**PR URL:** ${params.prUrl}
-
-**Files changed (${relevantFiles.length} files):**
-${relevantFiles.map((f) => `- ${f}`).join("\n")}
-
----
-
-## CRITICAL INSTRUCTIONS
-
-You are reviewing a **REMOTE** pull request. The local filesystem contains a DIFFERENT codebase.
-
-## Tools
-
-### \`pr_metadata\`
-Get PR metadata including title, author, description, and file list with line counts.
-- For large files (>1000 lines changed), shows hunk ranges: \`file.json +5000 -200 [hunks: 1-500, 1200-1800]\`
-- Use this to understand which line ranges to request for large files
-
-### \`pr_diff\`
-Get the diff for a specific file. Supports optional line range filtering.
-- \`pr_diff(file="src/index.ts")\` - get full diff
-- \`pr_diff(file="src/index.ts", startLine=100, endLine=200)\` - get only lines 100-200 (new file line numbers)
-
-For large files, use the hunk ranges from \`pr_metadata\` to request specific portions.
-
----
-
-**Your role:**
-- Call \`pr_metadata\` to get an overview of the PR
-- Call \`pr_diff\` for files you need to review (use line ranges for large files)
-- Explain what the changes do
-- Identify potential issues or bugs
-- Suggest improvements
-- Answer questions about the code`;
-}
-
-// =============================================================================
 // Main Application Effect
 // =============================================================================
 
-const layers = Layer.mergeAll(GhServiceLive, OpencodeService.Default);
+const layers = Layer.mergeAll(
+  GhServiceLive,
+  OpencodeService.Default,
+  DiffCacheService.Default,
+  PrContextService.Default,
+);
 
 const main = Effect.gen(function* () {
   const gh = yield* GhService;
   const opencode = yield* OpencodeService;
+  const diffCache = yield* DiffCacheService;
+  const prContext = yield* PrContextService;
 
   const server = Bun.serve({
     port: 3001,
@@ -740,12 +315,6 @@ const main = Effect.gen(function* () {
             : undefined;
           const endLine = endLineParam ? parseInt(endLineParam, 10) : undefined;
 
-          console.log(
-            `[file-diff] Request for file: ${file}, startLine: ${startLine}, endLine: ${endLine}`,
-          );
-          console.log(`[file-diff] Current PR: ${currentPrUrl}`);
-          console.log(`[file-diff] Available files: ${currentPrFiles.length}`);
-
           if (!file) {
             return Response.json(
               { error: "Missing file parameter" },
@@ -753,75 +322,89 @@ const main = Effect.gen(function* () {
             );
           }
 
-          if (!currentPrUrl) {
-            return Response.json(
-              { error: "No PR context. Load a PR first." },
-              { status: 400 },
-            );
-          }
+          return runJson(
+            Effect.gen(function* () {
+              const ctx = yield* prContext.getCurrent;
 
-          // Check if file is in the list of changed files
-          if (!currentPrFiles.includes(file)) {
-            return Response.json(
-              {
-                error: `File "${file}" is not in the list of changed files`,
-                availableFiles: currentPrFiles,
-              },
-              { status: 400 },
-            );
-          }
+              yield* Effect.log(
+                `[file-diff] Request for file: ${file}, startLine: ${startLine}, endLine: ${endLine}`,
+              );
+              yield* Effect.log(`[file-diff] Current PR: ${ctx.prUrl}`);
+              yield* Effect.log(
+                `[file-diff] Available files: ${ctx.files.length}`,
+              );
 
-          // Get from cache
-          const prDiffs = diffCache.get(currentPrUrl);
-          if (!prDiffs) {
-            return Response.json(
-              { error: "Diffs not cached. This shouldn't happen." },
-              { status: 500 },
-            );
-          }
+              if (!ctx.prUrl) {
+                return yield* Effect.fail(
+                  new Error("No PR context. Load a PR first."),
+                );
+              }
 
-          const fileMeta = prDiffs.get(file);
-          if (!fileMeta) {
-            return Response.json(
-              { error: `No diff found for file: ${file}` },
-              { status: 404 },
-            );
-          }
+              // Check if file is in the list of changed files
+              if (!ctx.files.includes(file)) {
+                return yield* Effect.fail(
+                  new Error(
+                    `File "${file}" is not in the list of changed files`,
+                  ),
+                );
+              }
 
-          // Filter by line range if specified
-          let diffOutput = fileMeta.diff;
-          if (startLine !== undefined || endLine !== undefined) {
-            diffOutput = filterDiffByLineRange(diffOutput, startLine, endLine);
-          }
+              // Get from cache
+              const prDiffs = yield* diffCache.get(ctx.prUrl);
+              if (!prDiffs) {
+                return yield* Effect.fail(
+                  new Error("Diffs not cached. This shouldn't happen."),
+                );
+              }
 
-          console.log(
-            `[file-diff] Returning diff for ${file} (${diffOutput.length} chars)`,
+              const fileMeta = prDiffs.get(file);
+              if (!fileMeta) {
+                return yield* Effect.fail(
+                  new Error(`No diff found for file: ${file}`),
+                );
+              }
+
+              // Filter by line range if specified
+              let diffOutput = fileMeta.diff;
+              if (startLine !== undefined || endLine !== undefined) {
+                diffOutput = filterDiffByLineRange(
+                  diffOutput,
+                  startLine,
+                  endLine,
+                );
+              }
+
+              yield* Effect.log(
+                `[file-diff] Returning diff for ${file} (${diffOutput.length} chars)`,
+              );
+              return { diff: diffOutput };
+            }),
           );
-          return Response.json({ diff: diffOutput });
         },
       },
 
       // PR metadata endpoint for the pr_metadata tool
       "/api/pr/metadata": {
         GET: async () => {
-          if (!currentPrUrl || !currentPrInfo) {
-            return Response.json(
-              { error: "No PR context. Load a PR first." },
-              { status: 400 },
-            );
-          }
-
           return runJson(
             Effect.gen(function* () {
+              const ctx = yield* prContext.getCurrent;
+
+              if (!ctx.prUrl || !ctx.info) {
+                return yield* Effect.fail(
+                  new Error("No PR context. Load a PR first."),
+                );
+              }
+
               // Get PR status (includes description)
-              const prStatus = yield* gh.getPrStatus(currentPrUrl!);
+              const prStatus = yield* gh.getPrStatus(ctx.prUrl);
 
               // Get cached diffs and compute line counts
-              const prDiffs = diffCache.get(currentPrUrl!);
+              const prDiffs = yield* diffCache.get(ctx.prUrl);
               const fileStats: string[] = [];
 
               if (prDiffs) {
-                for (const file of currentPrFiles) {
+                for (const file of ctx.files) {
                   const fileMeta = prDiffs.get(file);
                   if (fileMeta) {
                     const { totalAdded, totalRemoved, hunks } = fileMeta;
@@ -843,7 +426,6 @@ const main = Effect.gen(function* () {
                   }
                 }
               }
-              console.log({ fileStats });
 
               // Build compact text output
               const description = prStatus.body
@@ -852,7 +434,7 @@ const main = Effect.gen(function* () {
                   : prStatus.body
                 : "(no description)";
 
-              const metadata = `PR: ${currentPrInfo!.owner}/${currentPrInfo!.repo}#${currentPrInfo!.number}
+              const metadata = `PR: ${ctx.info.owner}/${ctx.info.repo}#${ctx.info.number}
 Title: ${prStatus.title}
 Author: ${prStatus.author}
 State: ${prStatus.state}${prStatus.draft ? " (draft)" : ""}
@@ -860,7 +442,7 @@ State: ${prStatus.state}${prStatus.draft ? " (draft)" : ""}
 Description:
 ${description}
 
-Files (${currentPrFiles.length} changed):
+Files (${ctx.files.length} changed):
 ${fileStats.join("\n")}`;
 
               console.log({ metadata });
@@ -905,24 +487,22 @@ ${fileStats.join("\n")}`;
               });
 
               // Check if we already have a session for this PR
-              const existingSessionId = prSessions.get(body.prUrl);
+              const existingSessionId = yield* prContext.getSession(body.prUrl);
               yield* Effect.log(
                 "[API] Existing session ID:",
                 existingSessionId,
               );
 
-              // Set current PR context for the file-diff endpoint
-              currentPrUrl = body.prUrl;
-              currentPrFiles = body.files;
-              currentPrInfo = {
+              // Set current PR context
+              yield* prContext.setCurrent(body.prUrl, body.files, {
                 owner: body.repoOwner,
                 repo: body.repoName,
                 number: String(body.prNumber),
-              };
+              });
 
               // Pre-cache all diffs for this PR
               yield* Effect.log("[API] Pre-caching diffs...");
-              yield* Effect.tryPromise(() => cachePrDiffs(body.prUrl));
+              yield* diffCache.getOrFetch(body.prUrl);
 
               // Write PR context file for custom tools
               yield* Effect.log("[API] Writing PR context file...");
@@ -971,7 +551,7 @@ ${fileStats.join("\n")}`;
               }
 
               // Store the session mapping
-              prSessions.set(body.prUrl, session.data.id);
+              yield* prContext.setSession(body.prUrl, session.data.id);
 
               // Inject initial context (without expecting a reply)
               yield* Effect.log("[API] Injecting context...");
@@ -1164,7 +744,7 @@ ${fileStats.join("\n")}`;
     },
   });
 
-  console.log(`API server running at http://localhost:${server.port}`);
+  yield* Effect.log(`API server running at http://localhost:${server.port}`);
 
   // Add finalizer to stop server on cleanup
   yield* Effect.addFinalizer(() =>
