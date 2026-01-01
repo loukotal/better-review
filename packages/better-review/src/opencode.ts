@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { createOpencode } from "@opencode-ai/sdk";
+import { createOpencode } from "@opencode-ai/sdk/v2";
 
 export class OpencodeService extends Effect.Service<OpencodeService>()(
   "OpencodeService",
@@ -20,4 +20,3 @@ export class OpencodeService extends Effect.Service<OpencodeService>()(
     }),
   },
 ) {}
-

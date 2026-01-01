@@ -688,7 +688,7 @@ ${fileStats.join("\n")}`;
       "/api/opencode/health": {
         GET: () =>
           runJson(
-            Effect.tryPromise(() => opencode.client.global.event()).pipe(
+            Effect.tryPromise(() => opencode.client.global.health()).pipe(
               Effect.map(() => ({ healthy: true })),
               Effect.catchAll((e) =>
                 Effect.succeed({ healthy: false, error: String(e) }),
@@ -757,7 +757,7 @@ ${fileStats.join("\n")}`;
                 yield* Effect.log("[API] Fetching existing session...");
                 const existingSession = yield* Effect.tryPromise(() =>
                   opencode.client.session.get({
-                    path: { id: existingSessionId },
+                    sessionID: existingSessionId,
                   }),
                 );
                 yield* Effect.log(
@@ -773,9 +773,7 @@ ${fileStats.join("\n")}`;
               yield* Effect.log("[API] Creating new session...");
               const session = yield* Effect.tryPromise(() =>
                 opencode.client.session.create({
-                  body: {
-                    title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
-                  },
+                  title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
                 }),
               );
               yield* Effect.log("[API] Session created:", session.data?.id);
@@ -794,11 +792,9 @@ ${fileStats.join("\n")}`;
               const contextMessage = buildReviewContext(body);
               yield* Effect.tryPromise(() =>
                 opencode.client.session.prompt({
-                  path: { id: session.data!.id },
-                  body: {
-                    parts: [{ type: "text", text: contextMessage }],
-                    noReply: true,
-                  },
+                  sessionID: session.data.id,
+                  parts: [{ type: "text", text: contextMessage }],
+                  noReply: true,
                 }),
               );
               yield* Effect.log("[API] Context injected successfully");
@@ -826,26 +822,24 @@ ${fileStats.join("\n")}`;
               // Use the currently selected model
               const result = yield* Effect.tryPromise(() =>
                 opencode.client.session.prompt({
-                  path: { id: body.sessionId },
-                  body: {
-                    model: {
-                      providerID: currentModel.providerId,
-                      modelID: currentModel.modelId,
-                    },
-                    agent: body.agent,
-                    parts: [{ type: "text", text: body.message }],
-                    // Disable tools for read-only mode
-                    tools: {
-                      bash: false,
-                      edit: false,
-                      write: false,
-                      glob: true,
-                      grep: true,
-                      read: true,
-                      todoread: false,
-                      todowrite: false,
-                      webfetch: false,
-                    },
+                  sessionID: body.sessionId,
+                  model: {
+                    providerID: currentModel.providerId,
+                    modelID: currentModel.modelId,
+                  },
+                  agent: body.agent,
+                  parts: [{ type: "text", text: body.message }],
+                  // Disable tools for read-only mode
+                  tools: {
+                    bash: false,
+                    edit: false,
+                    write: false,
+                    glob: false,
+                    grep: false,
+                    read: false,
+                    todoread: true,
+                    todowrite: true,
+                    webfetch: true,
                   },
                 }),
               );
@@ -868,7 +862,7 @@ ${fileStats.join("\n")}`;
           return runJson(
             Effect.gen(function* () {
               const messages = yield* Effect.tryPromise(() =>
-                opencode.client.session.messages({ path: { id: sessionId } }),
+                opencode.client.session.messages({ sessionID: sessionId }),
               );
 
               return { messages: messages.data };
@@ -888,7 +882,7 @@ ${fileStats.join("\n")}`;
           return runJson(
             Effect.gen(function* () {
               yield* Effect.tryPromise(() =>
-                opencode.client.session.abort({ path: { id: body.sessionId } }),
+                opencode.client.session.abort({ sessionID: body.sessionId }),
               );
 
               return { success: true };
@@ -959,9 +953,9 @@ ${fileStats.join("\n")}`;
                         glob: false,
                         grep: false,
                         read: false,
-                        todoread: false,
-                        todowrite: false,
-                        webfetch: false,
+                        todoread: true,
+                        todowrite: true,
+                        webfetch: true,
                       },
                     }),
                   },
