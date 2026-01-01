@@ -4,7 +4,7 @@ const API_BASE = "http://localhost:3001";
 
 export default tool({
   description:
-    "Get the diff for a specific file in the PR being reviewed. Use this to see what changed in a file. Only use files from the list of changed files provided in the context. You can optionally specify a line range to get only part of the diff.",
+    "Get the diff for a specific file in the PR being reviewed. Use this to see what changed in a file. Only use files from the list of changed files provided in the context. You can optionally specify a line range to get only part of the diff. Specify line range for large diffs.",
   args: {
     file: tool.schema
       .string()
@@ -25,7 +25,9 @@ export default tool({
       ),
   },
   async execute(args) {
-    console.log(`[pr-diff] Called with file: ${args.file}, startLine: ${args.startLine}, endLine: ${args.endLine}`);
+    console.log(
+      `[pr-diff] Called with file: ${args.file}, startLine: ${args.startLine}, endLine: ${args.endLine}`,
+    );
 
     try {
       let url = `${API_BASE}/api/pr/file-diff?file=${encodeURIComponent(args.file)}`;

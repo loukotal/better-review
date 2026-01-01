@@ -34,11 +34,27 @@ let currentModel: ModelEntry = {
 // Session and Cache State
 // =============================================================================
 
+// Hunk info extracted from diff headers
+interface HunkInfo {
+  newStart: number; // Starting line in new file
+  newCount: number; // Number of lines in new file
+  oldStart: number; // Starting line in old file
+  oldCount: number;
+}
+
+// Metadata for a file's diff
+interface FileDiffMeta {
+  diff: string;
+  hunks: HunkInfo[];
+  totalAdded: number;
+  totalRemoved: number;
+}
+
 // Session storage: prUrl -> sessionId
 const prSessions = new Map<string, string>();
 
-// Diff cache: prUrl -> { fileName -> diff }
-const diffCache = new Map<string, Map<string, string>>();
+// Diff cache: prUrl -> { fileName -> FileDiffMeta }
+const diffCache = new Map<string, Map<string, FileDiffMeta>>();
 
 // Current PR context (for the tool to access)
 let currentPrUrl: string | null = null;
@@ -57,19 +73,116 @@ function getLineChanges(diff: string): { added: number; removed: number } {
   return { added, removed };
 }
 
-// Filter a unified diff to only include hunks that overlap with the specified line range
+// Filter a unified diff to only include lines within the specified line range
 // Line numbers refer to the NEW file (right side of diff)
+// This filters at the LINE level, not just hunk level
 function filterDiffByLineRange(
   diff: string,
   startLine?: number,
   endLine?: number,
 ): string {
+  if (startLine === undefined && endLine === undefined) {
+    return diff;
+  }
+
   const lines = diff.split("\n");
   const result: string[] = [];
   let inHeader = true;
-  let currentHunk: string[] = [];
+
+  // Collect lines for current hunk being processed
+  let currentHunkHeader = "";
+  let currentHunkLines: Array<{
+    line: string;
+    newLineNum: number | null; // null for deleted lines
+  }> = [];
+  let hunkOldStart = 0;
   let hunkNewStart = 0;
-  let hunkNewCount = 0;
+
+  const flushHunk = () => {
+    if (currentHunkLines.length === 0) return;
+
+    // Filter lines to only those within range
+    const filteredLines = currentHunkLines.filter(({ newLineNum }) => {
+      // Always include deleted lines if they're near the range (context)
+      if (newLineNum === null) return true;
+      const afterStart = startLine === undefined || newLineNum >= startLine;
+      const beforeEnd = endLine === undefined || newLineNum <= endLine;
+      return afterStart && beforeEnd;
+    });
+
+    // Also filter out deleted lines that aren't adjacent to kept lines
+    // by checking if any non-deleted lines were kept
+    const hasKeptLines = filteredLines.some((l) => l.newLineNum !== null);
+    if (!hasKeptLines) {
+      currentHunkLines = [];
+      return;
+    }
+
+    // Recalculate hunk header based on filtered lines
+    let newOldCount = 0;
+    let newNewCount = 0;
+    let newOldStart = hunkOldStart;
+    let newNewStart = hunkNewStart;
+    let foundFirst = false;
+
+    // Track current line numbers as we iterate
+    let currentOldLine = hunkOldStart;
+    let currentNewLine = hunkNewStart;
+
+    const finalLines: string[] = [];
+    for (const { line, newLineNum } of currentHunkLines) {
+      const isInRange =
+        newLineNum !== null &&
+        (startLine === undefined || newLineNum >= startLine) &&
+        (endLine === undefined || newLineNum <= endLine);
+
+      // For deleted lines, check if adjacent new lines are in range
+      const isDeletedNearRange =
+        newLineNum === null &&
+        (startLine === undefined || currentNewLine >= startLine - 1) &&
+        (endLine === undefined || currentNewLine <= endLine + 1);
+
+      if (isInRange || isDeletedNearRange) {
+        if (!foundFirst) {
+          newOldStart = currentOldLine;
+          newNewStart = currentNewLine;
+          foundFirst = true;
+        }
+        finalLines.push(line);
+        if (line.startsWith("+")) {
+          newNewCount++;
+        } else if (line.startsWith("-")) {
+          newOldCount++;
+        } else {
+          // Context line
+          newOldCount++;
+          newNewCount++;
+        }
+      }
+
+      // Update current line trackers
+      if (line.startsWith("+")) {
+        currentNewLine++;
+      } else if (line.startsWith("-")) {
+        currentOldLine++;
+      } else {
+        currentOldLine++;
+        currentNewLine++;
+      }
+    }
+
+    if (finalLines.length > 0) {
+      // Generate new hunk header
+      const oldPart =
+        newOldCount === 1 ? `${newOldStart}` : `${newOldStart},${newOldCount}`;
+      const newPart =
+        newNewCount === 1 ? `${newNewStart}` : `${newNewStart},${newNewCount}`;
+      result.push(`@@ -${oldPart} +${newPart} @@`);
+      result.push(...finalLines);
+    }
+
+    currentHunkLines = [];
+  };
 
   for (const line of lines) {
     // Keep diff header lines (diff --git, index, ---, +++)
@@ -83,44 +196,88 @@ function filterDiffByLineRange(
     }
 
     // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
-    const hunkMatch = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunkMatch) {
-      // Save previous hunk if it overlaps with our range
-      if (currentHunk.length > 0) {
-        const hunkNewEnd = hunkNewStart + hunkNewCount - 1;
-        const overlaps =
-          (startLine === undefined || hunkNewEnd >= startLine) &&
-          (endLine === undefined || hunkNewStart <= endLine);
-        if (overlaps) {
-          result.push(...currentHunk);
+      // Flush previous hunk
+      flushHunk();
+
+      // Start new hunk tracking
+      currentHunkHeader = line;
+      hunkOldStart = parseInt(hunkMatch[1], 10);
+      hunkNewStart = parseInt(hunkMatch[3], 10);
+      currentHunkLines = [];
+    } else {
+      // Track each line with its new file line number
+      const lastEntry = currentHunkLines[currentHunkLines.length - 1];
+      let currentNewLine: number;
+
+      if (!lastEntry) {
+        currentNewLine = hunkNewStart;
+      } else if (lastEntry.newLineNum === null) {
+        // Previous was a deletion, new line number stays same
+        currentNewLine = hunkNewStart;
+        for (const e of currentHunkLines) {
+          if (e.newLineNum !== null) currentNewLine = e.newLineNum + 1;
+          else if (!e.line.startsWith("-")) currentNewLine++;
         }
+      } else {
+        currentNewLine =
+          lastEntry.newLineNum + (lastEntry.line.startsWith("-") ? 0 : 1);
       }
 
-      // Start new hunk
-      currentHunk = [line];
-      hunkNewStart = parseInt(hunkMatch[1], 10);
-      hunkNewCount = hunkMatch[2] ? parseInt(hunkMatch[2], 10) : 1;
-    } else {
-      currentHunk.push(line);
+      if (line.startsWith("-")) {
+        // Deleted line - no new line number
+        currentHunkLines.push({ line, newLineNum: null });
+      } else if (line.startsWith("+")) {
+        // Added line
+        const newLineNum =
+          currentHunkLines.filter((e) => !e.line.startsWith("-")).length +
+          hunkNewStart;
+        currentHunkLines.push({ line, newLineNum });
+      } else {
+        // Context line
+        const newLineNum =
+          currentHunkLines.filter((e) => !e.line.startsWith("-")).length +
+          hunkNewStart;
+        currentHunkLines.push({ line, newLineNum });
+      }
     }
   }
 
   // Don't forget the last hunk
-  if (currentHunk.length > 0) {
-    const hunkNewEnd = hunkNewStart + hunkNewCount - 1;
-    const overlaps =
-      (startLine === undefined || hunkNewEnd >= startLine) &&
-      (endLine === undefined || hunkNewStart <= endLine);
-    if (overlaps) {
-      result.push(...currentHunk);
-    }
-  }
+  flushHunk();
 
   return result.join("\n");
 }
 
+// Parse a diff string to extract hunk info and line counts
+function parseDiffMeta(diff: string): Omit<FileDiffMeta, "diff"> {
+  const hunks: HunkInfo[] = [];
+  let totalAdded = 0;
+  let totalRemoved = 0;
+
+  for (const line of diff.split("\n")) {
+    // Parse hunk header: @@ -oldStart,oldCount +newStart,newCount @@
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (hunkMatch) {
+      hunks.push({
+        oldStart: parseInt(hunkMatch[1], 10),
+        oldCount: hunkMatch[2] ? parseInt(hunkMatch[2], 10) : 1,
+        newStart: parseInt(hunkMatch[3], 10),
+        newCount: hunkMatch[4] ? parseInt(hunkMatch[4], 10) : 1,
+      });
+    } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      totalAdded++;
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      totalRemoved++;
+    }
+  }
+
+  return { hunks, totalAdded, totalRemoved };
+}
+
 // Fetch and cache all diffs for a PR
-async function cachePrDiffs(prUrl: string): Promise<Map<string, string>> {
+async function cachePrDiffs(prUrl: string): Promise<Map<string, FileDiffMeta>> {
   // Check if already cached
   const existing = diffCache.get(prUrl);
   if (existing) {
@@ -137,18 +294,24 @@ async function cachePrDiffs(prUrl: string): Promise<Map<string, string>> {
     console.log(`[cache] Full diff fetched (${fullDiff.length} chars)`);
 
     // Parse the unified diff into per-file diffs
-    const fileDiffs = new Map<string, string>();
+    const fileDiffs = new Map<string, FileDiffMeta>();
     const lines = fullDiff.split("\n");
     let currentFile: string | null = null;
     let currentDiff: string[] = [];
+
+    const saveCurrentFile = () => {
+      if (currentFile && currentDiff.length > 0) {
+        const diff = currentDiff.join("\n");
+        const meta = parseDiffMeta(diff);
+        fileDiffs.set(currentFile, { diff, ...meta });
+      }
+    };
 
     for (const line of lines) {
       // Check for diff header: "diff --git a/path/to/file b/path/to/file"
       if (line.startsWith("diff --git ")) {
         // Save previous file's diff
-        if (currentFile && currentDiff.length > 0) {
-          fileDiffs.set(currentFile, currentDiff.join("\n"));
-        }
+        saveCurrentFile();
 
         // Extract new file path
         const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
@@ -162,9 +325,7 @@ async function cachePrDiffs(prUrl: string): Promise<Map<string, string>> {
     }
 
     // Don't forget the last file
-    if (currentFile && currentDiff.length > 0) {
-      fileDiffs.set(currentFile, currentDiff.join("\n"));
-    }
+    saveCurrentFile();
 
     console.log(`[cache] Cached ${fileDiffs.size} file diffs`);
     diffCache.set(prUrl, fileDiffs);
@@ -284,15 +445,25 @@ ${relevantFiles.map((f) => `- ${f}`).join("\n")}
 
 You are reviewing a **REMOTE** pull request. The local filesystem contains a DIFFERENT codebase.
 
-**Your ONLY tool is \`pr_diff\`**. Call it with a file path to see that file's diff:
-- Example: \`pr_diff(file="src/index.ts")\`
+## Tools
 
-**DO NOT** use glob, grep, read, bash, or any filesystem tools. They will search the WRONG codebase and confuse you.
+### \`pr_metadata\`
+Get PR metadata including title, author, description, and file list with line counts.
+- For large files (>1000 lines changed), shows hunk ranges: \`file.json +5000 -200 [hunks: 1-500, 1200-1800]\`
+- Use this to understand which line ranges to request for large files
+
+### \`pr_diff\`
+Get the diff for a specific file. Supports optional line range filtering.
+- \`pr_diff(file="src/index.ts")\` - get full diff
+- \`pr_diff(file="src/index.ts", startLine=100, endLine=200)\` - get only lines 100-200 (new file line numbers)
+
+For large files, use the hunk ranges from \`pr_metadata\` to request specific portions.
 
 ---
 
 **Your role:**
-- Call \`pr_diff\` for files you need to review
+- Call \`pr_metadata\` to get an overview of the PR
+- Call \`pr_diff\` for files you need to review (use line ranges for large files)
 - Explain what the changes do
 - Identify potential issues or bugs
 - Suggest improvements
@@ -609,8 +780,8 @@ const main = Effect.gen(function* () {
             );
           }
 
-          let fileDiff = prDiffs.get(file);
-          if (!fileDiff) {
+          const fileMeta = prDiffs.get(file);
+          if (!fileMeta) {
             return Response.json(
               { error: `No diff found for file: ${file}` },
               { status: 404 },
@@ -618,14 +789,15 @@ const main = Effect.gen(function* () {
           }
 
           // Filter by line range if specified
+          let diffOutput = fileMeta.diff;
           if (startLine !== undefined || endLine !== undefined) {
-            fileDiff = filterDiffByLineRange(fileDiff, startLine, endLine);
+            diffOutput = filterDiffByLineRange(diffOutput, startLine, endLine);
           }
 
           console.log(
-            `[file-diff] Returning diff for ${file} (${fileDiff!.length} chars)`,
+            `[file-diff] Returning diff for ${file} (${diffOutput.length} chars)`,
           );
-          return Response.json({ diff: fileDiff });
+          return Response.json({ diff: diffOutput });
         },
       },
 
@@ -650,15 +822,28 @@ const main = Effect.gen(function* () {
 
               if (prDiffs) {
                 for (const file of currentPrFiles) {
-                  const diff = prDiffs.get(file);
-                  if (diff) {
-                    const { added, removed } = getLineChanges(diff);
-                    fileStats.push(`${file} +${added} -${removed}`);
+                  const fileMeta = prDiffs.get(file);
+                  if (fileMeta) {
+                    const { totalAdded, totalRemoved, hunks } = fileMeta;
+                    // Show hunk ranges for large files (>1k lines changed)
+                    if (totalAdded + totalRemoved > 1000 && hunks.length > 0) {
+                      const ranges = hunks
+                        .map(
+                          (h) => `${h.newStart}-${h.newStart + h.newCount - 1}`,
+                        )
+                        .join(", ");
+                      fileStats.push(
+                        `${file} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`,
+                      );
+                    } else {
+                      fileStats.push(`${file} +${totalAdded} -${totalRemoved}`);
+                    }
                   } else {
                     fileStats.push(`${file} (no diff)`);
                   }
                 }
               }
+              console.log({ fileStats });
 
               // Build compact text output
               const description = prStatus.body
@@ -678,6 +863,7 @@ ${description}
 Files (${currentPrFiles.length} changed):
 ${fileStats.join("\n")}`;
 
+              console.log({ metadata });
               return { metadata };
             }),
           );
