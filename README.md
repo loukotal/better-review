@@ -1,18 +1,21 @@
 # better-review
 
-To install dependencies:
+Better code review experience for GitHub PRs. Runs locally with your github login using the gh cli - easily access your PRs, data stays local. Uses opencode for ai-assisted code review.
 
-```bash
-bun install
-```
+## Prerequisites
 
-To run:
+- bun
+- [gh cli]( https://cli.github.com/ )
+- [opencode](https://opencode.ai/)
 
-```bash
-bun run index.ts
-```
+## How to run
 
-This project was created using `bun init` in bun v1.2.23. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+Currently you need to pull the repo and run it locally.
+
+1. `bun install`
+2. `bun run dev`
+
+You can update ports with `API_PORT`, `WEB_PORT`, `OPENCODE_PORT` environment variables. Defaults are `3000`, `3001` and `4096`
 
 ## License
 
