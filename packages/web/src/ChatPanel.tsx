@@ -1,12 +1,26 @@
-import { createSignal, createEffect, For, Show, Switch, Match, createMemo, onMount, onCleanup } from "solid-js";
+import {
+  createSignal,
+  createEffect,
+  For,
+  Show,
+  Switch,
+  Match,
+  createMemo,
+  onMount,
+  onCleanup,
+} from "solid-js";
 import { marked } from "marked";
 import remend from "remend";
-import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
+import {
+  parseReviewTokens,
+  type Annotation,
+  type MessageSegment,
+} from "./utils/parseReviewTokens";
 import { FileLink } from "./components/FileLink";
 import { AnnotationBlock } from "./components/AnnotationBlock";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { ModelSelector } from "./components/ModelSelector";
-import { useStreamingChat, type StreamingMessage, type ToolCall } from "./hooks/useStreamingChat";
+import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 
 // Configure marked for safe, minimal output
 marked.setOptions({
@@ -50,7 +64,7 @@ export function ChatPanel(props: ChatPanelProps) {
   const [sessionId, setSessionId] = createSignal<string | null>(null);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [initializing, setInitializing] = createSignal(false);
-  
+
   // Resize state
   const [width, setWidth] = createSignal(loadSavedWidth());
   const [isResizing, setIsResizing] = createSignal(false);
@@ -89,7 +103,12 @@ export function ChatPanel(props: ChatPanelProps) {
   });
 
   async function initSession() {
-    if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) {
+    if (
+      !props.prUrl ||
+      !props.prNumber ||
+      !props.repoOwner ||
+      !props.repoName
+    ) {
       return;
     }
 
@@ -143,7 +162,11 @@ export function ChatPanel(props: ChatPanelProps) {
       if (err instanceof Error && err.name === "AbortError") {
         setSessionError("Connection timed out - is OpenCode running?");
       } else {
-        setSessionError(err instanceof Error ? err.message : "Failed to initialize chat session");
+        setSessionError(
+          err instanceof Error
+            ? err.message
+            : "Failed to initialize chat session",
+        );
       }
     } finally {
       setInitializing(false);
@@ -181,7 +204,8 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   function startReview() {
-    const reviewPrompt = "Please analyze this PR and provide a structured review with file order and annotations.";
+    const reviewPrompt =
+      "Please analyze this PR and provide a structured review with file order and annotations.";
     setInput(reviewPrompt);
     setTimeout(() => {
       const fakeEvent = new Event("submit", { cancelable: true });
@@ -213,16 +237,16 @@ export function ChatPanel(props: ChatPanelProps) {
     const html = () => {
       try {
         // Use remend to complete incomplete markdown during streaming
-        const preprocessed = mdProps.streaming ? remend(mdProps.content) : mdProps.content;
+        const preprocessed = mdProps.streaming
+          ? remend(mdProps.content)
+          : mdProps.content;
         return marked.parse(preprocessed, { async: false }) as string;
       } catch {
         return mdProps.content;
       }
     };
-    
-    return (
-      <span class="markdown-content" innerHTML={html()} />
-    );
+
+    return <span class="markdown-content" innerHTML={html()} />;
   }
 
   // Render a message segment
@@ -230,25 +254,60 @@ export function ChatPanel(props: ChatPanelProps) {
     return (
       <Switch>
         <Match when={segmentProps.segment.type === "text"}>
-          <MarkdownText content={(segmentProps.segment as { type: "text"; content: string }).content} />
+          <MarkdownText
+            content={
+              (segmentProps.segment as { type: "text"; content: string })
+                .content
+            }
+          />
         </Match>
         <Match when={segmentProps.segment.type === "file-ref"}>
           <FileLink
-            file={(segmentProps.segment as { type: "file-ref"; file: string; line?: number }).file}
-            line={(segmentProps.segment as { type: "file-ref"; file: string; line?: number }).line}
+            file={
+              (
+                segmentProps.segment as {
+                  type: "file-ref";
+                  file: string;
+                  line?: number;
+                }
+              ).file
+            }
+            line={
+              (
+                segmentProps.segment as {
+                  type: "file-ref";
+                  file: string;
+                  line?: number;
+                }
+              ).line
+            }
             onClick={handleFileClick}
           />
         </Match>
         <Match when={segmentProps.segment.type === "annotation"}>
           <AnnotationBlock
-            annotation={(segmentProps.segment as { type: "annotation"; annotation: Annotation }).annotation}
+            annotation={
+              (
+                segmentProps.segment as {
+                  type: "annotation";
+                  annotation: Annotation;
+                }
+              ).annotation
+            }
             onNavigate={handleFileClick}
             onAddAsComment={handleAddAsComment}
           />
         </Match>
         <Match when={segmentProps.segment.type === "review-order"}>
           <ReviewOrderPanel
-            files={(segmentProps.segment as { type: "review-order"; files: string[] }).files}
+            files={
+              (
+                segmentProps.segment as {
+                  type: "review-order";
+                  files: string[];
+                }
+              ).files
+            }
             currentFiles={props.files}
             onApplyOrder={handleApplyOrder}
             onFileClick={(file) => handleFileClick(file)}
@@ -259,7 +318,10 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   // Render message content with token parsing for assistant messages
-  function MessageContent(contentProps: { role: "user" | "assistant"; content: string }) {
+  function MessageContent(contentProps: {
+    role: "user" | "assistant";
+    content: string;
+  }) {
     if (contentProps.role === "user") {
       return <span class="whitespace-pre-wrap">{contentProps.content}</span>;
     }
@@ -319,7 +381,10 @@ export function ChatPanel(props: ChatPanelProps) {
 
   const quickPrompts = [
     { label: "Summarize", prompt: "Summarize the changes in this PR." },
-    { label: "Security", prompt: "Are there any security concerns in these changes?" },
+    {
+      label: "Security",
+      prompt: "Are there any security concerns in these changes?",
+    },
   ];
 
   // Combine error from session and streaming
@@ -379,9 +444,13 @@ export function ChatPanel(props: ChatPanelProps) {
   });
 
   return (
-    <div 
+    <div
       class="border-r border-border flex flex-col bg-bg-surface relative"
-      style={{ width: `${width()}px`, "min-width": `${MIN_WIDTH}px`, "max-width": `${MAX_WIDTH}px` }}
+      style={{
+        width: `${width()}px`,
+        "min-width": `${MIN_WIDTH}px`,
+        "max-width": `${MAX_WIDTH}px`,
+      }}
     >
       {/* Resize handle */}
       <div
@@ -389,7 +458,7 @@ export function ChatPanel(props: ChatPanelProps) {
         classList={{ "bg-accent": isResizing() }}
         onMouseDown={handleMouseDown}
       />
-      
+
       {/* Header */}
       <div class="px-3 py-2 border-b border-border">
         <div class="flex items-center justify-between">
@@ -417,9 +486,7 @@ export function ChatPanel(props: ChatPanelProps) {
           </Show>
         </div>
         <div class="flex items-center justify-between mt-1">
-          <div class="text-sm truncate">
-            {connectionStatus()}
-          </div>
+          <div class="text-sm truncate">{connectionStatus()}</div>
           <ModelSelector disabled={chat.isStreaming()} />
         </div>
       </div>
@@ -439,17 +506,17 @@ export function ChatPanel(props: ChatPanelProps) {
 
         <Show when={props.prUrl && initializing()}>
           <div class="text-center py-8">
-            <div class="text-text-faint text-sm">
-              Initializing session...
-            </div>
+            <div class="text-text-faint text-sm">Initializing session...</div>
           </div>
         </Show>
 
-        <Show when={props.prUrl && !initializing() && !sessionId() && sessionError()}>
+        <Show
+          when={
+            props.prUrl && !initializing() && !sessionId() && sessionError()
+          }
+        >
           <div class="text-center py-8">
-            <div class="text-error text-sm mb-2">
-              {sessionError()}
-            </div>
+            <div class="text-error text-sm mb-2">{sessionError()}</div>
             <button
               type="button"
               onClick={initSession}
@@ -460,10 +527,18 @@ export function ChatPanel(props: ChatPanelProps) {
           </div>
         </Show>
 
-        <Show when={props.prUrl && sessionId() && chat.messages().length === 0 && !chat.isStreaming()}>
+        <Show
+          when={
+            props.prUrl &&
+            sessionId() &&
+            chat.messages().length === 0 &&
+            !chat.isStreaming()
+          }
+        >
           <div class="text-center py-4">
             <div class="text-text-faint text-sm mb-3">
-              Click "Start Review" for a structured review, or ask questions about this PR
+              Click "Start Review" for a structured review, or ask questions
+              about this PR
             </div>
             <div class="flex flex-wrap gap-1.5 justify-center">
               <For each={quickPrompts}>
@@ -495,16 +570,18 @@ export function ChatPanel(props: ChatPanelProps) {
                 <div class="text-sm text-text-faint mb-1">
                   {msg.role === "user" ? "You" : "Assistant"}
                 </div>
-                
+
                 {/* Show tool calls for assistant messages */}
-                <Show when={msg.role === "assistant" && msg.toolCalls.length > 0}>
+                <Show
+                  when={msg.role === "assistant" && msg.toolCalls.length > 0}
+                >
                   <div class="mb-2">
                     <For each={msg.toolCalls}>
                       {(tool) => <ToolCallView tool={tool} />}
                     </For>
                   </div>
                 </Show>
-                
+
                 <div class="text-text break-words leading-relaxed text-sm">
                   <MessageContent role={msg.role} content={msg.content} />
                 </div>
@@ -514,11 +591,17 @@ export function ChatPanel(props: ChatPanelProps) {
         </For>
 
         {/* Streaming message */}
-        <Show when={chat.isStreaming() || chat.streamingContent() || chat.activeTools().length > 0}>
+        <Show
+          when={
+            chat.isStreaming() ||
+            chat.streamingContent() ||
+            chat.activeTools().length > 0
+          }
+        >
           <div class="mr-2">
             <div class="px-2.5 py-2 bg-bg-elevated border border-border">
               <div class="text-sm text-text-faint mb-1">Assistant</div>
-              
+
               {/* Active tool calls */}
               <Show when={chat.activeTools().length > 0}>
                 <div class="mb-2">
@@ -527,16 +610,25 @@ export function ChatPanel(props: ChatPanelProps) {
                   </For>
                 </div>
               </Show>
-              
+
               {/* Streaming content - render markdown with remend for incomplete blocks */}
               <Show when={chat.streamingContent()}>
                 <div class="text-sm text-text break-words leading-relaxed">
-                  <MarkdownText content={chat.streamingContent()!} streaming={true} />
+                  <MarkdownText
+                    content={chat.streamingContent()!}
+                    streaming={true}
+                  />
                 </div>
               </Show>
-              
+
               {/* Show cursor when actively streaming with no content yet */}
-              <Show when={chat.isStreaming() && !chat.streamingContent() && chat.activeTools().length === 0}>
+              <Show
+                when={
+                  chat.isStreaming() &&
+                  !chat.streamingContent() &&
+                  chat.activeTools().length === 0
+                }
+              >
                 <div class="text-text-muted text-sm">
                   <span class="inline-block animate-pulse">Thinking...</span>
                 </div>

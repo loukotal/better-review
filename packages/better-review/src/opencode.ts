@@ -7,7 +7,11 @@ export class OpencodeService extends Effect.Service<OpencodeService>()(
     scoped: Effect.gen(function* () {
       yield* Effect.log("[OpenCode] Starting opencode server...");
       const { client, server } = yield* Effect.tryPromise(() =>
-        createOpencode({}),
+        createOpencode({
+          port: process.env.OPENCODE_PORT
+            ? parseInt(process.env.OPENCODE_PORT, 10)
+            : undefined,
+        }),
       );
       yield* Effect.log(`[OpenCode] Server running at ${server.url}`);
       yield* Effect.addFinalizer(() =>
