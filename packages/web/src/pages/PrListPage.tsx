@@ -147,9 +147,9 @@ const PrListPage: Component = () => {
   };
 
   return (
-    <div class="min-h-screen bg-bg text-text">
+    <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header */}
-      <header class="border-b border-border bg-bg-surface">
+      <header class="border-b border-border bg-bg-surface flex-shrink-0">
         <div class="px-6 py-4">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
@@ -167,7 +167,8 @@ const PrListPage: Component = () => {
       </header>
 
       {/* Content */}
-      <main class="max-w-4xl mx-auto px-6 py-8">
+      <main class="flex-1 overflow-y-auto">
+        <div class="max-w-4xl mx-auto px-6 py-8">
         <div class="flex items-center justify-between mb-6">
           <div>
             <h2 class="text-lg font-medium text-text">Review Requests</h2>
@@ -327,6 +328,7 @@ const PrListPage: Component = () => {
             </For>
           </div>
         </Show>
+        </div>
       </main>
     </div>
   );
