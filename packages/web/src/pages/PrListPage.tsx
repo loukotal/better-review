@@ -153,12 +153,12 @@ const PrListPage: Component = () => {
         <div class="px-6 py-4">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
-              <span class="text-accent text-xs">●</span>
-              <h1 class="text-sm text-text">better-review</h1>
+              <span class="text-accent text-base">●</span>
+              <h1 class="text-base text-text">better-review</h1>
             </div>
             <A
               href="/"
-              class="text-xs text-text-faint hover:text-text transition-colors"
+              class="text-base text-text-faint hover:text-text transition-colors"
             >
               Enter PR URL manually
             </A>
@@ -171,14 +171,14 @@ const PrListPage: Component = () => {
         <div class="flex items-center justify-between mb-6">
           <div>
             <h2 class="text-lg font-medium text-text">Review Requests</h2>
-            <p class="text-xs text-text-faint mt-1">
+            <p class="text-base text-text-faint mt-1">
               PRs where you're requested as a reviewer or have already reviewed
             </p>
           </div>
           <button
             onClick={() => prsQuery.refetch()}
             disabled={prsQuery.isFetching}
-            class="px-3 py-1.5 text-xs border border-border hover:border-text-faint transition-colors disabled:opacity-50"
+            class="px-3 py-1.5 text-base border border-border hover:border-text-faint transition-colors disabled:opacity-50"
           >
             {prsQuery.isFetching ? "Loading..." : "Refresh"}
           </button>
@@ -186,12 +186,12 @@ const PrListPage: Component = () => {
 
         {/* Filter chips */}
         <div class="flex items-center gap-2 mb-6">
-          <span class="text-xs text-text-faint mr-1">Filters:</span>
+          <span class="text-base text-text-faint mr-1">Filters:</span>
           <button
             onClick={() =>
               setSearchParams({ mine: showMyPrs() ? undefined : "1" })
             }
-            class={`px-3 py-1 text-xs border transition-colors ${
+            class={`px-3 py-1 text-base border transition-colors ${
               showMyPrs()
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-text-faint hover:border-text-faint"
@@ -203,7 +203,7 @@ const PrListPage: Component = () => {
             onClick={() =>
               setSearchParams({ drafts: showDrafts() ? "0" : undefined })
             }
-            class={`px-3 py-1 text-xs border transition-colors ${
+            class={`px-3 py-1 text-base border transition-colors ${
               showDrafts()
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-text-faint hover:border-text-faint"
@@ -217,7 +217,7 @@ const PrListPage: Component = () => {
                 needsReview: showNeedsReview() ? undefined : "1",
               })
             }
-            class={`px-3 py-1 text-xs border transition-colors ${
+            class={`px-3 py-1 text-base border transition-colors ${
               showNeedsReview()
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-text-faint hover:border-text-faint"
@@ -231,7 +231,7 @@ const PrListPage: Component = () => {
             onChange={(e) =>
               setSearchParams({ repo: e.currentTarget.value || undefined })
             }
-            class={`px-3 py-1 text-xs border bg-bg transition-colors cursor-pointer ${
+            class={`px-3 py-1 text-base border bg-bg transition-colors cursor-pointer ${
               repoFilter()
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-text-faint hover:border-text-faint"
@@ -247,13 +247,13 @@ const PrListPage: Component = () => {
         {/* Loading state */}
         <Show when={prsQuery.isPending}>
           <div class="text-center py-12">
-            <div class="text-text-faint text-sm">Loading PRs...</div>
+            <div class="text-text-faint text-base">Loading PRs...</div>
           </div>
         </Show>
 
         {/* Error state */}
         <Show when={prsQuery.isError}>
-          <div class="border border-error/50 bg-diff-remove-bg px-4 py-3 text-sm text-error">
+          <div class="border border-error/50 bg-diff-remove-bg px-4 py-3 text-base text-error">
             {prsQuery.error?.message ?? "Failed to load PRs"}
           </div>
         </Show>
@@ -261,8 +261,8 @@ const PrListPage: Component = () => {
         {/* Empty state */}
         <Show when={prsQuery.isSuccess && filteredPrs().length === 0}>
           <div class="text-center py-12 border border-border">
-            <div class="text-text-faint text-sm">No PRs match your filters</div>
-            <p class="text-xs text-text-faint mt-2">
+            <div class="text-text-faint text-base">No PRs match your filters</div>
+            <p class="text-base text-text-faint mt-2">
               Try adjusting your filter settings
             </p>
           </div>
@@ -281,36 +281,36 @@ const PrListPage: Component = () => {
                   <div class="px-4 py-3">
                     <div class="flex items-start justify-between gap-4">
                       <div class="flex-1 min-w-0">
-                        <div class="text-xs text-text-faint mb-1">
+                        <div class="text-base text-text-faint mb-1">
                           {pr.repository.nameWithOwner}
                         </div>
                         <div class="flex items-center gap-2">
-                          <span class="text-sm text-text truncate">
+                          <span class="text-base text-text truncate">
                             {pr.title}
                           </span>
                           <Show when={pr.isDraft}>
-                            <span class="px-1.5 py-0.5 text-[10px] border border-text-faint/50 bg-text-faint/10 text-text-muted">
+                            <span class="px-1.5 py-0.5 text-base border border-text-faint/50 bg-text-faint/10 text-text-muted">
                               DRAFT
                             </span>
                           </Show>
                           <Show when={pr.myReviewState === "APPROVED"}>
-                            <span class="px-1.5 py-0.5 text-[10px] border border-accent/50 text-accent">
+                            <span class="px-1.5 py-0.5 text-base border border-accent/50 text-accent">
                               APPROVED
                             </span>
                           </Show>
                           <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
-                            <span class="px-1.5 py-0.5 text-[10px] border border-error/50 text-error">
+                            <span class="px-1.5 py-0.5 text-base border border-error/50 text-error">
                               CHANGES REQUESTED
                             </span>
                           </Show>
                         </div>
-                        <div class="text-xs text-text-faint mt-1.5 flex items-center justify-between">
+                        <div class="text-base text-text-faint mt-1.5 flex items-center justify-between">
                           <span>
                             #{pr.number} opened{" "}
                             {formatRelativeTime(pr.createdAt)} by{" "}
                             {pr.author.login}
                           </span>
-                          <span class="flex items-center gap-3 text-[10px]">
+                          <span class="flex items-center gap-3 text-base">
                             <LinesChanged
                               additions={pr.additions}
                               deletions={pr.deletions}
@@ -319,7 +319,7 @@ const PrListPage: Component = () => {
                           </span>
                         </div>
                       </div>
-                      <div class="text-text-faint text-sm mt-1">→</div>
+                      <div class="text-text-faint text-base mt-1">→</div>
                     </div>
                   </div>
                 </A>

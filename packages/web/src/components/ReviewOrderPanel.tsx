@@ -60,7 +60,7 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
           <span class="text-[11px] font-medium text-accent">
             Suggested Review Order
           </span>
-          <span class="text-[10px] text-text-faint">
+          <span class="text-base text-text-faint">
             ({props.files.length} files)
           </span>
         </div>
@@ -68,7 +68,7 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
           <button
             type="button"
             onClick={() => setShowPreview(!showPreview())}
-            class="text-[10px] text-text-faint hover:text-text transition-colors"
+            class="text-base text-text-faint hover:text-text transition-colors"
           >
             {showPreview() ? "Hide" : "Preview"}
           </button>
@@ -76,13 +76,13 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
             <button
               type="button"
               onClick={() => props.onApplyOrder(props.files)}
-              class="text-[10px] px-2 py-0.5 bg-accent text-black hover:bg-accent-bright transition-colors"
+              class="text-base px-2 py-0.5 bg-accent text-black hover:bg-accent-bright transition-colors"
             >
               Apply Order
             </button>
           </Show>
           <Show when={!orderDiffers()}>
-            <span class="text-[10px] text-success">Applied</span>
+            <span class="text-base text-success">Applied</span>
           </Show>
         </div>
       </div>
@@ -99,10 +99,10 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
                   onClick={() => props.onFileClick(file)}
                   class="w-full flex items-center gap-2 px-2.5 py-1 text-left hover:bg-accent/10 transition-colors group"
                 >
-                  <span class="text-[10px] text-text-faint w-4">
+                  <span class="text-base text-text-faint w-4">
                     {index() + 1}.
                   </span>
-                  <span class="text-[10px] text-text-faint truncate">
+                  <span class="text-base text-text-faint truncate">
                     {dirPath(file)}
                   </span>
                   <span class="text-[11px] text-text-muted group-hover:text-text truncate">
@@ -122,7 +122,7 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
 
       {/* Collapsed summary */}
       <Show when={!showPreview()}>
-        <div class="px-2.5 py-1.5 text-[10px] text-text-faint">
+        <div class="px-2.5 py-1.5 text-base text-text-faint">
           <For each={props.files.slice(0, 3)}>
             {(file, index) => (
               <>

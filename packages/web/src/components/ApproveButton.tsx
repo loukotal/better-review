@@ -77,7 +77,7 @@ export function ApproveButton() {
             <span class="text-[11px] text-text">Approve PR</span>
             <button
               onClick={() => setOpen(false)}
-              class="text-text-faint hover:text-text text-sm leading-none"
+              class="text-text-faint hover:text-text text-base leading-none"
             >
               ×
             </button>
@@ -92,7 +92,7 @@ export function ApproveButton() {
             />
 
             <Show when={error()}>
-              <div class="mt-2 px-2 py-1.5 border border-red-500/50 bg-red-500/10 text-red-400 text-[10px]">
+              <div class="mt-2 px-2 py-1.5 border border-red-500/50 bg-red-500/10 text-red-400 text-base">
                 {error()}
               </div>
             </Show>

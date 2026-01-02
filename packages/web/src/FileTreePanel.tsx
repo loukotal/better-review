@@ -93,7 +93,7 @@ function FileStatusIndicator(props: { type: FileDiffMetadata["type"] }) {
   };
 
   return (
-    <span class={`text-[10px] w-3 text-center ${indicator().class}`}>
+    <span class={`text-base w-3 text-center ${indicator().class}`}>
       {indicator().char}
     </span>
   );
@@ -250,7 +250,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
       {/* AI Order indicator */}
       <Show when={props.reviewOrder && props.reviewOrder.length > 0}>
         <div class="px-2 py-1.5 border-b border-accent/30 bg-accent/5">
-          <div class="flex items-center gap-1.5 text-[10px] text-accent">
+          <div class="flex items-center gap-1.5 text-base text-accent">
             <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
               <path d="M7 5.75A.75.75 0 0 1 7.75 5h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 5.75zm0 4A.75.75 0 0 1 7.75 9h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 9.75zM3.5 6a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5zM4.25 10a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0z"/>
             </svg>
@@ -276,7 +276,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
       </div>
 
       {/* Footer Stats */}
-      <div class="px-3 py-1.5 border-t border-border text-[10px] text-text-faint">
+      <div class="px-3 py-1.5 border-t border-border text-base text-text-faint">
         {props.files.length} file{props.files.length !== 1 ? "s" : ""}
       </div>
     </div>

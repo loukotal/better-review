@@ -78,13 +78,13 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
           <span class={styles().icon}>
             <SeverityIcon severity={props.annotation.severity} />
           </span>
-          <span class={`text-[10px] font-medium ${styles().icon}`}>
+          <span class={`text-base font-medium ${styles().icon}`}>
             {styles().label}
           </span>
           <button
             type="button"
             onClick={handleNavigate}
-            class="text-[10px] font-mono text-text-muted hover:text-accent transition-colors"
+            class="text-base font-mono text-text-muted hover:text-accent transition-colors"
           >
             {fileName()}:{props.annotation.line}
           </button>

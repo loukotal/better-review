@@ -307,7 +307,7 @@ export function ChatPanel(props: ChatPanelProps) {
     };
 
     return (
-      <div class="text-[10px] px-2 py-1 bg-bg border border-border mb-1 flex items-center gap-2">
+      <div class="text-base px-2 py-1 bg-bg border border-border mb-1 flex items-center gap-2">
         <span class={statusColor()}>{statusIcon()}</span>
         <span class="text-text-muted">{tool.title || tool.tool}</span>
         <Show when={tool.status === "running"}>
@@ -394,14 +394,14 @@ export function ChatPanel(props: ChatPanelProps) {
       <div class="px-3 py-2 border-b border-border">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
-            <span class="text-accent text-xs">AI</span>
-            <h2 class="text-xs text-text font-medium">Review Assistant</h2>
+            <span class="text-accent text-base">AI</span>
+            <h2 class="text-base text-text font-medium">Review Assistant</h2>
           </div>
           <Show when={sessionId() && !chat.isStreaming()}>
             <button
               type="button"
               onClick={startReview}
-              class="px-2 py-0.5 text-[10px] bg-accent text-black hover:bg-accent-bright transition-colors"
+              class="px-2 py-0.5 text-base bg-accent text-black hover:bg-accent-bright transition-colors"
             >
               Start Review
             </button>
@@ -410,14 +410,14 @@ export function ChatPanel(props: ChatPanelProps) {
             <button
               type="button"
               onClick={handleAbort}
-              class="px-2 py-0.5 text-[10px] bg-error text-white hover:bg-error/80 transition-colors"
+              class="px-2 py-0.5 text-base bg-error text-white hover:bg-error/80 transition-colors"
             >
               Stop
             </button>
           </Show>
         </div>
         <div class="flex items-center justify-between mt-1">
-          <div class="text-[10px] truncate">
+          <div class="text-base truncate">
             {connectionStatus()}
           </div>
           <ModelSelector disabled={chat.isStreaming()} />
@@ -431,7 +431,7 @@ export function ChatPanel(props: ChatPanelProps) {
       >
         <Show when={!props.prUrl}>
           <div class="text-center py-8">
-            <div class="text-text-faint text-xs">
+            <div class="text-text-faint text-base">
               Load a PR to start chatting
             </div>
           </div>
@@ -439,7 +439,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
         <Show when={props.prUrl && initializing()}>
           <div class="text-center py-8">
-            <div class="text-text-faint text-xs">
+            <div class="text-text-faint text-base">
               Initializing session...
             </div>
           </div>
@@ -447,13 +447,13 @@ export function ChatPanel(props: ChatPanelProps) {
 
         <Show when={props.prUrl && !initializing() && !sessionId() && sessionError()}>
           <div class="text-center py-8">
-            <div class="text-error text-xs mb-2">
+            <div class="text-error text-base mb-2">
               {sessionError()}
             </div>
             <button
               type="button"
               onClick={initSession}
-              class="text-xs text-accent hover:text-accent-bright"
+              class="text-base text-accent hover:text-accent-bright"
             >
               Retry
             </button>
@@ -462,7 +462,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
         <Show when={props.prUrl && sessionId() && chat.messages().length === 0 && !chat.isStreaming()}>
           <div class="text-center py-4">
-            <div class="text-text-faint text-xs mb-3">
+            <div class="text-text-faint text-base mb-3">
               Click "Start Review" for a structured review, or ask questions about this PR
             </div>
             <div class="flex flex-wrap gap-1.5 justify-center">
@@ -471,7 +471,7 @@ export function ChatPanel(props: ChatPanelProps) {
                   <button
                     type="button"
                     onClick={() => handleQuickPrompt(qp.prompt)}
-                    class="px-2 py-1 text-[10px] border border-border text-text-muted hover:border-accent hover:text-accent transition-colors"
+                    class="px-2 py-1 text-base border border-border text-text-muted hover:border-accent hover:text-accent transition-colors"
                   >
                     {qp.label}
                   </button>
@@ -484,7 +484,7 @@ export function ChatPanel(props: ChatPanelProps) {
         {/* Completed messages */}
         <For each={chat.messages()}>
           {(msg) => (
-            <div class={`text-xs ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
+            <div class={`text-base ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
               <div
                 class={`px-2.5 py-2 ${
                   msg.role === "user"
@@ -492,7 +492,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     : "bg-bg-elevated border border-border"
                 }`}
               >
-                <div class="text-[10px] text-text-faint mb-1">
+                <div class="text-base text-text-faint mb-1">
                   {msg.role === "user" ? "You" : "Assistant"}
                 </div>
                 
@@ -517,7 +517,7 @@ export function ChatPanel(props: ChatPanelProps) {
         <Show when={chat.isStreaming() || chat.streamingContent() || chat.activeTools().length > 0}>
           <div class="mr-2">
             <div class="px-2.5 py-2 bg-bg-elevated border border-border">
-              <div class="text-[10px] text-text-faint mb-1">Assistant</div>
+              <div class="text-base text-text-faint mb-1">Assistant</div>
               
               {/* Active tool calls */}
               <Show when={chat.activeTools().length > 0}>
@@ -530,14 +530,14 @@ export function ChatPanel(props: ChatPanelProps) {
               
               {/* Streaming content - render markdown with remend for incomplete blocks */}
               <Show when={chat.streamingContent()}>
-                <div class="text-xs text-text break-words leading-relaxed">
+                <div class="text-base text-text break-words leading-relaxed">
                   <MarkdownText content={chat.streamingContent()!} streaming={true} />
                 </div>
               </Show>
               
               {/* Show cursor when actively streaming with no content yet */}
               <Show when={chat.isStreaming() && !chat.streamingContent() && chat.activeTools().length === 0}>
-                <div class="text-text-muted text-xs">
+                <div class="text-text-muted text-base">
                   <span class="inline-block animate-pulse">Thinking...</span>
                 </div>
               </Show>
@@ -549,7 +549,7 @@ export function ChatPanel(props: ChatPanelProps) {
       {/* Error display */}
       <Show when={displayError()}>
         <div class="px-3 py-2 bg-error/10 border-t border-error/20">
-          <div class="text-error text-[10px]">{displayError()}</div>
+          <div class="text-error text-base">{displayError()}</div>
         </div>
       </Show>
 
@@ -578,7 +578,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     : "Load a PR first"
               }
               disabled={!sessionId() || chat.isStreaming()}
-              class="w-full px-2 py-1.5 bg-bg border border-border text-xs text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent resize-none disabled:opacity-50 disabled:cursor-not-allowed"
+              class="w-full px-2 py-1.5 bg-bg border border-border text-base text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent resize-none disabled:opacity-50 disabled:cursor-not-allowed"
               rows={2}
             />
             <div class="flex justify-between items-center">
@@ -601,7 +601,7 @@ export function ChatPanel(props: ChatPanelProps) {
               <button
                 type="submit"
                 disabled={!sessionId() || chat.isStreaming() || !input().trim()}
-                class="px-3 py-1 bg-accent text-black text-[10px] font-medium hover:bg-accent-bright disabled:opacity-30 disabled:cursor-not-allowed"
+                class="px-3 py-1 bg-accent text-black text-base font-medium hover:bg-accent-bright disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {chat.isStreaming() ? "..." : "Send"}
               </button>

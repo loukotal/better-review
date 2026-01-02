@@ -72,12 +72,12 @@ export const CommitNavigator: Component<CommitNavigatorProps> = (props) => {
 
       {/* Loading indicator */}
       <Show when={props.loading}>
-        <span class="text-[10px] text-accent animate-pulse">Loading...</span>
+        <span class="text-base text-accent animate-pulse">Loading...</span>
       </Show>
 
       {/* Commit info */}
       <Show when={!props.loading && current()}>
-        <div class="hidden sm:flex items-center gap-2 text-[10px] text-text-faint border-l border-border pl-2 ml-1">
+        <div class="hidden sm:flex items-center gap-2 text-base text-text-faint border-l border-border pl-2 ml-1">
           <Show when={current()?.author.avatar_url}>
             <img
               src={current()!.author.avatar_url}

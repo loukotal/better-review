@@ -79,7 +79,7 @@ function ChecksIndicator(props: { checks: CheckRun[] }) {
               <path d="M8 0a8 8 0 0 1 8 8h-2a6 6 0 0 0-6-6V0z"/>
             </svg>
           </Show>
-          <span class="text-[10px] text-text-muted">
+          <span class="text-base text-text-muted">
             {s().passed}/{s().total} checks
           </span>
         </div>
@@ -110,7 +110,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
   return (
     <Show when={!props.loading && props.status} fallback={
       <Show when={props.loading}>
-        <div class="flex items-center gap-2 text-[10px] text-text-faint">
+        <div class="flex items-center gap-2 text-base text-text-faint">
           <span class="animate-pulse">Loading status...</span>
         </div>
       </Show>
@@ -124,7 +124,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
             <div class="flex items-center gap-3">
               {/* State badge */}
               <div class={`flex items-center gap-1.5 px-1.5 py-0.5 ${style().bg}`}>
-                <span class={`text-[10px] font-medium ${style().text}`}>
+                <span class={`text-base font-medium ${style().text}`}>
                   {status().draft ? "Draft" : style().label}
                 </span>
               </div>
@@ -143,7 +143,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                     <ExternalLinkIcon />
                   </span>
                 </a>
-                <span class="text-[10px] text-text-faint">
+                <span class="text-base text-text-faint">
                   by {status().author}
                 </span>
               </div>
@@ -155,9 +155,9 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
               <Show when={status().state === "open" && status().mergeable !== null}>
                 <div class="flex items-center gap-1">
                   <Show when={status().mergeable} fallback={
-                    <span class="text-[10px] text-error">Conflicts</span>
+                    <span class="text-base text-error">Conflicts</span>
                   }>
-                    <span class="text-[10px] text-success">Mergeable</span>
+                    <span class="text-base text-success">Mergeable</span>
                   </Show>
                 </div>
               </Show>
@@ -167,7 +167,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 <button
                   type="button"
                   onClick={() => setShowDescription(!showDescription())}
-                  class="flex items-center gap-1 text-[10px] text-text-faint hover:text-text transition-colors"
+                  class="flex items-center gap-1 text-base text-text-faint hover:text-text transition-colors"
                   title={showDescription() ? "Hide description" : "Show description"}
                 >
                   <span class={`transform transition-transform ${showDescription() ? "rotate-180" : ""}`}>
