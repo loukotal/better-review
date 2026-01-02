@@ -80,7 +80,8 @@ export const LINE_DIFF_LABELS: Record<LineDiffType, string> = {
 export interface PRComment {
   id: number;
   path: string;
-  line: number;
+  line: number | null;
+  original_line: number | null;
   side: "LEFT" | "RIGHT";
   body: string;
   html_url: string;
@@ -98,7 +99,7 @@ export type AnnotationMetadata =
   | {
       type: "pending-reply";
       rootCommentId: number;
-      line: number;
+      line: number | null;
       side: "LEFT" | "RIGHT";
     };
 

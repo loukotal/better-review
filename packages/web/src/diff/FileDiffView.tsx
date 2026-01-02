@@ -103,7 +103,7 @@ export function FileDiffView(props: FileDiffViewProps) {
 
   const [collapsed, setCollapsed] = createSignal(shouldAutoCollapse());
   const [pendingComment, setPendingComment] = createSignal<{ startLine: number; endLine: number; side: "LEFT" | "RIGHT" } | null>(null);
-  const [pendingReply, setPendingReply] = createSignal<{ commentId: number; line: number; side: "LEFT" | "RIGHT" } | null>(null);
+  const [pendingReply, setPendingReply] = createSignal<{ commentId: number; line: number | null; side: "LEFT" | "RIGHT" } | null>(null);
   const [pendingEdit, setPendingEdit] = createSignal<{ commentId: number; body: string } | null>(null);
   const [editError, setEditError] = createSignal<string | null>(null);
   const [submitting, setSubmitting] = createSignal(false);
@@ -120,9 +120,14 @@ export function FileDiffView(props: FileDiffViewProps) {
     
     // Add threads as annotations
     Array.from(threads.values()).forEach(({ root, replies }) => {
+      // Use line if available, otherwise fall back to original_line for outdated comments
+      const lineNumber = root.line ?? root.original_line;
+      // Skip comments without any line information
+      if (lineNumber === null) return;
+      
       result.push({
         side: (root.side === "LEFT" ? "deletions" : "additions") as AnnotationSide,
-        lineNumber: root.line,
+        lineNumber,
         metadata: { type: "thread", rootComment: root, replies },
       });
     });
@@ -265,6 +270,7 @@ export function FileDiffView(props: FileDiffViewProps) {
     }
 
     const isOwnComment = props.currentUser && comment.user.login === props.currentUser;
+    const isOutdated = comment.line === null;
     const actionsHtml = isOwnComment ? `
       <div class="flex items-center gap-2 ml-auto">
         <button
@@ -283,12 +289,16 @@ export function FileDiffView(props: FileDiffViewProps) {
         </button>
       </div>
     ` : "";
+    const outdatedBadge = isOutdated
+      ? `<span class="px-1.5 py-0.5 text-[9px] bg-amber-500/20 text-amber-400 rounded" title="This comment was made on a line that has since changed">outdated</span>`
+      : "";
 
     return `
       <div class="${indentClass}" id="comment-${comment.id}">
         <div class="flex items-center gap-2 mb-1">
           <img src="${escapeHtml(comment.user.avatar_url)}" class="w-4 h-4 rounded-sm" />
           <span class="text-[11px] text-text">${escapeHtml(comment.user.login)}</span>
+          ${outdatedBadge}
           <a
             href="#comment-${comment.id}"
             class="text-[10px] text-text-faint hover:text-accent transition-colors"

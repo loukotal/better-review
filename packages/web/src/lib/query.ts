@@ -53,6 +53,7 @@ export const queryKeys = {
     commitDiff: (url: string, sha: string) => ["pr", "commitDiff", url, sha] as const,
     comments: (url: string) => ["pr", "comments", url] as const,
     status: (url: string) => ["pr", "status", url] as const,
+    ciStatus: (url: string) => ["pr", "ci-status", url] as const,
   },
   prs: {
     list: ["prs", "list"] as const,
@@ -112,6 +113,13 @@ export const api = {
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     return data.prs ?? [];
+  },
+
+  async fetchPrCiStatus(prUrl: string, signal?: AbortSignal): Promise<CiStatus | null> {
+    const res = await fetch(`/api/prs/ci-status?url=${encodeURIComponent(prUrl)}`, { signal });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data.ciStatus ?? null;
   },
 
   async fetchCurrentUser(signal?: AbortSignal): Promise<string | null> {

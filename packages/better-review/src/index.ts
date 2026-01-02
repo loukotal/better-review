@@ -136,6 +136,20 @@ const main = Effect.gen(function* () {
             gh.searchReviewRequested().pipe(Effect.map((prs) => ({ prs }))),
           ),
       },
+      "/api/prs/ci-status": {
+        GET: (req) => {
+          const url = new URL(req.url);
+          const prUrl = url.searchParams.get("url");
+
+          if (!prUrl) {
+            return validationError("Missing url parameter");
+          }
+
+          return runJson(
+            gh.getPrCiStatus(prUrl).pipe(Effect.map((ciStatus) => ({ ciStatus }))),
+          );
+        },
+      },
       "/api/pr/diff": {
         GET: (req) => {
           const url = new URL(req.url);

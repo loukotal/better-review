@@ -9,10 +9,9 @@ import {
   type CiStatus,
 } from "../lib/query";
 
-// CI status indicator component
-const CiStatusBadge: Component<{ status: CiStatus | null }> = (props) => {
+// CI status indicator component (used when status is already loaded)
+const CiStatusBadgeInner: Component<{ status: CiStatus }> = (props) => {
   const statusColor = () => {
-    if (!props.status) return "text-text-faint";
     const { state, passed, total } = props.status;
     if (state === "SUCCESS" || passed === total) return "text-success";
     if (
@@ -26,7 +25,6 @@ const CiStatusBadge: Component<{ status: CiStatus | null }> = (props) => {
   };
 
   const statusIcon = () => {
-    if (!props.status) return "○";
     const { state, passed, total } = props.status;
     if (state === "SUCCESS" || passed === total) return "✓";
     if (state === "FAILURE" || state === "ERROR") return "✗";
@@ -35,15 +33,26 @@ const CiStatusBadge: Component<{ status: CiStatus | null }> = (props) => {
   };
 
   return (
-    <Show when={props.status} fallback={null}>
-      {(status) => (
-        <span
-          class={`${statusColor()}`}
-          title={`CI: ${status().passed}/${status().total} passed`}
-        >
-          {statusIcon()} {status().passed}/{status().total}
-        </span>
-      )}
+    <span
+      class={statusColor()}
+      title={`CI: ${props.status.passed}/${props.status.total} passed`}
+    >
+      {statusIcon()} {props.status.passed}/{props.status.total}
+    </span>
+  );
+};
+
+// Lazy-loading CI status badge - fetches status on mount
+const LazyCiStatusBadge: Component<{ prUrl: string }> = (props) => {
+  const ciQuery = useQuery(() => ({
+    queryKey: queryKeys.pr.ciStatus(props.prUrl),
+    queryFn: ({ signal }) => api.fetchPrCiStatus(props.prUrl, signal),
+    staleTime: 60 * 1000, // Cache for 1 minute
+  }));
+
+  return (
+    <Show when={ciQuery.data}>
+      {(status) => <CiStatusBadgeInner status={status()} />}
     </Show>
   );
 };
@@ -315,7 +324,7 @@ const PrListPage: Component = () => {
                               additions={pr.additions}
                               deletions={pr.deletions}
                             />
-                            <CiStatusBadge status={pr.ciStatus} />
+                            <LazyCiStatusBadge prUrl={pr.url} />
                           </span>
                         </div>
                       </div>

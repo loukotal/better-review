@@ -22,7 +22,8 @@ const UserSchema = Schema.Struct({
 const PRCommentSchema = Schema.Struct({
   id: Schema.Number,
   path: Schema.String,
-  line: Schema.Number,
+  line: Schema.NullOr(Schema.Number),
+  original_line: Schema.NullOr(Schema.Number),
   side: Schema.Literal("LEFT", "RIGHT"),
   body: Schema.String,
   html_url: Schema.String,
@@ -176,29 +177,6 @@ const GraphQLReviewSchema = Schema.Struct({
   state: Schema.String,
 })
 
-const GraphQLStatusContextSchema = Schema.Struct({
-  state: Schema.String,
-})
-
-const GraphQLCheckRunSchema = Schema.Struct({
-  conclusion: Schema.NullOr(Schema.String),
-  status: Schema.String,
-})
-
-const GraphQLStatusCheckRollupSchema = Schema.Struct({
-  state: Schema.String,
-  contexts: Schema.Struct({
-    nodes: Schema.Array(Schema.Union(
-      Schema.Struct({ __typename: Schema.Literal("StatusContext"), state: Schema.String }),
-      Schema.Struct({ __typename: Schema.Literal("CheckRun"), conclusion: Schema.NullOr(Schema.String), status: Schema.String }),
-    )),
-  }),
-})
-
-const GraphQLCommitSchema = Schema.Struct({
-  statusCheckRollup: Schema.NullOr(GraphQLStatusCheckRollupSchema),
-})
-
 const GraphQLPrSchema = Schema.Struct({
   number: Schema.Number,
   title: Schema.String,
@@ -210,7 +188,6 @@ const GraphQLPrSchema = Schema.Struct({
   repository: Schema.Struct({ name: Schema.String, nameWithOwner: Schema.String }),
   author: Schema.Struct({ login: Schema.String }),
   reviews: Schema.Struct({ nodes: Schema.Array(GraphQLReviewSchema) }),
-  commits: Schema.Struct({ nodes: Schema.Array(Schema.Struct({ commit: GraphQLCommitSchema })) }),
 })
 
 const GraphQLSearchResponseSchema = Schema.Struct({
@@ -236,6 +213,7 @@ interface GhCli {
   searchReviewRequested: () => Effect.Effect<readonly SearchedPr[], GhError, never>;
   listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError, never>;
   getCommitDiff: (params: { owner: string; repo: string; sha: string }) => Effect.Effect<string, GhError, never>;
+  getPrCiStatus: (prUrl: string) => Effect.Effect<CiStatus | null, GhError, never>;
 }
 
 export class GhService extends Context.Tag("GHService")<GhService, GhCli>() { }
@@ -577,22 +555,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         reviews(last: 20) {
           nodes { author { login }, state }
         }
-        commits(last: 1) {
-          nodes {
-            commit {
-              statusCheckRollup {
-                state
-                contexts(first: 100) {
-                  nodes {
-                    __typename
-                    ... on StatusContext { state }
-                    ... on CheckRun { conclusion, status }
-                  }
-                }
-              }
-            }
-          }
-        }
+
       `;
 
       const query = `
@@ -648,35 +611,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         data.data.requested.nodes.filter((pr): pr is GraphQLPr => pr !== null).map(pr => pr.url)
       );
 
-      // Helper to compute CI status from status check rollup
-      const getCiStatus = (pr: GraphQLPr): CiStatus | null => {
-        const lastCommit = pr.commits.nodes[0]?.commit;
-        const rollup = lastCommit?.statusCheckRollup;
-        if (!rollup) return null;
-
-        const contexts = rollup.contexts.nodes;
-        let passed = 0;
-        let total = 0;
-
-        for (const ctx of contexts) {
-          total++;
-          if (ctx.__typename === "StatusContext") {
-            if (ctx.state === "SUCCESS") passed++;
-          } else if (ctx.__typename === "CheckRun") {
-            if (ctx.conclusion === "SUCCESS" || ctx.conclusion === "NEUTRAL" || ctx.conclusion === "SKIPPED") {
-              passed++;
-            }
-          }
-        }
-
-        return {
-          passed,
-          total,
-          state: rollup.state as CiStatus["state"],
-        };
-      };
-
-      // Helper to convert GraphQL PR to SearchedPr
+      // Helper to convert GraphQL PR to SearchedPr (ciStatus loaded lazily)
       const toSearchedPr = (pr: GraphQLPr): SearchedPr => ({
         number: pr.number,
         title: pr.title,
@@ -690,7 +625,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         myReviewState: getMyReviewState(pr),
         isAuthor: pr.author.login === currentUser,
         reviewRequested: requestedUrls.has(pr.url),
-        ciStatus: getCiStatus(pr),
+        ciStatus: null, // Loaded lazily via /api/prs/ci-status
       });
 
       // Merge and deduplicate by URL
@@ -725,6 +660,80 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "searchReviewRequested", cause })),
       Effect.withSpan("GhService.searchReviewRequested"),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getPrCiStatus: (prUrl: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(prUrl);
+
+      // GraphQL query to get CI status for a single PR
+      const query = `
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              commits(last: 1) {
+                nodes {
+                  commit {
+                    statusCheckRollup {
+                      state
+                      contexts(first: 100) {
+                        nodes {
+                          __typename
+                          ... on StatusContext { state }
+                          ... on CheckRun { conclusion, status }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const graphqlCmd = Command.make(
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        `query=${query}`,
+        "-F",
+        `owner=${owner}`,
+        "-F",
+        `repo=${repo}`,
+        "-F",
+        `number=${number}`,
+      );
+      const result = yield* Command.string(graphqlCmd);
+      const data = yield* Effect.try(() => JSON.parse(result));
+
+      const rollup = data?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup;
+      if (!rollup) return null;
+
+      const contexts = rollup.contexts?.nodes ?? [];
+      let passed = 0;
+      const total = contexts.length;
+
+      for (const ctx of contexts) {
+        if (ctx.__typename === "StatusContext") {
+          if (ctx.state === "SUCCESS") passed++;
+        } else if (ctx.__typename === "CheckRun") {
+          if (ctx.conclusion === "SUCCESS" || ctx.conclusion === "NEUTRAL" || ctx.conclusion === "SKIPPED") {
+            passed++;
+          }
+        }
+      }
+
+      return {
+        passed,
+        total,
+        state: rollup.state as CiStatus["state"],
+      };
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getPrCiStatus", cause })),
+      Effect.withSpan("GhService.getPrCiStatus", { attributes: { prUrl } }),
       Effect.provide(BunContext.layer),
     ),
 });
