@@ -621,10 +621,10 @@ const AppContent: Component = () => {
         {/* Main Header */}
         <div class="px-4 py-3">
           <div class="flex items-center justify-between mb-3">
-            <div class="flex items-center gap-2">
+            <A href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
               <span class="text-accent text-base">●</span>
               <h1 class="text-base text-text">better-review</h1>
-            </div>
+            </A>
             <div class="flex items-center gap-4">
               <div class="flex items-center gap-1 border-r border-border pr-4">
                 <button
@@ -651,7 +651,7 @@ const AppContent: Component = () => {
                 </button>
               </div>
               <A
-                href="/prs"
+                href="/"
                 class="text-base text-text-faint hover:text-text transition-colors"
               >
                 Browse PRs
@@ -680,7 +680,7 @@ const AppContent: Component = () => {
             <Show when={nextPr()}>
               {(next) => (
                 <A
-                  href={`/?prUrl=${encodeURIComponent(next().url)}`}
+                  href={`/review?prUrl=${encodeURIComponent(next().url)}`}
                   class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-base flex items-center gap-1"
                   title={`Next: ${next().title}`}
                 >

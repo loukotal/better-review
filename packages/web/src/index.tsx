@@ -24,8 +24,8 @@ render(
   () => (
     <QueryClientProvider client={queryClient}>
       <Router>
-        <Route path="/prs" component={PrListPage} />
-        <Route path="/" component={App} />
+        <Route path="/" component={PrListPage} />
+        <Route path="/review" component={App} />
       </Router>
     </QueryClientProvider>
   ),

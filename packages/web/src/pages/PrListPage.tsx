@@ -161,12 +161,12 @@ const PrListPage: Component = () => {
       <header class="border-b border-border bg-bg-surface flex-shrink-0">
         <div class="px-6 py-4">
           <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2">
+            <A href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
               <span class="text-accent text-base">●</span>
               <h1 class="text-base text-text">better-review</h1>
-            </div>
+            </A>
             <A
-              href="/"
+              href="/review"
               class="text-base text-text-faint hover:text-text transition-colors"
             >
               Enter PR URL manually
@@ -284,7 +284,7 @@ const PrListPage: Component = () => {
             <For each={filteredPrs()}>
               {(pr) => (
                 <A
-                  href={`/?prUrl=${encodeURIComponent(pr.url)}`}
+                  href={`/review?prUrl=${encodeURIComponent(pr.url)}`}
                   class="block border border-border hover:border-text-faint transition-colors"
                   onMouseDown={() => handleMouseDown(pr.url)}
                 >
