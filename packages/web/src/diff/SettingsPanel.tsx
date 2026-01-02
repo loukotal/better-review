@@ -58,7 +58,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             <span class="text-[11px] text-text">Settings</span>
             <button
               onClick={() => setOpen(false)}
-              class="text-text-faint hover:text-text text-sm leading-none"
+              class="text-text-faint hover:text-text text-base leading-none"
             >
               ×
             </button>
@@ -67,12 +67,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <div class="p-3 flex flex-col gap-3">
             {/* View Mode */}
             <div class="flex flex-col gap-1.5">
-              <label class="text-[10px] text-text-faint">View</label>
+              <label class="text-base text-text-faint">View</label>
               <div class="flex">
                 <button
                   type="button"
                   onClick={() => update("diffStyle", "split")}
-                  class="flex-1 px-2 py-1.5 text-[10px] border-y border-l border-border transition-colors"
+                  class="flex-1 px-2 py-1.5 text-base border-y border-l border-border transition-colors"
                   classList={{
                     "bg-accent text-black border-accent":
                       props.settings.diffStyle === "split",
@@ -85,7 +85,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 <button
                   type="button"
                   onClick={() => update("diffStyle", "unified")}
-                  class="flex-1 px-2 py-1.5 text-[10px] border border-border transition-colors"
+                  class="flex-1 px-2 py-1.5 text-base border border-border transition-colors"
                   classList={{
                     "bg-accent text-black border-accent":
                       props.settings.diffStyle === "unified",
@@ -100,7 +100,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
 
             {/* Theme */}
             <div class="flex flex-col gap-1.5">
-              <label class="text-[10px] text-text-faint">Theme</label>
+              <label class="text-base text-text-faint">Theme</label>
               <select
                 value={props.settings.theme}
                 onChange={(e) =>
@@ -116,7 +116,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
 
             {/* Diff Mode */}
             <div class="flex flex-col gap-1.5">
-              <label class="text-[10px] text-text-faint">Highlighting</label>
+              <label class="text-base text-text-faint">Highlighting</label>
               <select
                 value={props.settings.lineDiffType}
                 onChange={(e) =>
@@ -132,7 +132,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
 
             {/* Font */}
             <div class="flex flex-col gap-1.5">
-              <label class="text-[10px] text-text-faint">Font</label>
+              <label class="text-base text-text-faint">Font</label>
               <select
                 value={props.settings.fontFamily}
                 onChange={(e) =>

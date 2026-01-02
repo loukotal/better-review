@@ -622,14 +622,14 @@ const AppContent: Component = () => {
         <div class="px-4 py-3">
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
-              <span class="text-accent text-xs">●</span>
-              <h1 class="text-sm text-text">better-review</h1>
+              <span class="text-accent text-base">●</span>
+              <h1 class="text-base text-text">better-review</h1>
             </div>
             <div class="flex items-center gap-4">
               <div class="flex items-center gap-1 border-r border-border pr-4">
                 <button
                   onClick={() => togglePanel("chat")}
-                  class={`px-2 py-1 text-[10px] border transition-colors ${
+                  class={`px-2 py-1 text-base border transition-colors ${
                     panelVisibility().chat
                       ? "border-accent/50 text-accent"
                       : "border-border text-text-faint hover:text-text"
@@ -640,7 +640,7 @@ const AppContent: Component = () => {
                 </button>
                 <button
                   onClick={() => togglePanel("files")}
-                  class={`px-2 py-1 text-[10px] border transition-colors ${
+                  class={`px-2 py-1 text-base border transition-colors ${
                     panelVisibility().files
                       ? "border-accent/50 text-accent"
                       : "border-border text-text-faint hover:text-text"
@@ -652,7 +652,7 @@ const AppContent: Component = () => {
               </div>
               <A
                 href="/prs"
-                class="text-xs text-text-faint hover:text-text transition-colors"
+                class="text-base text-text-faint hover:text-text transition-colors"
               >
                 Browse PRs
               </A>
@@ -667,13 +667,13 @@ const AppContent: Component = () => {
                 value={prUrl()}
                 onInput={(e) => setPrUrl(e.currentTarget.value)}
                 placeholder="github.com/owner/repo/pull/123"
-                class="w-full px-3 py-2 bg-bg border border-border text-text text-xs placeholder:text-text-faint hover:border-text-faint focus:border-accent"
+                class="w-full px-3 py-2 bg-bg border border-border text-text text-base placeholder:text-text-faint hover:border-text-faint focus:border-accent"
               />
             </div>
             <button
               type="submit"
               disabled={loading() || !prUrl()}
-              class="px-4 py-2 bg-accent text-black font-medium hover:bg-accent-bright active:bg-accent disabled:opacity-30 disabled:cursor-not-allowed text-xs"
+              class="px-4 py-2 bg-accent text-black font-medium hover:bg-accent-bright active:bg-accent disabled:opacity-30 disabled:cursor-not-allowed text-base"
             >
               {loading() ? "..." : "Load"}
             </button>
@@ -681,7 +681,7 @@ const AppContent: Component = () => {
               {(next) => (
                 <A
                   href={`/?prUrl=${encodeURIComponent(next().url)}`}
-                  class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-xs flex items-center gap-1"
+                  class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-base flex items-center gap-1"
                   title={`Next: ${next().title}`}
                 >
                   Next PR <span class="text-accent">→</span>
@@ -691,7 +691,7 @@ const AppContent: Component = () => {
           </form>
 
           {error() && (
-            <div class="mt-3 px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-xs">
+            <div class="mt-3 px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-base">
               {error()}
             </div>
           )}
@@ -737,7 +737,7 @@ const AppContent: Component = () => {
             <Show when={!loading()}>
               <div class="flex-1 flex items-center justify-center">
                 <div class="text-center">
-                  <div class="text-text-faint text-xs">
+                  <div class="text-text-faint text-base">
                     Enter a GitHub PR URL to start
                   </div>
                 </div>
@@ -765,7 +765,7 @@ const AppContent: Component = () => {
                 when={activeDiff()}
                 fallback={
                   <Show when={reviewMode() === "commit" && loadingCommits()}>
-                    <div class="text-text-faint text-xs">Loading commit diff...</div>
+                    <div class="text-text-faint text-base">Loading commit diff...</div>
                   </Show>
                 }
               >

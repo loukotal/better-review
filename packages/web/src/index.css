@@ -22,7 +22,7 @@
   /* Text hierarchy - white/gray spectrum */
   --color-text: #e5e5e5;
   --color-text-muted: #a3a3a3;
-  --color-text-faint: #888888;
+  --color-text-faint: #a3a3a3;
   
   /* Borders - subtle grays */
   --color-border: #222222;
@@ -47,13 +47,20 @@
 }
 
 /* === BASE STYLES === */
-* {
-  font-family: var(--font-mono);
-}
-
 html {
   background: var(--color-bg);
   color: var(--color-text);
+  font-size: 16px; /* Normalize font size across browsers */
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+* {
+  font-family: var(--font-mono);
 }
 
 /* Selection styling - orange */
@@ -212,6 +219,7 @@ body {
   & a {
     color: var(--color-accent);
     text-decoration: none;
+    cursor: pointer;
   }
   & a:hover {
     text-decoration: underline;

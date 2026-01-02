@@ -108,7 +108,7 @@ export function ModelSelector(props: ModelSelectorProps) {
         type="button"
         onClick={handleOpen}
         disabled={props.disabled}
-        class="flex items-center gap-1 px-1.5 py-0.5 text-[10px] border border-border text-text-muted hover:border-accent hover:text-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-w-[140px]"
+        class="flex items-center gap-1 px-1.5 py-0.5 text-sm border border-border text-text-muted hover:border-accent hover:text-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-w-[140px]"
         title={currentModel() ? `${currentModel()!.providerId}/${currentModel()!.modelId}` : undefined}
       >
         <span class="truncate">{displayText()}</span>
@@ -128,18 +128,18 @@ export function ModelSelector(props: ModelSelectorProps) {
               value={searchQuery()}
               onInput={(e) => setSearchQuery(e.currentTarget.value)}
               placeholder="Search models..."
-              class="w-full px-2 py-1 text-xs bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent"
+              class="w-full px-2 py-1 text-sm bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent"
             />
           </div>
 
           {/* Results list */}
           <div class="max-h-64 overflow-y-auto">
             <Show when={isLoading()}>
-              <div class="px-3 py-2 text-xs text-text-faint">Searching...</div>
+              <div class="px-3 py-2 text-sm text-text-faint">Searching...</div>
             </Show>
             
             <Show when={!isLoading() && searchResults().length === 0}>
-              <div class="px-3 py-2 text-xs text-text-faint">No models found</div>
+              <div class="px-3 py-2 text-sm text-text-faint">No models found</div>
             </Show>
 
             <For each={searchResults()}>
@@ -152,11 +152,11 @@ export function ModelSelector(props: ModelSelectorProps) {
                   <button
                     type="button"
                     onClick={() => handleSelect(model)}
-                    class="w-full px-3 py-1.5 text-left text-xs hover:bg-bg-elevated transition-colors flex flex-col gap-0.5"
+                    class="w-full px-3 py-1.5 text-left text-sm hover:bg-bg-elevated transition-colors flex flex-col gap-0.5"
                     classList={{ "bg-accent/10": isSelected() }}
                   >
                     <span class="text-text font-medium truncate">{model.modelId}</span>
-                    <span class="text-text-faint text-[10px]">{model.providerId}</span>
+                    <span class="text-text-faint text-sm">{model.providerId}</span>
                   </button>
                 );
               }}
