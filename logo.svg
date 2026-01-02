@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 32">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@600&amp;display=swap');
+    </style>
+  </defs>
+  <text 
+    x="0" 
+    y="24" 
+    font-family="'JetBrains Mono', monospace" 
+    font-size="20" 
+    font-weight="600"
+    fill="#ff6b00">better-review</text>
+</svg>
