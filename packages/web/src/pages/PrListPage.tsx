@@ -186,13 +186,13 @@ const PrListPage: Component = () => {
         </div>
 
         {/* Filter chips */}
-        <div class="flex items-center gap-2 mb-6">
-          <span class="text-base text-text-faint mr-1">Filters:</span>
+        <div class="flex items-center gap-2 mb-6 text-sm">
+          <span class="text-text-faint mr-1">Filters:</span>
           <button
             onClick={() =>
               setSearchParams({ mine: showMyPrs() ? undefined : "1" })
             }
-            class={`px-3 py-1 text-base border transition-colors ${
+            class={`px-3 py-1 border transition-colors ${
               showMyPrs()
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-text-faint hover:border-text-faint"
@@ -204,7 +204,7 @@ const PrListPage: Component = () => {
             onClick={() =>
               setSearchParams({ drafts: showDrafts() ? "0" : undefined })
             }
-            class={`px-3 py-1 text-base border transition-colors ${
+            class={`px-3 py-1 border transition-colors ${
               showDrafts()
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-text-faint hover:border-text-faint"
@@ -218,7 +218,7 @@ const PrListPage: Component = () => {
                 needsReview: showNeedsReview() ? undefined : "1",
               })
             }
-            class={`px-3 py-1 text-base border transition-colors ${
+            class={`px-3 py-1 border transition-colors ${
               showNeedsReview()
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-text-faint hover:border-text-faint"
@@ -232,7 +232,7 @@ const PrListPage: Component = () => {
             onChange={(e) =>
               setSearchParams({ repo: e.currentTarget.value || undefined })
             }
-            class={`px-3 py-1 text-base border bg-bg transition-colors cursor-pointer ${
+            class={`px-3 py-1 border bg-bg transition-colors cursor-pointer ${
               repoFilter()
                 ? "border-accent bg-accent/10 text-accent"
                 : "border-border text-text-faint hover:border-text-faint"
