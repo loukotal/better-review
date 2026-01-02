@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./logo.svg" alt="better-review" />
+  <img src="./logo.svg" alt="better-review" width="200" />
 </p>
 
 Better code review experience for GitHub PRs. Runs locally with your github login using the gh cli - easily access your PRs, data stays local. Integrates with OpenCode for ai-assisted code review.
