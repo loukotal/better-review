@@ -14,6 +14,10 @@ bun run index.ts
 
 This project was created using `bun init` in bun v1.2.23. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
 
+## License
+
+Licensed under [MIT](LICENSE).
+
 ## TODOs
 
 - [ ] virtualization for large files - ~7k line file takes long time to load
