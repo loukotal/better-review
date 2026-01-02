@@ -118,7 +118,7 @@ function TreeNodeView(props: {
             <button
               type="button"
               onClick={() => props.onToggleFolder(props.node.path)}
-              class="w-full flex items-center gap-1 px-2 py-0.5 hover:bg-bg-elevated text-left text-[11px] group transition-colors"
+              class="w-full flex items-center gap-1 px-2 py-0.5 hover:bg-bg-elevated text-left text-xs group transition-colors"
               style={{ "padding-left": `${props.depth * 10 + 8}px` }}
             >
               <span
@@ -150,7 +150,7 @@ function TreeNodeView(props: {
           <button
             type="button"
             onClick={() => props.onFileSelect(props.node.file!.name)}
-            class="w-full flex items-center gap-1.5 px-2 py-0.5 hover:bg-bg-elevated text-left text-[11px] group transition-colors"
+            class="w-full flex items-center gap-1.5 px-2 py-0.5 hover:bg-bg-elevated text-left text-xs group transition-colors"
             style={{ "padding-left": `${props.depth * 10 + 8}px` }}
           >
             <FileStatusIndicator type={props.node.file!.type} />
@@ -243,7 +243,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
           value={searchQuery()}
           onInput={(e) => setSearchQuery(e.currentTarget.value)}
           placeholder="Filter..."
-          class="w-full px-2 py-1 bg-bg border border-border text-[11px] text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent"
+          class="w-full px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent"
         />
       </div>
       
@@ -276,7 +276,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
       </div>
 
       {/* Footer Stats */}
-      <div class="px-3 py-1.5 border-t border-border text-sm text-text-faint">
+      <div class="px-3 py-1.5 border-t border-border text-xs text-text-faint">
         {props.files.length} file{props.files.length !== 1 ? "s" : ""}
       </div>
     </div>

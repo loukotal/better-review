@@ -66,7 +66,7 @@ export function DiffViewer(props: Props) {
       
       <Show when={props.loadingComments}>
         <div class="mb-3 px-2 py-1.5 border-l-2 border-accent bg-bg-surface">
-          <div class="flex items-center gap-2 text-accent text-[11px]">
+          <div class="flex items-center gap-2 text-accent text-sm">
             <span class="inline-block animate-pulse">●</span>
             <span>Loading comments...</span>
           </div>
@@ -74,7 +74,7 @@ export function DiffViewer(props: Props) {
       </Show>
       
       {/* File count header */}
-      <div class="mb-3 text-[11px] text-text-muted">
+      <div class="mb-3 text-sm text-text-muted">
         {files().length} file{files().length !== 1 ? 's' : ''} changed
       </div>
       

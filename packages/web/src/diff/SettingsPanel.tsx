@@ -55,7 +55,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <div class="absolute top-full right-0 mt-1 z-50 w-[260px] border border-border bg-bg-surface shadow-lg shadow-black/50">
           {/* Panel Header */}
           <div class="px-3 py-2 border-b border-border flex items-center justify-between">
-            <span class="text-[11px] text-text">Settings</span>
+            <span class="text-sm text-text">Settings</span>
             <button
               onClick={() => setOpen(false)}
               class="text-text-faint hover:text-text text-base leading-none"
@@ -106,7 +106,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 onChange={(e) =>
                   update("theme", e.currentTarget.value as DiffTheme)
                 }
-                class="px-2 py-1.5 bg-bg border border-border text-text text-[11px] focus:border-accent cursor-pointer"
+                class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
               >
                 <For each={Object.entries(THEME_LABELS)}>
                   {([value, label]) => <option value={value}>{label}</option>}
@@ -122,7 +122,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 onChange={(e) =>
                   update("lineDiffType", e.currentTarget.value as LineDiffType)
                 }
-                class="px-2 py-1.5 bg-bg border border-border text-text text-[11px] focus:border-accent cursor-pointer"
+                class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
               >
                 <For each={Object.entries(LINE_DIFF_LABELS)}>
                   {([value, label]) => <option value={value}>{label}</option>}
@@ -138,7 +138,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 onChange={(e) =>
                   update("fontFamily", e.currentTarget.value as FontFamily)
                 }
-                class="px-2 py-1.5 bg-bg border border-border text-text text-[11px] focus:border-accent cursor-pointer"
+                class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
                 style={{
                   "font-family": FONT_FAMILY_MAP[props.settings.fontFamily],
                 }}

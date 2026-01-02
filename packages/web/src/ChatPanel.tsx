@@ -307,7 +307,7 @@ export function ChatPanel(props: ChatPanelProps) {
     };
 
     return (
-      <div class="text-base px-2 py-1 bg-bg border border-border mb-1 flex items-center gap-2">
+      <div class="text-sm px-2 py-1 bg-bg border border-border mb-1 flex items-center gap-2">
         <span class={statusColor()}>{statusIcon()}</span>
         <span class="text-text-muted">{tool.title || tool.tool}</span>
         <Show when={tool.status === "running"}>
@@ -401,7 +401,7 @@ export function ChatPanel(props: ChatPanelProps) {
             <button
               type="button"
               onClick={startReview}
-              class="px-2 py-0.5 text-base bg-accent text-black hover:bg-accent-bright transition-colors text-sm"
+              class="px-2 py-0.5 text-sm bg-accent text-black hover:bg-accent-bright transition-colors"
             >
               Start Review
             </button>
@@ -410,7 +410,7 @@ export function ChatPanel(props: ChatPanelProps) {
             <button
               type="button"
               onClick={handleAbort}
-              class="px-2 py-0.5 text-base bg-error text-white hover:bg-error/80 transition-colors"
+              class="px-2 py-0.5 text-sm bg-error text-white hover:bg-error/80 transition-colors"
             >
               Stop
             </button>
@@ -431,7 +431,7 @@ export function ChatPanel(props: ChatPanelProps) {
       >
         <Show when={!props.prUrl}>
           <div class="text-center py-8">
-            <div class="text-text-faint text-base">
+            <div class="text-text-faint text-sm">
               Load a PR to start chatting
             </div>
           </div>
@@ -439,7 +439,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
         <Show when={props.prUrl && initializing()}>
           <div class="text-center py-8">
-            <div class="text-text-faint text-base">
+            <div class="text-text-faint text-sm">
               Initializing session...
             </div>
           </div>
@@ -447,13 +447,13 @@ export function ChatPanel(props: ChatPanelProps) {
 
         <Show when={props.prUrl && !initializing() && !sessionId() && sessionError()}>
           <div class="text-center py-8">
-            <div class="text-error text-base mb-2">
+            <div class="text-error text-sm mb-2">
               {sessionError()}
             </div>
             <button
               type="button"
               onClick={initSession}
-              class="text-base text-accent hover:text-accent-bright"
+              class="text-sm text-accent hover:text-accent-bright"
             >
               Retry
             </button>
@@ -484,7 +484,7 @@ export function ChatPanel(props: ChatPanelProps) {
         {/* Completed messages */}
         <For each={chat.messages()}>
           {(msg) => (
-            <div class={`text-base ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
+            <div class={`text-sm ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
               <div
                 class={`px-2.5 py-2 ${
                   msg.role === "user"
@@ -492,7 +492,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     : "bg-bg-elevated border border-border"
                 }`}
               >
-                <div class="text-base text-text-faint mb-1">
+                <div class="text-sm text-text-faint mb-1">
                   {msg.role === "user" ? "You" : "Assistant"}
                 </div>
                 
@@ -505,7 +505,7 @@ export function ChatPanel(props: ChatPanelProps) {
                   </div>
                 </Show>
                 
-                <div class="text-text break-words leading-relaxed">
+                <div class="text-text break-words leading-relaxed text-sm">
                   <MessageContent role={msg.role} content={msg.content} />
                 </div>
               </div>
@@ -517,7 +517,7 @@ export function ChatPanel(props: ChatPanelProps) {
         <Show when={chat.isStreaming() || chat.streamingContent() || chat.activeTools().length > 0}>
           <div class="mr-2">
             <div class="px-2.5 py-2 bg-bg-elevated border border-border">
-              <div class="text-base text-text-faint mb-1">Assistant</div>
+              <div class="text-sm text-text-faint mb-1">Assistant</div>
               
               {/* Active tool calls */}
               <Show when={chat.activeTools().length > 0}>
@@ -530,14 +530,14 @@ export function ChatPanel(props: ChatPanelProps) {
               
               {/* Streaming content - render markdown with remend for incomplete blocks */}
               <Show when={chat.streamingContent()}>
-                <div class="text-base text-text break-words leading-relaxed">
+                <div class="text-sm text-text break-words leading-relaxed">
                   <MarkdownText content={chat.streamingContent()!} streaming={true} />
                 </div>
               </Show>
               
               {/* Show cursor when actively streaming with no content yet */}
               <Show when={chat.isStreaming() && !chat.streamingContent() && chat.activeTools().length === 0}>
-                <div class="text-text-muted text-base">
+                <div class="text-text-muted text-sm">
                   <span class="inline-block animate-pulse">Thinking...</span>
                 </div>
               </Show>
@@ -549,7 +549,7 @@ export function ChatPanel(props: ChatPanelProps) {
       {/* Error display */}
       <Show when={displayError()}>
         <div class="px-3 py-2 bg-error/10 border-t border-error/20">
-          <div class="text-error text-base">{displayError()}</div>
+          <div class="text-error text-sm">{displayError()}</div>
         </div>
       </Show>
 
@@ -601,7 +601,7 @@ export function ChatPanel(props: ChatPanelProps) {
               <button
                 type="submit"
                 disabled={!sessionId() || chat.isStreaming() || !input().trim()}
-                class="px-3 py-1 bg-accent text-black text-base font-medium hover:bg-accent-bright disabled:opacity-30 disabled:cursor-not-allowed"
+                class="px-3 py-1 bg-accent text-black text-sm font-medium hover:bg-accent-bright disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {chat.isStreaming() ? "..." : "Send"}
               </button>

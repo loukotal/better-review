@@ -10,7 +10,7 @@ interface ReviewModeToggleProps {
 
 export const ReviewModeToggle: Component<ReviewModeToggleProps> = (props) => {
   return (
-    <div class="flex items-center text-[11px]">
+    <div class="flex items-center text-sm">
       <button
         type="button"
         onClick={() => props.onModeChange("full")}

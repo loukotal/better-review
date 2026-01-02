@@ -235,31 +235,31 @@ export function FileDiffView(props: FileDiffViewProps) {
     if (isEditing) {
       const error = editError();
       const errorHtml = error
-        ? `<div class="mt-2 px-2 py-1.5 border border-red-500/50 bg-red-500/10 text-red-400 text-base">${escapeHtml(error)}</div>`
+        ? `<div class="mt-2 px-2 py-1.5 border border-red-500/50 bg-red-500/10 text-red-400 text-sm">${escapeHtml(error)}</div>`
         : "";
       return `
         <div class="${indentClass}">
           <div class="flex items-center gap-2 mb-1">
             <img src="${escapeHtml(comment.user.avatar_url)}" class="w-4 h-4 rounded-sm" />
-            <span class="text-[11px] text-text">${escapeHtml(comment.user.login)}</span>
-            <span class="text-base text-accent">editing</span>
+            <span class="text-sm text-text">${escapeHtml(comment.user.login)}</span>
+            <span class="text-sm text-accent">editing</span>
           </div>
           <textarea
-            class="w-full px-2 py-1.5 bg-bg border border-accent text-text focus:border-accent resize-y min-h-[60px] text-[11px]"
+            class="w-full px-2 py-1.5 bg-bg border border-accent text-text focus:border-accent resize-y min-h-[60px] text-sm"
             data-edit-input="${comment.id}"
           >${escapeHtml(comment.body)}</textarea>
           <div class="flex gap-2 mt-1.5">
             <button
               type="button"
               data-submit-edit="${comment.id}"
-              class="px-2.5 py-1 bg-accent text-black text-base hover:bg-accent-bright disabled:opacity-50 transition-colors"
+              class="px-2.5 py-1 bg-accent text-black text-sm hover:bg-accent-bright disabled:opacity-50 transition-colors"
             >
               Save
             </button>
             <button
               type="button"
               data-cancel-edit="${comment.id}"
-              class="px-2.5 py-1 text-text-faint text-base hover:text-text transition-colors"
+              class="px-2.5 py-1 text-text-faint text-sm hover:text-text transition-colors"
             >
               Cancel
             </button>
@@ -272,18 +272,18 @@ export function FileDiffView(props: FileDiffViewProps) {
     const isOwnComment = props.currentUser && comment.user.login === props.currentUser;
     const isOutdated = comment.line === null;
     const actionsHtml = isOwnComment ? `
-      <div class="flex items-center gap-2 ml-auto">
+      <div class="flex items-center gap-2 ml-auto text-xs">
         <button
           type="button"
           data-edit-comment="${comment.id}"
-          class="text-base text-text-faint hover:text-accent transition-colors"
+          class="text-text-faint hover:text-accent transition-colors"
         >
           Edit
         </button>
         <button
           type="button"
           data-delete-comment="${comment.id}"
-          class="text-base text-text-faint hover:text-red-400 transition-colors"
+          class="text-text-faint hover:text-red-400 transition-colors"
         >
           Delete
         </button>
@@ -297,11 +297,10 @@ export function FileDiffView(props: FileDiffViewProps) {
       <div class="${indentClass}" id="comment-${comment.id}">
         <div class="flex items-center gap-2 mb-1">
           <img src="${escapeHtml(comment.user.avatar_url)}" class="w-4 h-4 rounded-sm" />
-          <span class="text-[11px] text-text">${escapeHtml(comment.user.login)}</span>
-          ${outdatedBadge}
+          <span class="text-sm text-text">${escapeHtml(comment.user.login)}</span>
           <a
             href="#comment-${comment.id}"
-            class="text-base text-text-faint hover:text-accent transition-colors"
+            class="text-sm text-text-faint hover:text-accent transition-colors"
             title="Link to comment"
           >${new Date(comment.created_at).toLocaleDateString()}</a>
           <a
@@ -313,7 +312,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           >${GITHUB_ICON}</a>
           ${actionsHtml}
         </div>
-        <div class="text-[11px] text-text-muted whitespace-pre-wrap leading-relaxed">${escapeHtml(comment.body)}</div>
+        <div class="text-sm text-text-muted whitespace-pre-wrap leading-relaxed">${escapeHtml(comment.body)}</div>
       </div>
     `;
   };
@@ -323,21 +322,21 @@ export function FileDiffView(props: FileDiffViewProps) {
     <div class="ml-3 pl-3 border-l border-accent mt-2">
       <textarea
         placeholder="Write a reply..."
-        class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[50px] text-[11px]"
+        class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[50px] text-sm"
         data-reply-input="${commentId}"
       ></textarea>
       <div class="flex gap-2 mt-1.5">
         <button
           type="button"
           data-submit-reply="${commentId}"
-          class="px-2.5 py-1 bg-accent text-black text-base hover:bg-accent-bright disabled:opacity-50 transition-colors"
+          class="px-2.5 py-1 bg-accent text-black text-xs hover:bg-accent-bright disabled:opacity-50 transition-colors"
         >
           Reply
         </button>
         <button
           type="button"
           data-cancel-reply="${commentId}"
-          class="px-2.5 py-1 text-text-faint text-base hover:text-text transition-colors"
+          class="px-2.5 py-1 text-text-faint text-sm hover:text-text transition-colors"
         >
           Cancel
         </button>
@@ -494,7 +493,7 @@ export function FileDiffView(props: FileDiffViewProps) {
             if (hiddenCount > 0) {
               html += `
                 <button data-expand-thread="${rootComment.id}"
-                        class="ml-3 text-base text-accent hover:text-accent-bright cursor-pointer">
+                        class="ml-3 text-sm text-accent hover:text-accent-bright cursor-pointer">
                   +${hiddenCount} more
                 </button>
               `;
@@ -525,7 +524,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           } else {
             html += `
               <button data-reply-to="${rootComment.id}" 
-                      class="mt-2 text-base text-text-faint hover:text-accent transition-colors cursor-pointer">
+                      class="mt-2 text-xs text-text-faint hover:text-accent transition-colors cursor-pointer">
                 Reply
               </button>
             `;
@@ -600,26 +599,26 @@ export function FileDiffView(props: FileDiffViewProps) {
             : `Lines ${metadata.startLine}-${metadata.endLine}`;
           div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
           div.innerHTML = `
-            <div class="text-base text-accent mb-2">
+            <div class="text-sm text-accent mb-2">
               ${lineLabel}
             </div>
             <textarea
               placeholder="Write a comment..."
-              class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[60px] text-[11px]"
+              class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[60px] text-sm"
               data-comment-input="true"
             ></textarea>
             <div class="flex gap-2 mt-2">
               <button
                 type="button"
                 data-submit-comment="true"
-                class="px-2.5 py-1 bg-accent text-black text-base hover:bg-accent-bright disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                class="px-2.5 py-1 bg-accent text-black text-sm hover:bg-accent-bright disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 Comment
               </button>
               <button
                 type="button"
                 data-cancel-comment="true"
-                class="px-2.5 py-1 text-text-faint text-base hover:text-text transition-colors"
+                class="px-2.5 py-1 text-text-faint text-sm hover:text-text transition-colors"
               >
                 Cancel
               </button>
@@ -709,19 +708,19 @@ export function FileDiffView(props: FileDiffViewProps) {
       >
         {/* Collapse indicator */}
         <span
-          class="text-text-faint group-hover:text-text-muted text-base"
+          class="text-text-faint group-hover:text-text-muted text-sm"
           classList={{ "rotate-[-90deg]": collapsed() }}
         >
           <ChevronIcon />
         </span>
         
         {/* Status indicator */}
-        <span class={`text-base w-3 ${fileType().class}`}>
+        <span class={`text-sm w-3 ${fileType().class}`}>
           {fileType().label}
         </span>
         
         {/* File path - preserve exact casing */}
-        <span class="text-[11px] text-text-muted group-hover:text-text flex-1 truncate">
+        <span class="text-sm text-text-muted group-hover:text-text flex-1 truncate">
           {props.file.name}
           {props.file.prevName && (
             <span class="text-text-faint ml-2">← {props.file.prevName}</span>
@@ -730,14 +729,14 @@ export function FileDiffView(props: FileDiffViewProps) {
         
         {/* Large/generated file indicator */}
         <Show when={shouldAutoCollapse()}>
-          <span class="text-base text-text-faint">
+          <span class="text-sm text-text-faint">
             {isGeneratedFile() ? "generated" : `${totalLines()} lines`}
           </span>
         </Show>
 
         {/* Comment count */}
         <Show when={props.comments.length > 0}>
-          <span class="text-base text-accent">
+          <span class="text-sm text-accent">
             {props.comments.length}
           </span>
         </Show>

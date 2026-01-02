@@ -33,7 +33,7 @@ export const CommitNavigator: Component<CommitNavigatorProps> = (props) => {
         type="button"
         onClick={props.onPrev}
         disabled={!canPrev()}
-        class="px-2 py-1 text-[11px] text-text-muted hover:text-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        class="px-2 py-1 text-sm text-text-muted hover:text-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         title="Previous commit"
       >
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
@@ -46,7 +46,7 @@ export const CommitNavigator: Component<CommitNavigatorProps> = (props) => {
         value={props.currentIndex}
         onChange={(e) => props.onSelectCommit(Number(e.target.value))}
         disabled={props.loading}
-        class="flex-1 min-w-0 px-2 py-1 bg-bg border border-border text-[11px] text-text disabled:opacity-50 cursor-pointer"
+        class="flex-1 min-w-0 px-2 py-1 bg-bg border border-border text-sm text-text disabled:opacity-50 cursor-pointer"
       >
         <For each={props.commits}>
           {(commit, i) => (
@@ -62,7 +62,7 @@ export const CommitNavigator: Component<CommitNavigatorProps> = (props) => {
         type="button"
         onClick={props.onNext}
         disabled={!canNext()}
-        class="px-2 py-1 text-[11px] text-text-muted hover:text-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        class="px-2 py-1 text-sm text-text-muted hover:text-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         title="Next commit"
       >
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
