@@ -500,12 +500,23 @@ ${fileStats.join("\n")}`;
                 files: `[${body.files?.length || 0} files]`,
               });
 
-              // Check if we already have a session for this PR
-              const existingSessionId = yield* prContext.getSession(body.prUrl);
+              // Fetch current head SHA from GitHub to detect force-pushes
+              const currentHeadSha = yield* gh.getHeadSha(body.prUrl);
+              yield* Effect.log("[API] Current head SHA:", currentHeadSha);
+
+              // Check if we already have a session for this PR with matching SHA
+              const existingSession = yield* prContext.getSession(body.prUrl);
+              const canReuseSession = existingSession && existingSession.headSha === currentHeadSha;
               yield* Effect.log(
-                "[API] Existing session ID:",
-                existingSessionId,
+                "[API] Existing session:",
+                existingSession ? `${existingSession.sessionId} (sha: ${existingSession.headSha}, reusable: ${canReuseSession})` : "none",
               );
+
+              // If force-push detected, clear diff cache (session will be replaced anyway)
+              if (existingSession && !canReuseSession) {
+                yield* Effect.log("[API] Force-push detected! Clearing cached diff...");
+                yield* diffCache.clear(body.prUrl);
+              }
 
               // Set current PR context
               yield* prContext.setCurrent(body.prUrl, body.files, {
@@ -514,7 +525,7 @@ ${fileStats.join("\n")}`;
                 number: String(body.prNumber),
               });
 
-              // Pre-cache all diffs for this PR
+              // Pre-cache all diffs for this PR (will fetch fresh if cache was cleared)
               yield* Effect.log("[API] Pre-caching diffs...");
               yield* diffCache.getOrFetch(body.prUrl);
 
@@ -533,19 +544,20 @@ ${fileStats.join("\n")}`;
                 ),
               );
 
-              if (existingSessionId) {
+              // Reuse existing session if SHA matches
+              if (canReuseSession) {
                 yield* Effect.log("[API] Fetching existing session...");
-                const existingSession = yield* Effect.tryPromise(() =>
+                const existingSessionData = yield* Effect.tryPromise(() =>
                   opencode.client.session.get({
-                    sessionID: existingSessionId,
+                    sessionID: existingSession.sessionId,
                   }),
                 );
                 yield* Effect.log(
                   "[API] Existing session result:",
-                  existingSession.data?.id,
+                  existingSessionData.data?.id,
                 );
-                if (existingSession.data) {
-                  return { session: existingSession.data, existing: true };
+                if (existingSessionData.data) {
+                  return { session: existingSessionData.data, existing: true };
                 }
               }
 
@@ -564,8 +576,8 @@ ${fileStats.join("\n")}`;
                 );
               }
 
-              // Store the session mapping
-              yield* prContext.setSession(body.prUrl, session.data.id);
+              // Store the session mapping with current head SHA
+              yield* prContext.setSession(body.prUrl, session.data.id, currentHeadSha);
 
               // Inject initial context (without expecting a reply)
               yield* Effect.log("[API] Injecting context...");
@@ -788,7 +800,7 @@ declare global {
 if (globalThis.__appFiber) {
   console.log("[HMR] Stopping previous instance...");
   await Effect.runPromise(Fiber.interrupt(globalThis.__appFiber)).catch(
-    () => {},
+    () => { },
   );
 }
 
@@ -819,7 +831,7 @@ process.on("SIGTERM", shutdown);
 if (import.meta.hot) {
   import.meta.hot.dispose(async () => {
     console.log("[HMR] Disposing...");
-    await Effect.runPromise(Fiber.interrupt(fiber)).catch(() => {});
+    await Effect.runPromise(Fiber.interrupt(fiber)).catch(() => { });
     globalThis.__appFiber = undefined;
   });
 }

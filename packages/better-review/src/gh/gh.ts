@@ -214,6 +214,7 @@ interface GhCli {
   listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError, never>;
   getCommitDiff: (params: { owner: string; repo: string; sha: string }) => Effect.Effect<string, GhError, never>;
   getPrCiStatus: (prUrl: string) => Effect.Effect<CiStatus | null, GhError, never>;
+  getHeadSha: (prUrl: string) => Effect.Effect<string, GhError, never>;
 }
 
 export class GhService extends Context.Tag("GHService")<GhService, GhCli>() { }
@@ -734,6 +735,24 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getPrCiStatus", cause })),
       Effect.withSpan("GhService.getPrCiStatus", { attributes: { prUrl } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getHeadSha: (prUrl: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(prUrl);
+      const cmd = Command.make(
+        "gh",
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}`,
+        "--jq",
+        ".head.sha",
+      );
+      const sha = (yield* Command.string(cmd)).trim();
+      return sha;
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getHeadSha", cause })),
+      Effect.withSpan("GhService.getHeadSha", { attributes: { prUrl } }),
       Effect.provide(BunContext.layer),
     ),
 });

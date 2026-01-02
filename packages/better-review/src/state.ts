@@ -116,8 +116,8 @@ export class PrContextService extends Effect.Service<PrContextService>()(
         info: null,
       });
 
-      // Session mappings: prUrl -> sessionId
-      const sessions = yield* Ref.make(new Map<string, string>());
+      // Session mappings: prUrl -> { sessionId, headSha }
+      const sessions = yield* Ref.make(new Map<string, { sessionId: string; headSha: string }>());
 
       return {
         /**
@@ -132,18 +132,18 @@ export class PrContextService extends Effect.Service<PrContextService>()(
         getCurrent: Ref.get(context),
 
         /**
-         * Get session ID for a PR URL
+         * Get session info for a PR URL (sessionId and headSha)
          */
         getSession: (prUrl: string) =>
           Effect.map(Ref.get(sessions), (m) => m.get(prUrl)),
 
         /**
-         * Set session ID for a PR URL
+         * Set session info for a PR URL
          */
-        setSession: (prUrl: string, sessionId: string) =>
+        setSession: (prUrl: string, sessionId: string, headSha: string) =>
           Ref.update(sessions, (m) => {
             const newMap = new Map(m);
-            newMap.set(prUrl, sessionId);
+            newMap.set(prUrl, { sessionId, headSha });
             return newMap;
           }),
 
