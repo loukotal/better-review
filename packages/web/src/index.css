@@ -110,6 +110,11 @@ input:focus, textarea:focus, select:focus {
 /* === BUTTON BASE === */
 button {
   font-family: 'JetBrains Mono', monospace;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
 }
 
 /* === UTILITY CLASSES === */
