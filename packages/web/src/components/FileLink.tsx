@@ -31,7 +31,7 @@ export const FileLink: Component<FileLinkProps> = (props) => {
     <button
       type="button"
       onClick={handleClick}
-      class="inline-flex items-center gap-1 px-1 py-0.5 text-[11px] font-mono bg-bg-elevated border border-border text-accent hover:text-accent-bright hover:border-accent transition-colors cursor-pointer"
+      class="inline-flex items-center gap-1 px-1 py-0.5 text-sm font-mono bg-bg-elevated border border-border text-accent hover:text-accent-bright hover:border-accent transition-colors cursor-pointer"
       title={props.line ? `${props.file}:${props.line}` : props.file}
     >
       <svg 

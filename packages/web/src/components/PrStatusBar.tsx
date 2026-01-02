@@ -135,7 +135,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                   href={status().url} 
                   target="_blank" 
                   rel="noopener noreferrer"
-                  class="text-[11px] text-text hover:text-accent truncate max-w-[300px] inline-flex items-center gap-1 group"
+                  class="text-sm text-text hover:text-accent truncate max-w-[300px] inline-flex items-center gap-1 group"
                   title={`${status().title} - Open in GitHub`}
                 >
                   <span class="truncate">{status().title}</span>
@@ -181,7 +181,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
             {/* Description panel */}
             <Show when={showDescription() && hasDescription()}>
               <div 
-                class="text-[11px] text-text-muted bg-bg-elevated border border-border p-3 leading-relaxed max-h-[200px] overflow-y-auto markdown-content"
+                class="text-sm text-text-muted bg-bg-elevated border border-border p-3 leading-relaxed max-h-[200px] overflow-y-auto markdown-content"
                 innerHTML={marked.parse(status().body, { async: false }) as string}
               />
             </Show>

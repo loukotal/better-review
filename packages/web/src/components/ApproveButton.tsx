@@ -55,7 +55,7 @@ export function ApproveButton() {
         type="button"
         onClick={() => setOpen(!open())}
         disabled={!prUrl() || approved()}
-        class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        class="flex items-center gap-1.5 px-2.5 py-1 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         classList={{
           "bg-green-600 text-white hover:bg-green-500": !approved(),
           "bg-green-600/20 text-green-400 border border-green-600/50": approved(),
@@ -74,7 +74,7 @@ export function ApproveButton() {
         <div class="absolute top-full right-0 mt-1 z-50 w-[300px] border border-border bg-bg-surface shadow-lg shadow-black/50">
           {/* Header */}
           <div class="px-3 py-2 border-b border-border flex items-center justify-between">
-            <span class="text-[11px] text-text">Approve PR</span>
+            <span class="text-sm text-text">Approve PR</span>
             <button
               onClick={() => setOpen(false)}
               class="text-text-faint hover:text-text text-base leading-none"
@@ -88,7 +88,7 @@ export function ApproveButton() {
               value={comment()}
               onInput={(e) => setComment(e.currentTarget.value)}
               placeholder="Leave a comment (optional)..."
-              class="w-full px-2 py-1.5 bg-bg border border-border text-[11px] text-text placeholder:text-text-faint resize-y min-h-[80px] focus:border-accent focus:outline-none"
+              class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint resize-y min-h-[80px] focus:border-accent focus:outline-none"
             />
 
             <Show when={error()}>
@@ -102,14 +102,14 @@ export function ApproveButton() {
                 type="button"
                 onClick={handleApprove}
                 disabled={submitting()}
-                class="flex-1 px-3 py-1.5 bg-green-600 text-white text-[11px] hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                class="flex-1 px-3 py-1.5 bg-green-600 text-white text-sm hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {submitting() ? "Approving..." : "Submit approval"}
               </button>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                class="px-3 py-1.5 text-text-faint text-[11px] hover:text-text transition-colors"
+                class="px-3 py-1.5 text-text-faint text-sm hover:text-text transition-colors"
               >
                 Cancel
               </button>

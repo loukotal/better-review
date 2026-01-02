@@ -78,13 +78,13 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
           <span class={styles().icon}>
             <SeverityIcon severity={props.annotation.severity} />
           </span>
-          <span class={`text-base font-medium ${styles().icon}`}>
+          <span class={`text-xs font-medium ${styles().icon}`}>
             {styles().label}
           </span>
           <button
             type="button"
             onClick={handleNavigate}
-            class="text-base font-mono text-text-muted hover:text-accent transition-colors"
+            class="text-xs font-mono text-text-muted hover:text-accent transition-colors"
           >
             {fileName()}:{props.annotation.line}
           </button>
@@ -93,7 +93,7 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
           <button
             type="button"
             onClick={handleAddAsComment}
-            class="text-[9px] px-1.5 py-0.5 text-text-faint hover:text-accent border border-transparent hover:border-accent/30 transition-colors"
+            class="text-xs px-1.5 py-0.5 text-text-faint hover:text-accent border border-transparent hover:border-accent/30 transition-colors"
             title="Add as GitHub comment"
           >
             + Comment
@@ -102,7 +102,7 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
       </div>
       
       {/* Message */}
-      <div class="text-[11px] text-text-muted leading-relaxed pl-5">
+      <div class="text-sm text-text-muted leading-relaxed pl-5">
         {props.annotation.message}
       </div>
     </div>

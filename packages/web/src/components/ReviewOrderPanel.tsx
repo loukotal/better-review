@@ -57,10 +57,10 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
           >
             <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H1.75zM7 5.75A.75.75 0 0 1 7.75 5h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 5.75zm0 4A.75.75 0 0 1 7.75 9h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 9.75zM3.5 6a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5zM4.25 10a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0z"/>
           </svg>
-          <span class="text-[11px] font-medium text-accent">
+          <span class="text-xs font-medium text-accent">
             Suggested Review Order
           </span>
-          <span class="text-base text-text-faint">
+          <span class="text-xs text-text-faint">
             ({props.files.length} files)
           </span>
         </div>
@@ -68,7 +68,7 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
           <button
             type="button"
             onClick={() => setShowPreview(!showPreview())}
-            class="text-base text-text-faint hover:text-text transition-colors"
+            class="text-xs text-text-faint hover:text-text transition-colors"
           >
             {showPreview() ? "Hide" : "Preview"}
           </button>
@@ -76,13 +76,13 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
             <button
               type="button"
               onClick={() => props.onApplyOrder(props.files)}
-              class="text-base px-2 py-0.5 bg-accent text-black hover:bg-accent-bright transition-colors"
+              class="text-xs px-2 py-0.5 bg-accent text-black hover:bg-accent-bright transition-colors"
             >
               Apply Order
             </button>
           </Show>
           <Show when={!orderDiffers()}>
-            <span class="text-base text-success">Applied</span>
+            <span class="text-xs text-success">Applied</span>
           </Show>
         </div>
       </div>
@@ -99,13 +99,13 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
                   onClick={() => props.onFileClick(file)}
                   class="w-full flex items-center gap-2 px-2.5 py-1 text-left hover:bg-accent/10 transition-colors group"
                 >
-                  <span class="text-base text-text-faint w-4">
+                  <span class="text-xs text-text-faint w-4">
                     {index() + 1}.
                   </span>
-                  <span class="text-base text-text-faint truncate">
+                  <span class="text-xs text-text-faint truncate">
                     {dirPath(file)}
                   </span>
-                  <span class="text-[11px] text-text-muted group-hover:text-text truncate">
+                  <span class="text-xs text-text-muted group-hover:text-text truncate">
                     {fileName(file)}
                   </span>
                   <Show when={change !== null && change !== 0}>
@@ -122,7 +122,7 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
 
       {/* Collapsed summary */}
       <Show when={!showPreview()}>
-        <div class="px-2.5 py-1.5 text-base text-text-faint">
+        <div class="px-2.5 py-1.5 text-xs text-text-faint">
           <For each={props.files.slice(0, 3)}>
             {(file, index) => (
               <>
