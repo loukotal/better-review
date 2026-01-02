@@ -276,7 +276,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
       </div>
 
       {/* Footer Stats */}
-      <div class="px-3 py-1.5 border-t border-border text-base text-text-faint">
+      <div class="px-3 py-1.5 border-t border-border text-sm text-text-faint">
         {props.files.length} file{props.files.length !== 1 ? "s" : ""}
       </div>
     </div>

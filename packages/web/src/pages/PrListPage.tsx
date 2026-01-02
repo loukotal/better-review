@@ -282,36 +282,36 @@ const PrListPage: Component = () => {
                   <div class="px-4 py-3">
                     <div class="flex items-start justify-between gap-4">
                       <div class="flex-1 min-w-0">
-                        <div class="text-base text-text-faint mb-1">
+                        <div class="text-sm text-text-faint mb-1">
                           {pr.repository.nameWithOwner}
                         </div>
                         <div class="flex items-center gap-2">
-                          <span class="text-base text-text truncate">
+                          <span class="text-sm text-text truncate">
                             {pr.title}
                           </span>
                           <Show when={pr.isDraft}>
-                            <span class="px-1.5 py-0.5 text-base border border-text-faint/50 bg-text-faint/10 text-text-muted">
+                            <span class="px-1.5 py-0.5 text-sm border border-text-faint/50 bg-text-faint/10 text-text-muted">
                               DRAFT
                             </span>
                           </Show>
                           <Show when={pr.myReviewState === "APPROVED"}>
-                            <span class="px-1.5 py-0.5 text-base border border-accent/50 text-accent">
+                            <span class="px-1.5 py-0.5 text-sm border border-accent/50 text-accent">
                               APPROVED
                             </span>
                           </Show>
                           <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
-                            <span class="px-1.5 py-0.5 text-base border border-error/50 text-error">
+                            <span class="px-1.5 py-0.5 text-sm border border-error/50 text-error">
                               CHANGES REQUESTED
                             </span>
                           </Show>
                         </div>
-                        <div class="text-base text-text-faint mt-1.5 flex items-center justify-between">
+                        <div class="text-sm text-text-faint mt-1.5 flex items-center justify-between">
                           <span>
                             #{pr.number} opened{" "}
                             {formatRelativeTime(pr.createdAt)} by{" "}
                             {pr.author.login}
                           </span>
-                          <span class="flex items-center gap-3 text-base">
+                          <span class="flex items-center gap-3 text-sm">
                             <LinesChanged
                               additions={pr.additions}
                               deletions={pr.deletions}
@@ -320,7 +320,7 @@ const PrListPage: Component = () => {
                           </span>
                         </div>
                       </div>
-                      <div class="text-text-faint text-base mt-1">→</div>
+                      <div class="text-text-faint text-sm mt-1">→</div>
                     </div>
                   </div>
                 </A>
