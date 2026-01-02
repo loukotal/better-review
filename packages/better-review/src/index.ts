@@ -56,7 +56,7 @@ const main = Effect.gen(function* () {
   const prContext = yield* PrContextService;
 
   const server = Bun.serve({
-    port: 3001,
+    port: Number(process.env.API_PORT ?? 3001),
     routes: {
       // =========================================================================
       // Model Selection Endpoints

@@ -1,6 +1,6 @@
 import { tool } from "@opencode-ai/plugin";
 
-const API_BASE = "http://localhost:3001";
+const API_BASE = `http://localhost:${process.env.API_PORT ?? 3001}`;
 
 export default tool({
   description:

@@ -6,10 +6,10 @@ import devtools from "solid-devtools/vite";
 export default defineConfig({
   plugins: [devtools(), solidPlugin(), tailwindcss()],
   server: {
-    port: 3000,
+    port: Number(process.env.WEB_PORT ?? 3000),
     proxy: {
       "/api": {
-        target: "http://localhost:3001",
+        target: `http://localhost:${process.env.API_PORT ?? 3001}`,
         changeOrigin: true,
       },
     },
