@@ -31,9 +31,9 @@ Better code review experience for GitHub PRs. Runs locally with your github logi
 Currently you need to pull the repo and run it locally.
 
 1. `bun install`
-2. `bun run dev`
+2. `bun run dev` or `bun start`
 
-You can update ports with `API_PORT`, `WEB_PORT`, `OPENCODE_PORT` environment variables. Defaults are `3000`, `3001` and `4096`
+You can update ports with `API_PORT`, `WEB_PORT` (for dev), `OPENCODE_PORT` environment variables. Defaults are `3000`, `3001` and `4096`
 
 ## TODOs (& limitations & ideas)
 

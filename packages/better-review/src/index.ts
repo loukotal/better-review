@@ -49,6 +49,26 @@ const layers = Layer.mergeAll(
   PrContextService.Default,
 );
 
+const isProduction = process.env.NODE_ENV === "production";
+const staticDir = import.meta.dir + "/../../web/dist";
+
+if (isProduction) {
+  console.log(`[static] Production mode enabled, serving from: ${staticDir}`);
+}
+
+async function serveStatic(pathname: string): Promise<Response> {
+  const filePath = `${staticDir}${pathname}`;
+  const file = Bun.file(filePath);
+
+  if (await file.exists()) {
+    return new Response(file);
+  }
+
+  return new Response(Bun.file(`${staticDir}/index.html`), {
+    headers: { "Content-Type": "text/html" },
+  });
+}
+
 const main = Effect.gen(function* () {
   const gh = yield* GhService;
   const opencode = yield* OpencodeService;
@@ -57,6 +77,7 @@ const main = Effect.gen(function* () {
 
   const server = Bun.serve({
     port: Number(process.env.API_PORT ?? 3001),
+
     routes: {
       // =========================================================================
       // Model Selection Endpoints
@@ -146,7 +167,9 @@ const main = Effect.gen(function* () {
           }
 
           return runJson(
-            gh.getPrCiStatus(prUrl).pipe(Effect.map((ciStatus) => ({ ciStatus }))),
+            gh
+              .getPrCiStatus(prUrl)
+              .pipe(Effect.map((ciStatus) => ({ ciStatus }))),
           );
         },
       },
@@ -754,6 +777,15 @@ ${fileStats.join("\n")}`;
             }),
           );
         },
+      },
+
+      // Static file serving for production mode (must be last - catch-all)
+      "/*": async (req) => {
+        if (!isProduction) {
+          return new Response("Not Found", { status: 404 });
+        }
+        const url = new URL(req.url);
+        return serveStatic(url.pathname);
       },
     },
   });
