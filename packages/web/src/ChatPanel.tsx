@@ -30,6 +30,12 @@ marked.setOptions({
   breaks: true,
 });
 
+/**
+ * Marker prefix used to identify system-injected context messages.
+ * Must match SYSTEM_CONTEXT_MARKER in packages/better-review/src/response.ts
+ */
+const SYSTEM_CONTEXT_MARKER = "[SYSTEM_CONTEXT]";
+
 interface ChatPanelProps {
   prUrl: string | null;
   prNumber: number | null;
@@ -235,8 +241,8 @@ export function ChatPanel(props: ChatPanelProps) {
       // Skip empty messages
       if (!content.trim()) continue;
 
-      // Skip the injected context message (starts with "You are reviewing PR #")
-      if (msg.role === "user" && content.startsWith("You are reviewing PR #")) {
+      // Skip system-injected context messages (identified by marker prefix)
+      if (msg.role === "user" && content.startsWith(SYSTEM_CONTEXT_MARKER)) {
         continue;
       }
 
