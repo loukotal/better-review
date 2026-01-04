@@ -502,6 +502,138 @@ ${fileStats.join("\n")}`;
           ),
       },
 
+      // =========================================================================
+      // Session Management Endpoints
+      // =========================================================================
+
+      "/api/pr/sessions": {
+        GET: (req) => {
+          const url = new URL(req.url);
+          const prUrl = url.searchParams.get("url");
+          const includeHidden =
+            url.searchParams.get("includeHidden") === "true";
+
+          if (!prUrl) {
+            return validationError("Missing url parameter");
+          }
+
+          return runJson(prContext.listSessions(prUrl, includeHidden));
+        },
+      },
+
+      "/api/pr/sessions/switch": {
+        POST: async (req) => {
+          const body = (await req.json()) as {
+            prUrl: string;
+            sessionId: string;
+          };
+
+          if (!body.prUrl || !body.sessionId) {
+            return validationError("Missing prUrl or sessionId");
+          }
+
+          return runJson(
+            Effect.gen(function* () {
+              yield* prContext.setActiveSession(body.prUrl, body.sessionId);
+              return { success: true, activeSessionId: body.sessionId };
+            }),
+          );
+        },
+      },
+
+      "/api/pr/sessions/new": {
+        POST: async (req) => {
+          const body = (await req.json()) as {
+            prUrl: string;
+            prNumber: number;
+            repoOwner: string;
+            repoName: string;
+            files: string[];
+          };
+
+          if (!body.prUrl) {
+            return validationError("Missing prUrl");
+          }
+
+          return runJson(
+            Effect.gen(function* () {
+              yield* Effect.log(
+                "[API] Creating new session for PR:",
+                body.prUrl,
+              );
+
+              // Fetch current head SHA
+              const currentHeadSha = yield* gh.getHeadSha(body.prUrl);
+
+              // Create a new OpenCode session
+              const session = yield* Effect.tryPromise(() =>
+                opencode.client.session.create({
+                  title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
+                }),
+              );
+
+              if (!session.data) {
+                return yield* Effect.fail(
+                  new Error("Failed to create session"),
+                );
+              }
+
+              // Persist to storage
+              const prData = yield* prContext.addSession(
+                body.prUrl,
+                session.data.id,
+                currentHeadSha,
+              );
+
+              // Inject initial context
+              const contextMessage = buildReviewContext(body);
+              yield* Effect.tryPromise(() =>
+                opencode.client.session.prompt({
+                  sessionID: session.data.id,
+                  parts: [{ type: "text", text: contextMessage }],
+                  noReply: true,
+                }),
+              );
+
+              yield* Effect.log("[API] New session created:", session.data.id);
+
+              return {
+                session: session.data,
+                sessions: prData.sessions,
+                activeSessionId: prData.activeSessionId,
+              };
+            }),
+          );
+        },
+      },
+
+      "/api/pr/sessions/hide": {
+        POST: async (req) => {
+          const body = (await req.json()) as {
+            prUrl: string;
+            sessionId: string;
+          };
+
+          if (!body.prUrl || !body.sessionId) {
+            return validationError("Missing prUrl or sessionId");
+          }
+
+          return runJson(
+            Effect.gen(function* () {
+              const prData = yield* prContext.hideSession(
+                body.prUrl,
+                body.sessionId,
+              );
+              return {
+                success: true,
+                sessions: prData.sessions.filter((s) => !s.hidden),
+                activeSessionId: prData.activeSessionId,
+              };
+            }),
+          );
+        },
+      },
+
       "/api/opencode/session": {
         POST: async (req) => {
           const body = (await req.json()) as {
@@ -523,23 +655,9 @@ ${fileStats.join("\n")}`;
                 files: `[${body.files?.length || 0} files]`,
               });
 
-              // Fetch current head SHA from GitHub to detect force-pushes
+              // Fetch current head SHA from GitHub
               const currentHeadSha = yield* gh.getHeadSha(body.prUrl);
               yield* Effect.log("[API] Current head SHA:", currentHeadSha);
-
-              // Check if we already have a session for this PR with matching SHA
-              const existingSession = yield* prContext.getSession(body.prUrl);
-              const canReuseSession = existingSession && existingSession.headSha === currentHeadSha;
-              yield* Effect.log(
-                "[API] Existing session:",
-                existingSession ? `${existingSession.sessionId} (sha: ${existingSession.headSha}, reusable: ${canReuseSession})` : "none",
-              );
-
-              // If force-push detected, clear diff cache (session will be replaced anyway)
-              if (existingSession && !canReuseSession) {
-                yield* Effect.log("[API] Force-push detected! Clearing cached diff...");
-                yield* diffCache.clear(body.prUrl);
-              }
 
               // Set current PR context
               yield* prContext.setCurrent(body.prUrl, body.files, {
@@ -548,7 +666,7 @@ ${fileStats.join("\n")}`;
                 number: String(body.prNumber),
               });
 
-              // Pre-cache all diffs for this PR (will fetch fresh if cache was cleared)
+              // Pre-cache all diffs for this PR
               yield* Effect.log("[API] Pre-caching diffs...");
               yield* diffCache.getOrFetch(body.prUrl);
 
@@ -567,24 +685,53 @@ ${fileStats.join("\n")}`;
                 ),
               );
 
-              // Reuse existing session if SHA matches
-              if (canReuseSession) {
-                yield* Effect.log("[API] Fetching existing session...");
-                const existingSessionData = yield* Effect.tryPromise(() =>
-                  opencode.client.session.get({
-                    sessionID: existingSession.sessionId,
-                  }),
+              // Check persistent storage for existing sessions
+              const { sessions, activeSessionId } =
+                yield* prContext.listSessions(body.prUrl);
+              yield* Effect.log(
+                `[API] Found ${sessions.length} existing sessions, active: ${activeSessionId}`,
+              );
+
+              // If we have an active session, try to reuse it
+              if (activeSessionId) {
+                const activeSession = sessions.find(
+                  (s) => s.id === activeSessionId,
                 );
-                yield* Effect.log(
-                  "[API] Existing session result:",
-                  existingSessionData.data?.id,
-                );
-                if (existingSessionData.data) {
-                  return { session: existingSessionData.data, existing: true };
+                if (activeSession) {
+                  // Check for force-push (HEAD SHA changed since session was created)
+                  if (activeSession.headSha !== currentHeadSha) {
+                    yield* Effect.log(
+                      `[API] Force-push detected! Session SHA: ${activeSession.headSha}, Current: ${currentHeadSha}`,
+                    );
+                    yield* Effect.log("[API] Clearing cached diff...");
+                    yield* diffCache.clear(body.prUrl);
+                  }
+
+                  yield* Effect.log("[API] Fetching existing session...");
+                  const existingSessionData = yield* Effect.tryPromise(() =>
+                    opencode.client.session.get({
+                      sessionID: activeSessionId,
+                    }),
+                  );
+
+                  if (existingSessionData.data) {
+                    yield* Effect.log(
+                      "[API] Reusing session:",
+                      activeSessionId,
+                    );
+                    return {
+                      session: existingSessionData.data,
+                      sessions,
+                      activeSessionId,
+                      existing: true,
+                      headSha: currentHeadSha,
+                      sessionHeadSha: activeSession.headSha,
+                    };
+                  }
                 }
               }
 
-              // Create a new session
+              // No active session or it doesn't exist in OpenCode - create new one
               yield* Effect.log("[API] Creating new session...");
               const session = yield* Effect.tryPromise(() =>
                 opencode.client.session.create({
@@ -599,8 +746,12 @@ ${fileStats.join("\n")}`;
                 );
               }
 
-              // Store the session mapping with current head SHA
-              yield* prContext.setSession(body.prUrl, session.data.id, currentHeadSha);
+              // Persist to storage
+              const prData = yield* prContext.addSession(
+                body.prUrl,
+                session.data.id,
+                currentHeadSha,
+              );
 
               // Inject initial context (without expecting a reply)
               yield* Effect.log("[API] Injecting context...");
@@ -614,7 +765,14 @@ ${fileStats.join("\n")}`;
               );
               yield* Effect.log("[API] Context injected successfully");
 
-              return { session: session.data, existing: false };
+              return {
+                session: session.data,
+                sessions: prData.sessions,
+                activeSessionId: prData.activeSessionId,
+                existing: false,
+                headSha: currentHeadSha,
+                sessionHeadSha: currentHeadSha,
+              };
             }),
           );
         },
@@ -679,7 +837,6 @@ ${fileStats.join("\n")}`;
               const messages = yield* Effect.tryPromise(() =>
                 opencode.client.session.messages({ sessionID: sessionId }),
               );
-
               return { messages: messages.data };
             }),
           );
@@ -832,7 +989,7 @@ declare global {
 if (globalThis.__appFiber) {
   console.log("[HMR] Stopping previous instance...");
   await Effect.runPromise(Fiber.interrupt(globalThis.__appFiber)).catch(
-    () => { },
+    () => {},
   );
 }
 
@@ -863,7 +1020,7 @@ process.on("SIGTERM", shutdown);
 if (import.meta.hot) {
   import.meta.hot.dispose(async () => {
     console.log("[HMR] Disposing...");
-    await Effect.runPromise(Fiber.interrupt(fiber)).catch(() => { });
+    await Effect.runPromise(Fiber.interrupt(fiber)).catch(() => {});
     globalThis.__appFiber = undefined;
   });
 }

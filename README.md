@@ -40,15 +40,15 @@ You can update ports with `API_PORT`, `WEB_PORT` (for dev), `OPENCODE_PORT` envi
 - [ ] render images
 - [ ] fix file refs from the review agent
 - [ ] virtualization for large files - ~7k line file takes long time to load
-- [ ] sometimes first message from OpenCode does not get sent
 - [ ] better handle SSE connection
-- [ ] load opencode sessions based on PR link - allow switching between sessions if multiple exist
 - [ ] handle "project knowledge base"
 - [ ] simpler marks for warning/info UI elements & files (just use filenames instead of \[\[\]\])
 - [ ] better responsive ui
 - [ ] make it executable using bun
 - [ ] start web server on ".local" domain(?)
-- [ ] integrate with other coding agents(?)
+- ~[ ] integrate with other coding agents(?)~
+- [x] load opencode sessions based on PR link - allow switching between sessions if multiple exist
+- [x] sometimes first message from OpenCode does not get sent
 
 ## License
 
