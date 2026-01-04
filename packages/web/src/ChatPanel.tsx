@@ -638,25 +638,25 @@ export function ChatPanel(props: ChatPanelProps) {
       {/* Header */}
       <div class="px-3 py-2 border-b border-border">
         <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <span class="text-accent text-sm">AI</span>
-            <h2 class="text-sm text-text font-medium">Review Assistant</h2>
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-accent text-sm flex-shrink-0">AI</span>
+            <h2 class="text-sm text-text font-medium truncate">Review Assistant</h2>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1 flex-shrink-0">
             <Show when={sessionId() && !chat.isStreaming()}>
               <button
                 type="button"
                 onClick={startReview}
-                class="px-2 py-0.5 text-sm bg-accent text-black hover:bg-accent-bright transition-colors"
+                class="px-1.5 py-0.5 text-xs bg-accent text-black hover:bg-accent-bright transition-colors whitespace-nowrap"
               >
-                Start Review
+                {width() < 300 ? "Review" : "Start Review"}
               </button>
             </Show>
             <Show when={chat.isStreaming()}>
               <button
                 type="button"
                 onClick={handleAbort}
-                class="px-2 py-0.5 text-sm bg-error text-white hover:bg-error/80 transition-colors"
+                class="px-1.5 py-0.5 text-xs bg-error text-white hover:bg-error/80 transition-colors"
               >
                 Stop
               </button>
@@ -665,8 +665,14 @@ export function ChatPanel(props: ChatPanelProps) {
         </div>
         {/* Session selector row - show when we have a session */}
         <Show when={sessionId()}>
-          <div class="flex items-center justify-between mt-1.5 gap-2">
-            <div class="flex items-center gap-1.5">
+          <div
+            class="mt-1.5 gap-1.5"
+            classList={{
+              "flex flex-col": width() < 300,
+              "flex items-center justify-between": width() >= 300,
+            }}
+          >
+            <div class="flex items-center gap-1.5 min-w-0">
               <SessionSelector
                 sessions={sessions()}
                 activeSessionId={sessionId()}
@@ -680,10 +686,10 @@ export function ChatPanel(props: ChatPanelProps) {
                 type="button"
                 onClick={handleNewSession}
                 disabled={chat.isStreaming() || initializing()}
-                class="flex items-center gap-1.5 px-2 py-0.5 text-sm border border-accent text-accent hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                 title="Create new session"
               >
-                + New
+                {width() < 300 ? "+New" : "+ New"}
               </button>
             </div>
             <ModelSelector disabled={chat.isStreaming()} />
