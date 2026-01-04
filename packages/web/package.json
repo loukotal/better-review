@@ -19,6 +19,7 @@
     "vite-plugin-solid": "^2.11.8"
   },
   "dependencies": {
+    "@better-review/shared": "workspace:*",
     "@pierre/diffs": "^1.0.2",
     "@solidjs/router": "^0.15.4",
     "@tanstack/query-persist-client-core": "^5.91.15",

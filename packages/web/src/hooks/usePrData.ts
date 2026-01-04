@@ -1,14 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/solid-query";
 import { createMemo, createEffect } from "solid-js";
-import { queryKeys, api, prefetchCommitDiffs } from "../lib/query";
-import type { PrCommit, PRComment } from "../diff/types";
-import type { PrStatus } from "../components/PrStatusBar";
-
-export interface PrInfo {
-  owner: string;
-  repo: string;
-  number: string;
-}
+import { queryKeys, api, prefetchCommitDiffs, type PrCommit, type PRComment } from "../lib/query";
 
 /**
  * Custom hook that manages all PR data fetching using TanStack Query.

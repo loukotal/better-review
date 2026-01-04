@@ -6,16 +6,15 @@ import { Effect, Ref } from "effect";
 import { type FileDiffMeta, parseFullDiff } from "./diff";
 import { GhService, GhServiceLive } from "./gh/gh";
 import { StoreService } from "./store";
+import type {
+  PrInfo,
+  StoredSession,
+  PrSessionData,
+} from "@better-review/shared";
 
 // =============================================================================
 // Types
 // =============================================================================
-
-export interface PrInfo {
-  owner: string;
-  repo: string;
-  number: string;
-}
 
 export interface PrContext {
   prUrl: string | null;
@@ -23,21 +22,8 @@ export interface PrContext {
   info: PrInfo | null;
 }
 
-export interface StoredSession {
-  id: string; // OpenCode session ID
-  headSha: string; // Git SHA at creation
-  createdAt: number; // Unix timestamp ms
-  hidden: boolean;
-}
-
-export interface PrSessionData {
-  owner: string;
-  repo: string;
-  number: number;
-  url: string;
-  sessions: StoredSession[];
-  activeSessionId: string | null;
-}
+// Re-export for convenience
+export type { PrInfo, StoredSession, PrSessionData };
 
 // =============================================================================
 // Helpers

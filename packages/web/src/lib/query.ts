@@ -1,8 +1,7 @@
 import { QueryClient } from "@tanstack/solid-query";
 import { persistQueryClient } from "@tanstack/query-persist-client-core";
 import { get, set, del, createStore } from "idb-keyval";
-import type { PrCommit, PRComment } from "../diff/types";
-import type { PrStatus } from "../components/PrStatusBar";
+import type { PrCommit, PRComment, PrStatus, CiStatus, SearchedPr } from "@better-review/shared";
 
 // Create a dedicated IndexedDB store for query cache
 const queryStore = createStore("better-review-query", "cache");
@@ -172,25 +171,5 @@ export async function prefetchCommitDiffs(url: string, commits: PrCommit[]): Pro
   }
 }
 
-// Types for PR list
-export interface CiStatus {
-  passed: number;
-  total: number;
-  state: "SUCCESS" | "FAILURE" | "PENDING" | "EXPECTED" | "ERROR" | "NEUTRAL";
-}
-
-export interface SearchedPr {
-  number: number;
-  title: string;
-  url: string;
-  repository: { name: string; nameWithOwner: string };
-  author: { login: string };
-  createdAt: string;
-  isDraft: boolean;
-  myReviewState: string | null;
-  isAuthor: boolean;
-  reviewRequested: boolean;
-  additions: number;
-  deletions: number;
-  ciStatus: CiStatus | null;
-}
+// Re-export shared types for convenience
+export type { CiStatus, SearchedPr, PrStatus, PrCommit, PRComment };

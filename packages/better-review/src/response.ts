@@ -3,6 +3,7 @@
 // =============================================================================
 
 import { Effect } from "effect";
+import { SYSTEM_CONTEXT_MARKER } from "@better-review/shared";
 
 /**
  * Create a 400 Bad Request response with an error message
@@ -82,12 +83,6 @@ export const runResponse = (
 // =============================================================================
 // Review Context Builder
 // =============================================================================
-
-/**
- * Marker prefix used to identify system-injected context messages.
- * This allows the frontend to reliably filter out these messages from chat history.
- */
-export const SYSTEM_CONTEXT_MARKER = "[SYSTEM_CONTEXT]";
 
 // File patterns to ignore when building review context
 const IGNORE_PATTERNS = [

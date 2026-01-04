@@ -1,3 +1,8 @@
+import type { PRComment, PrCommit } from "@better-review/shared";
+
+// Re-export shared types for convenience
+export type { PRComment, PrCommit };
+
 // ============ Settings Types ============
 
 export type DiffStyle = "unified" | "split";
@@ -75,23 +80,7 @@ export const LINE_DIFF_LABELS: Record<LineDiffType, string> = {
   none: "None",
 };
 
-// ============ Comment Types ============
-
-export interface PRComment {
-  id: number;
-  path: string;
-  line: number | null;
-  original_line: number | null;
-  side: "LEFT" | "RIGHT";
-  body: string;
-  html_url: string;
-  user: {
-    login: string;
-    avatar_url: string;
-  };
-  created_at: string;
-  in_reply_to_id?: number;
-}
+// ============ Annotation Metadata Types ============
 
 export type AnnotationMetadata =
   | { type: "thread"; rootComment: PRComment; replies: PRComment[] }
@@ -106,13 +95,3 @@ export type AnnotationMetadata =
 // ============ Review Mode Types ============
 
 export type ReviewMode = "full" | "commit";
-
-export interface PrCommit {
-  sha: string;
-  message: string;
-  author: {
-    login: string;
-    avatar_url: string;
-  };
-  date: string;
-}

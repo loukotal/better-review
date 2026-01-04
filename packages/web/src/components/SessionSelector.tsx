@@ -1,11 +1,5 @@
 import { createSignal, For, Show, createMemo, onCleanup, onMount } from "solid-js";
-
-export interface StoredSession {
-  id: string;
-  headSha: string;
-  createdAt: number;
-  hidden: boolean;
-}
+import type { StoredSession } from "@better-review/shared";
 
 interface SessionSelectorProps {
   sessions: StoredSession[];

@@ -8,6 +8,7 @@
     "start": "NODE_ENV=production bun src/index.ts"
   },
   "dependencies": {
+    "@better-review/shared": "workspace:*",
     "@effect/platform": "^0.94.0",
     "@effect/platform-bun": "^0.87.0",
     "@opencode-ai/sdk": "^1.0.223",

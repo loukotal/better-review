@@ -21,20 +21,15 @@ import { FileLink } from "./components/FileLink";
 import { AnnotationBlock } from "./components/AnnotationBlock";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { ModelSelector } from "./components/ModelSelector";
-import { SessionSelector, type StoredSession } from "./components/SessionSelector";
+import { SessionSelector } from "./components/SessionSelector";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
+import { SYSTEM_CONTEXT_MARKER, type StoredSession } from "@better-review/shared";
 
 // Configure marked for safe, minimal output
 marked.setOptions({
   gfm: true,
   breaks: true,
 });
-
-/**
- * Marker prefix used to identify system-injected context messages.
- * Must match SYSTEM_CONTEXT_MARKER in packages/better-review/src/response.ts
- */
-const SYSTEM_CONTEXT_MARKER = "[SYSTEM_CONTEXT]";
 
 interface ChatPanelProps {
   prUrl: string | null;
