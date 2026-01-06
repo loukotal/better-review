@@ -86,11 +86,18 @@ export function ChatPanel(props: ChatPanelProps) {
 
   // Auto-scroll to bottom when messages or streaming content changes
   createEffect(() => {
+    // Track all relevant signals that should trigger scroll
     chat.messages();
     chat.streamingContent();
-    if (messagesContainer) {
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
+    chat.isStreaming();
+    chat.activeTools();
+    
+    // Defer scroll to next frame to ensure DOM has updated
+    requestAnimationFrame(() => {
+      if (messagesContainer) {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      }
+    });
   });
 
   // Initialize session when PR changes

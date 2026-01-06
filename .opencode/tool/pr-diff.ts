@@ -24,13 +24,14 @@ export default tool({
         "Optional: End line number to filter the diff (shows hunks up to and containing this line)",
       ),
   },
-  async execute(args) {
+  async execute(args, context) {
     console.log(
-      `[pr-diff] Called with file: ${args.file}, startLine: ${args.startLine}, endLine: ${args.endLine}`,
+      `[pr-diff] Called with file: ${args.file}, startLine: ${args.startLine}, endLine: ${args.endLine}, session: ${context.sessionID}`,
     );
 
     try {
-      let url = `${API_BASE}/api/pr/file-diff?file=${encodeURIComponent(args.file)}`;
+      // Include sessionId to support multiple tabs with different PRs
+      let url = `${API_BASE}/api/pr/file-diff?file=${encodeURIComponent(args.file)}&sessionId=${encodeURIComponent(context.sessionID)}`;
       if (args.startLine !== undefined) {
         url += `&startLine=${args.startLine}`;
       }

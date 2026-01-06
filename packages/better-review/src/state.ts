@@ -143,12 +143,15 @@ export class PrContextService extends Effect.Service<PrContextService>()(
         info: null,
       });
 
+      // Session -> PR URL mapping (in-memory, populated at runtime)
+      const sessionToPr = yield* Ref.make(new Map<string, string>());
+
       // Get store service for persistence
       const store = yield* StoreService;
 
       return {
         // =====================================================================
-        // Runtime Context (unchanged)
+        // Runtime Context
         // =====================================================================
 
         /**
@@ -161,6 +164,25 @@ export class PrContextService extends Effect.Service<PrContextService>()(
          * Get the current PR context
          */
         getCurrent: Ref.get(context),
+
+        // =====================================================================
+        // Session → PR Mapping (in-memory, O(1) lookup)
+        // =====================================================================
+
+        /**
+         * Register a session → PR URL mapping (call when session is activated)
+         */
+        registerSession: (sessionId: string, prUrl: string) =>
+          Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl)),
+
+        /**
+         * Get PR URL for a session (O(1) lookup)
+         */
+        getPrUrlBySessionId: (sessionId: string) =>
+          Effect.gen(function* () {
+            const map = yield* Ref.get(sessionToPr);
+            return map.get(sessionId) ?? null;
+          }),
 
         // =====================================================================
         // Session Management (persisted via StoreService)
@@ -252,6 +274,10 @@ export class PrContextService extends Effect.Service<PrContextService>()(
             };
 
             yield* store.set(SESSIONS_NAMESPACE, key, updated);
+            
+            // Register in-memory mapping for O(1) lookup
+            yield* Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl));
+            
             yield* Effect.log(
               `[PrContext] Added session ${sessionId} to ${pr.owner}/${pr.repo}#${pr.number}`,
             );
@@ -351,6 +377,7 @@ export class PrContextService extends Effect.Service<PrContextService>()(
               data.sessions.find((s) => s.id === data.activeSessionId) || null
             );
           }),
+
       };
     }),
     dependencies: [StoreService.Default],
