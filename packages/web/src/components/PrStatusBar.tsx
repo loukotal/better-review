@@ -1,16 +1,12 @@
 import { type Component, Show, createMemo, createSignal } from "solid-js";
-import { marked } from "marked";
+import { parseMarkdown } from "../lib/markdown";
 import type { PrState, PrStatus, CheckRun } from "@better-review/shared";
-
-// Configure marked for safe output
-marked.setOptions({
-  gfm: true,
-  breaks: true,
-});
 
 interface PrStatusBarProps {
   status: PrStatus | null;
   loading?: boolean;
+  repoOwner?: string | null;
+  repoName?: string | null;
 }
 
 const stateStyles: Record<PrState, { bg: string; text: string; label: string }> = {
@@ -88,7 +84,14 @@ function ChevronDownIcon() {
 
 export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
   const [showDescription, setShowDescription] = createSignal(false);
-  
+
+  const githubContext = createMemo(() => {
+    if (props.repoOwner && props.repoName) {
+      return { owner: props.repoOwner, repo: props.repoName };
+    }
+    return null;
+  });
+
   return (
     <Show when={!props.loading && props.status} fallback={
       <Show when={props.loading}>
@@ -162,9 +165,9 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
             
             {/* Description panel */}
             <Show when={showDescription() && hasDescription()}>
-              <div 
+              <div
                 class="text-sm text-text-muted bg-bg-elevated border border-border p-3 leading-relaxed max-h-[200px] overflow-y-auto markdown-content"
-                innerHTML={marked.parse(status().body, { async: false }) as string}
+                innerHTML={parseMarkdown(status().body, githubContext())}
               />
             </Show>
           </div>

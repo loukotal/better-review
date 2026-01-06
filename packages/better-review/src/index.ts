@@ -215,6 +215,22 @@ const main = Effect.gen(function* () {
           );
         },
       },
+      "/api/pr/issue-comments": {
+        GET: (req) => {
+          const url = new URL(req.url);
+          const prUrl = url.searchParams.get("url");
+
+          if (!prUrl) {
+            return validationError("Missing url parameter");
+          }
+
+          return runJson(
+            gh
+              .listIssueComments(prUrl)
+              .pipe(Effect.map((comments) => ({ comments }))),
+          );
+        },
+      },
       "/api/pr/status": {
         GET: (req) => {
           const url = new URL(req.url);

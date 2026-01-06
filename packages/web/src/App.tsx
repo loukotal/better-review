@@ -11,11 +11,12 @@ import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
 import type { Annotation } from "./utils/parseReviewTokens";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { PrStatusBar } from "./components/PrStatusBar";
+import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { ApproveButton } from "./components/ApproveButton";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
 import { CommitNavigator } from "./components/CommitNavigator";
 import { useCurrentUser } from "./hooks/usePrData";
-import { queryKeys, api, queryClient } from "./lib/query";
+import { queryKeys, api, queryClient, type IssueComment } from "./lib/query";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
@@ -142,6 +143,7 @@ const AppContent: Component = () => {
   const [diff, setDiff] = createSignal<string | null>(null);
   const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
   const [comments, setComments] = createSignal<PRComment[]>([]);
+  const [issueComments, setIssueComments] = createSignal<IssueComment[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [settings, setSettings] = createSignal<DiffSettings>(loadSettings());
 
@@ -438,6 +440,7 @@ const AppContent: Component = () => {
     const cachedInfo = queryClient.getQueryData<{ owner: string; repo: string; number: string } | null>(queryKeys.pr.info(currentPrUrl));
     const cachedCommits = queryClient.getQueryData<PrCommit[]>(queryKeys.pr.commits(currentPrUrl));
     const cachedComments = queryClient.getQueryData<PRComment[]>(queryKeys.pr.comments(currentPrUrl));
+    const cachedIssueComments = queryClient.getQueryData<IssueComment[]>(queryKeys.pr.issueComments(currentPrUrl));
     const cachedStatus = queryClient.getQueryData<PrStatus>(queryKeys.pr.status(currentPrUrl));
 
     if (cachedDiff) {
@@ -448,6 +451,7 @@ const AppContent: Component = () => {
     if (cachedInfo) setPrInfo(cachedInfo);
     if (cachedCommits) setCommits(cachedCommits);
     if (cachedComments) setComments(cachedComments);
+    if (cachedIssueComments) setIssueComments(cachedIssueComments);
     if (cachedStatus) setPrStatus(cachedStatus);
 
     // Only show loading if no cached data
@@ -512,10 +516,14 @@ const AppContent: Component = () => {
       setLoadingComments(true);
       setLoadingStatus(true);
 
-      const [commentsData, statusData] = await Promise.all([
+      const [commentsData, issueCommentsData, statusData] = await Promise.all([
         queryClient.fetchQuery({
           queryKey: queryKeys.pr.comments(currentPrUrl),
           queryFn: () => api.fetchComments(currentPrUrl),
+        }),
+        queryClient.fetchQuery({
+          queryKey: queryKeys.pr.issueComments(currentPrUrl),
+          queryFn: () => api.fetchIssueComments(currentPrUrl),
         }),
         queryClient.fetchQuery({
           queryKey: queryKeys.pr.status(currentPrUrl),
@@ -524,6 +532,7 @@ const AppContent: Component = () => {
       ]);
 
       setComments(commentsData);
+      setIssueComments(issueCommentsData);
       setPrStatus(statusData);
       setLoadingStatus(false);
     } catch (err) {
@@ -695,7 +704,12 @@ const AppContent: Component = () => {
         {/* PR Status Bar */}
         <Show when={loadedPrUrl()}>
           <div class="px-4 py-2 border-t border-border bg-bg flex items-center justify-between">
-            <PrStatusBar status={prStatus()} loading={loadingStatus()} />
+            <PrStatusBar
+              status={prStatus()}
+              loading={loadingStatus()}
+              repoOwner={prInfo()?.owner}
+              repoName={prInfo()?.repo}
+            />
             <div class="flex items-center gap-2">
               <ReviewModeToggle
                 mode={reviewMode()}
@@ -706,6 +720,13 @@ const AppContent: Component = () => {
               <ApproveButton />
             </div>
           </div>
+          {/* PR Comments (top-level conversation) */}
+          <PrCommentsPanel
+            comments={issueComments()}
+            loading={loadingComments()}
+            repoOwner={prInfo()?.owner}
+            repoName={prInfo()?.repo}
+          />
         </Show>
       </header>
 
@@ -775,6 +796,8 @@ const AppContent: Component = () => {
                   currentUser={currentUser()}
                   settings={settings()}
                   onFilesLoaded={setFiles}
+                  repoOwner={prInfo()?.owner}
+                  repoName={prInfo()?.repo}
                   fileOrder={reviewOrder()}
                   highlightedLine={highlightedLine()}
                 />

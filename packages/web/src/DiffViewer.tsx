@@ -26,6 +26,8 @@ interface Props {
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
   fileOrder?: string[] | null;
   highlightedLine?: { file: string; line: number } | null;
+  repoOwner?: string | null;
+  repoName?: string | null;
 }
 
 export function DiffViewer(props: Props) {
@@ -101,6 +103,8 @@ export function DiffViewer(props: Props) {
                   currentUser={props.currentUser}
                   settings={props.settings}
                   highlightedLine={highlightLine()}
+                  repoOwner={props.repoOwner}
+                  repoName={props.repoName}
                 />
               </div>
             );
