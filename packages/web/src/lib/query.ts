@@ -42,6 +42,16 @@ export function restoreCache(): void {
   });
 }
 
+// Issue comment type (top-level PR conversation comments)
+export interface IssueComment {
+  id: number;
+  body: string;
+  html_url: string;
+  user: { login: string; avatar_url: string };
+  created_at: string;
+  updated_at: string;
+}
+
 // Query key factories for type-safe keys
 export const queryKeys = {
   pr: {
@@ -51,6 +61,7 @@ export const queryKeys = {
     commits: (url: string) => ["pr", "commits", url] as const,
     commitDiff: (url: string, sha: string) => ["pr", "commitDiff", url, sha] as const,
     comments: (url: string) => ["pr", "comments", url] as const,
+    issueComments: (url: string) => ["pr", "issueComments", url] as const,
     status: (url: string) => ["pr", "status", url] as const,
     ciStatus: (url: string) => ["pr", "ci-status", url] as const,
   },
@@ -96,6 +107,12 @@ export const api = {
 
   async fetchComments(url: string, signal?: AbortSignal): Promise<PRComment[]> {
     const res = await fetch(`/api/pr/comments?url=${encodeURIComponent(url)}`, { signal });
+    const data = await res.json();
+    return data.comments ?? [];
+  },
+
+  async fetchIssueComments(url: string, signal?: AbortSignal): Promise<IssueComment[]> {
+    const res = await fetch(`/api/pr/issue-comments?url=${encodeURIComponent(url)}`, { signal });
     const data = await res.json();
     return data.comments ?? [];
   },
@@ -146,6 +163,10 @@ export async function prefetchPr(url: string): Promise<void> {
     queryClient.prefetchQuery({
       queryKey: queryKeys.pr.comments(url),
       queryFn: ({ signal }) => api.fetchComments(url, signal),
+    }),
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.pr.issueComments(url),
+      queryFn: ({ signal }) => api.fetchIssueComments(url, signal),
     }),
     queryClient.prefetchQuery({
       queryKey: queryKeys.pr.status(url),

@@ -12,6 +12,7 @@ import {
   FONT_FAMILY_MAP,
 } from "./types";
 import { GITHUB_ICON } from "../icons";
+import { parseMarkdown } from "../lib/markdown";
 
 // Large file thresholds
 const LARGE_FILE_LINE_THRESHOLD = 2000;
@@ -38,6 +39,8 @@ interface FileDiffViewProps {
   currentUser: string | null;
   settings: DiffSettings;
   highlightedLine?: number;
+  repoOwner?: string | null;
+  repoName?: string | null;
 }
 
 function ChevronIcon() {
@@ -107,6 +110,14 @@ export function FileDiffView(props: FileDiffViewProps) {
   const [pendingEdit, setPendingEdit] = createSignal<{ commentId: number; body: string } | null>(null);
   const [editError, setEditError] = createSignal<string | null>(null);
   const [submitting, setSubmitting] = createSignal(false);
+
+  // GitHub context for markdown link resolution
+  const githubContext = () => {
+    if (props.repoOwner && props.repoName) {
+      return { owner: props.repoOwner, repo: props.repoName };
+    }
+    return null;
+  };
   
   // Generate CSS for font injection into shadow DOM
   const getFontCSS = () => {
@@ -312,7 +323,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           >${GITHUB_ICON}</a>
           ${actionsHtml}
         </div>
-        <div class="text-sm text-text-muted whitespace-pre-wrap leading-relaxed">${escapeHtml(comment.body)}</div>
+        <div class="text-sm text-text-muted leading-relaxed markdown-content">${parseMarkdown(comment.body, githubContext())}</div>
       </div>
     `;
   };

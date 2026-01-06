@@ -56,6 +56,17 @@ const PRCommentSchema = Schema.Struct({
   in_reply_to_id: Schema.optional(Schema.Number),
 })
 
+// Issue comments (top-level PR conversation comments)
+const IssueCommentSchema = Schema.Struct({
+  id: Schema.Number,
+  body: Schema.String,
+  html_url: Schema.String,
+  user: UserSchema,
+  created_at: Schema.String,
+  updated_at: Schema.String,
+})
+export type IssueComment = typeof IssueCommentSchema.Type
+
 export interface AddCommentParams {
   prUrl: string;
   filePath: string;
@@ -214,6 +225,7 @@ interface GhCli {
   getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError, never>;
   getPrStatus: (urlOrNumber: string) => Effect.Effect<PrStatus, GhError, never>;
   listComments: (prUrl: string) => Effect.Effect<readonly PRComment[], GhError, never>;
+  listIssueComments: (prUrl: string) => Effect.Effect<readonly IssueComment[], GhError, never>;
   addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError, never>;
   replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError, never>;
   editComment: (params: EditCommentParams) => Effect.Effect<PRComment, GhError, never>;
@@ -361,6 +373,28 @@ export const GhServiceLive = Layer.succeed(GhService, {
         (cause) => new GhError({ command: "getComments", cause }),
       ),
       Effect.withSpan("GhService.getComments", { attributes: { urlOrNumber } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  listIssueComments: (urlOrNumber: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
+      // PRs are issues in GitHub's API, so we use the issues endpoint for top-level comments
+      const cmd = Command.make(
+        "gh",
+        "api",
+        `repos/${owner}/${repo}/issues/${number}/comments`,
+        "--jq",
+        ".",
+      );
+      const result = (yield* Command.string(cmd)).trim();
+      if (!result) return [];
+      return yield* parseJsonPreserve(Schema.Array(IssueCommentSchema))(result);
+    }).pipe(
+      Effect.mapError(
+        (cause) => new GhError({ command: "getIssueComments", cause }),
+      ),
+      Effect.withSpan("GhService.getIssueComments", { attributes: { urlOrNumber } }),
       Effect.provide(BunContext.layer),
     ),
 
