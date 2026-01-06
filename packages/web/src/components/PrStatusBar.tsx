@@ -1,30 +1,12 @@
 import { type Component, Show, createMemo, createSignal } from "solid-js";
 import { marked } from "marked";
+import type { PrState, PrStatus, CheckRun } from "@better-review/shared";
 
 // Configure marked for safe output
 marked.setOptions({
   gfm: true,
   breaks: true,
 });
-
-export type PrState = "open" | "closed" | "merged";
-
-export interface CheckRun {
-  name: string;
-  status: "queued" | "in_progress" | "completed";
-  conclusion: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required" | null;
-}
-
-export interface PrStatus {
-  state: PrState;
-  draft: boolean;
-  mergeable: boolean | null;
-  title: string;
-  body: string;
-  author: string;
-  url: string;
-  checks: CheckRun[];
-}
 
 interface PrStatusBarProps {
   status: PrStatus | null;
@@ -37,7 +19,7 @@ const stateStyles: Record<PrState, { bg: string; text: string; label: string }> 
   merged: { bg: "bg-merged/20", text: "text-merged", label: "Merged" },
 };
 
-function ChecksIndicator(props: { checks: CheckRun[] }) {
+function ChecksIndicator(props: { checks: readonly CheckRun[] }) {
   const summary = createMemo(() => {
     const checks = props.checks;
     if (checks.length === 0) return null;

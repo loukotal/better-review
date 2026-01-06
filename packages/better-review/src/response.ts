@@ -3,6 +3,7 @@
 // =============================================================================
 
 import { Effect } from "effect";
+import { SYSTEM_CONTEXT_MARKER } from "@better-review/shared";
 
 /**
  * Create a 400 Bad Request response with an error message
@@ -112,7 +113,8 @@ export function buildReviewContext(params: {
     (file) => !IGNORE_PATTERNS.some((pattern) => pattern.test(file)),
   );
 
-  return `You are reviewing PR #${params.prNumber} in ${params.repoOwner}/${params.repoName}.
+  return `${SYSTEM_CONTEXT_MARKER}
+You are reviewing PR #${params.prNumber} in ${params.repoOwner}/${params.repoName}.
 
 **PR URL:** ${params.prUrl}
 

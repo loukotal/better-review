@@ -129,6 +129,9 @@ export function transformEvent(
 
   // Check if event belongs to this session
   if ("sessionID" in props && props.sessionID !== sessionId) {
+    console.log(
+      `[transformEvent] FILTERED: sessionID mismatch (event: ${props.sessionID}, expected: ${sessionId})`,
+    );
     return null;
   }
 
@@ -278,6 +281,8 @@ export function createOpenCodeStream(
         );
       }
 
+      yield* Effect.log(`[SSE] Connection established, starting stream`);
+
       // Create a stream from the response body
       const byteStream = Stream.fromReadableStream<Uint8Array, StreamError>(
         () => response.body!,
@@ -286,6 +291,7 @@ export function createOpenCodeStream(
 
       // Track which text messages we've logged (to avoid spam)
       const loggedTextMessages = new Set<string>();
+      let eventCount = 0;
 
       const eventStream: Stream.Stream<StreamEvent, StreamError> =
         byteStream.pipe(
@@ -305,14 +311,34 @@ export function createOpenCodeStream(
           Stream.map((line) => line.slice(6)),
           Stream.filterMap((data) => {
             try {
+              eventCount++;
               const event = JSON.parse(data) as OpenCodeEvent;
+
+              // Log first 10 raw events for debugging
+              if (eventCount <= 10) {
+                console.log(
+                  `[SSE] Raw event #${eventCount}: type=${event.type}`,
+                  event.type === "message.part.updated"
+                    ? `part.type=${(event.properties as { part?: { type?: string } })?.part?.type}, delta=${!!(event.properties as { delta?: string })?.delta}`
+                    : "",
+                );
+              }
+
               const transformed = transformEvent(event, sessionId);
+
+              if (!transformed && eventCount <= 10) {
+                console.log(
+                  `[SSE] Event #${eventCount} filtered out (returned null)`,
+                );
+              }
+
               return transformed ? Option.some(transformed) : Option.none();
-            } catch {
+            } catch (e) {
+              console.error(`[SSE] Parse error:`, e);
               return Option.none();
             }
           }),
-          // TODO: Add a runtime "verbose" flag that logs full event objects
+          // Log emitted events for debugging
           Stream.tap((event) => {
             // Skip reasoning entirely
             if (event.type === "reasoning") return Effect.void;
@@ -322,17 +348,22 @@ export function createOpenCodeStream(
               if (loggedTextMessages.has(event.messageId)) return Effect.void;
               loggedTextMessages.add(event.messageId);
               return Console.log(
-                `[OpenCode] text started (message: ${event.messageId})`,
+                `[SSE->FE] EMIT text started (message: ${event.messageId})`,
               );
+            }
+
+            // Log status events explicitly
+            if (event.type === "status") {
+              return Console.log(`[SSE->FE] EMIT status: ${event.status}`);
             }
 
             // Log errors with full details
             if (event.type === "error") {
-              return Console.error("[OpenCode] error:", event);
+              return Console.error("[SSE->FE] EMIT error:", event);
             }
 
             // Log everything else
-            return Console.log(`[OpenCode] ${event.type}`);
+            return Console.log(`[SSE->FE] EMIT ${event.type}`);
           }),
         );
 

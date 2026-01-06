@@ -1,6 +1,7 @@
 import { type Component, createSignal, createEffect, createMemo, Show, onMount, on } from "solid-js";
 import { useSearchParams, A } from "@solidjs/router";
 import type { FileDiffMetadata } from "@pierre/diffs";
+import type { PrStatus, PrInfo } from "@better-review/shared";
 import { DiffViewer, getFileElementId, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
 import { FONT_FAMILY_MAP } from "./diff/types";
 import { FileTreePanel } from "./FileTreePanel";
@@ -9,7 +10,7 @@ import { SettingsPanel } from "./diff/SettingsPanel";
 import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
 import type { Annotation } from "./utils/parseReviewTokens";
 import { PrProvider, usePrContext } from "./context/PrContext";
-import { PrStatusBar, type PrStatus } from "./components/PrStatusBar";
+import { PrStatusBar } from "./components/PrStatusBar";
 import { ApproveButton } from "./components/ApproveButton";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
 import { CommitNavigator } from "./components/CommitNavigator";
@@ -23,12 +24,6 @@ const PANELS_STORAGE_KEY = "panel-visibility";
 
 // Valid theme keys for validation
 const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
-
-interface PrInfo {
-  owner: string;
-  repo: string;
-  number: string;
-}
 
 function loadSettings(): DiffSettings {
   try {

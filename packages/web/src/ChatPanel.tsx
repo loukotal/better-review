@@ -8,6 +8,7 @@ import {
   createMemo,
   onMount,
   onCleanup,
+  batch,
 } from "solid-js";
 import { marked } from "marked";
 import remend from "remend";
@@ -20,7 +21,9 @@ import { FileLink } from "./components/FileLink";
 import { AnnotationBlock } from "./components/AnnotationBlock";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { ModelSelector } from "./components/ModelSelector";
+import { SessionSelector } from "./components/SessionSelector";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
+import { SYSTEM_CONTEXT_MARKER, type StoredSession } from "@better-review/shared";
 
 // Configure marked for safe, minimal output
 marked.setOptions({
@@ -65,6 +68,10 @@ export function ChatPanel(props: ChatPanelProps) {
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [initializing, setInitializing] = createSignal(false);
 
+  // Session management state
+  const [sessions, setSessions] = createSignal<StoredSession[]>([]);
+  const [currentHeadSha, setCurrentHeadSha] = createSignal<string | null>(null);
+
   // Resize state
   const [width, setWidth] = createSignal(loadSavedWidth());
   const [isResizing, setIsResizing] = createSignal(false);
@@ -97,6 +104,8 @@ export function ChatPanel(props: ChatPanelProps) {
       initSession();
     } else {
       setSessionId(null);
+      setSessions([]);
+      setCurrentHeadSha(null);
       chat.clearMessages();
       setSessionError(null);
     }
@@ -154,6 +163,14 @@ export function ChatPanel(props: ChatPanelProps) {
 
       setSessionId(data.session.id);
 
+      // Update sessions list and current head SHA
+      if (data.sessions) {
+        setSessions(data.sessions.filter((s: StoredSession) => !s.hidden));
+      }
+      if (data.headSha) {
+        setCurrentHeadSha(data.headSha);
+      }
+
       // If session existed, load previous messages
       if (data.existing) {
         await loadMessages(data.session.id);
@@ -178,15 +195,63 @@ export function ChatPanel(props: ChatPanelProps) {
       const res = await fetch(`/api/opencode/messages?sessionId=${sid}`);
       const data = await res.json();
 
-      if (data.messages) {
-        // Load existing messages into the chat
-        // This is a bit of a workaround since useStreamingChat manages its own state
-        // For now, we'll just use the streaming for new messages
-        // TODO: Better integration with existing messages
+      if (data.messages && Array.isArray(data.messages)) {
+        const transformed = transformOpenCodeMessages(data.messages);
+        chat.loadExistingMessages(transformed);
+      } else {
+        chat.loadExistingMessages([]);
       }
     } catch (err) {
       console.error("Failed to load messages:", err);
+      chat.loadExistingMessages([]);
     }
+  }
+
+  /**
+   * Transform OpenCode messages to our StreamingMessage format
+   * OpenCode SDK returns: Array<{ info: Message; parts: Array<Part> }>
+   */
+  function transformOpenCodeMessages(messages: unknown[]) {
+    const result: Parameters<typeof chat.loadExistingMessages>[0] = [];
+
+    // OpenCode returns { info: Message, parts: Part[] } for each message
+    for (const item of messages as Array<{
+      info: {
+        id: string;
+        role: "user" | "assistant";
+        time?: { created: number };
+      };
+      parts: Array<{ type: string; text?: string }>;
+    }>) {
+      const msg = item.info;
+      const parts = item.parts || [];
+      
+      // Skip messages with no parts
+      if (parts.length === 0) continue;
+
+      // Combine text parts into content
+      const textParts = parts.filter((p) => p.type === "text" && p.text);
+      const content = textParts.map((p) => p.text).join("");
+
+      // Skip empty messages
+      if (!content.trim()) continue;
+
+      // Skip system-injected context messages (identified by marker prefix)
+      if (msg.role === "user" && content.startsWith(SYSTEM_CONTEXT_MARKER)) {
+        continue;
+      }
+
+      result.push({
+        id: msg.id,
+        role: msg.role,
+        content,
+        toolCalls: [], // Historical tool calls aren't critical for display
+        isStreaming: false,
+        timestamp: msg.time?.created || Date.now(),
+      });
+    }
+
+    return result;
   }
 
   async function sendMessage(e: Event, useReviewAgent = false) {
@@ -215,6 +280,136 @@ export function ChatPanel(props: ChatPanelProps) {
 
   function handleAbort() {
     chat.abort();
+  }
+
+  // Session management handlers
+  async function handleSessionSwitch(newSessionId: string) {
+    if (!props.prUrl || newSessionId === sessionId()) return;
+
+    try {
+      const res = await fetch("/api/pr/sessions/switch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prUrl: props.prUrl,
+          sessionId: newSessionId,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error("Failed to switch session:", await res.text());
+        return;
+      }
+
+      // Load messages for the new session BEFORE switching
+      const messagesRes = await fetch(`/api/opencode/messages?sessionId=${newSessionId}`);
+      const messagesData = await messagesRes.json();
+
+      let newMessages: Parameters<typeof chat.loadExistingMessages>[0] = [];
+      if (messagesData.messages && Array.isArray(messagesData.messages)) {
+        newMessages = transformOpenCodeMessages(messagesData.messages);
+      }
+
+      // Update session ID and messages atomically
+      batch(() => {
+        setSessionId(newSessionId);
+        chat.loadExistingMessages(newMessages);
+      });
+    } catch (err) {
+      console.error("Failed to switch session:", err);
+    }
+  }
+
+  async function handleNewSession() {
+    if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return;
+
+    try {
+      const res = await fetch("/api/pr/sessions/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prUrl: props.prUrl,
+          prNumber: props.prNumber,
+          repoOwner: props.repoOwner,
+          repoName: props.repoName,
+          files: props.files,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error("Failed to create new session:", await res.text());
+        return;
+      }
+
+      const data = await res.json();
+
+      if (data.session?.id) {
+        batch(() => {
+          setSessionId(data.session.id);
+          chat.loadExistingMessages([]); // New session has no messages
+        });
+      }
+      if (data.sessions) {
+        setSessions(data.sessions.filter((s: StoredSession) => !s.hidden));
+      }
+    } catch (err) {
+      console.error("Failed to create new session:", err);
+    }
+  }
+
+  async function handleHideSession(hiddenSessionId: string) {
+    if (!props.prUrl) return;
+
+    try {
+      const res = await fetch("/api/pr/sessions/hide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prUrl: props.prUrl,
+          sessionId: hiddenSessionId,
+        }),
+      });
+
+      if (!res.ok) {
+        console.error("Failed to hide session:", await res.text());
+        return;
+      }
+
+      const data = await res.json();
+
+      // Update sessions list
+      if (data.sessions) {
+        setSessions(data.sessions);
+      }
+
+      // If we hid the active session, switch to another one
+      if (hiddenSessionId === sessionId()) {
+        const remaining = data.sessions || [];
+        if (remaining.length > 0) {
+          // Switch to the most recent session
+          const mostRecent = remaining.reduce(
+            (a: StoredSession, b: StoredSession) =>
+              a.createdAt > b.createdAt ? a : b,
+          );
+          await handleSessionSwitch(mostRecent.id);
+        } else {
+          // No sessions left, create a new one
+          // Note: UI prevents hiding last session, but handle edge case anyway
+          try {
+            await handleNewSession();
+          } catch (newSessionErr) {
+            console.error("Failed to create new session after hiding:", newSessionErr);
+            // Clear state so UI shows proper "no session" state
+            batch(() => {
+              setSessionId(null);
+              chat.clearMessages();
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to hide session:", err);
+    }
   }
 
   // Handle file reference clicks
@@ -424,25 +619,6 @@ export function ChatPanel(props: ChatPanelProps) {
     document.removeEventListener("mouseup", handleMouseUp);
   });
 
-  // Connection status text
-  const connectionStatus = createMemo(() => {
-    if (sessionId()) {
-      if (chat.isConnected()) {
-        return <span class="text-success">Connected</span>;
-      } else {
-        return <span class="text-warning">Reconnecting...</span>;
-      }
-    } else if (props.prUrl) {
-      if (sessionError()) {
-        return <span class="text-error">Connection failed</span>;
-      } else {
-        return <span class="text-text-faint">Connecting...</span>;
-      }
-    } else {
-      return <span class="text-text-faint">No PR loaded</span>;
-    }
-  });
-
   return (
     <div
       class="border-r border-border flex flex-col bg-bg-surface relative"
@@ -462,33 +638,69 @@ export function ChatPanel(props: ChatPanelProps) {
       {/* Header */}
       <div class="px-3 py-2 border-b border-border">
         <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <span class="text-accent text-sm">AI</span>
-            <h2 class="text-sm text-text font-medium">Review Assistant</h2>
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-accent text-sm flex-shrink-0">AI</span>
+            <h2 class="text-sm text-text font-medium truncate">Review Assistant</h2>
           </div>
-          <Show when={sessionId() && !chat.isStreaming()}>
-            <button
-              type="button"
-              onClick={startReview}
-              class="px-2 py-0.5 text-sm bg-accent text-black hover:bg-accent-bright transition-colors"
-            >
-              Start Review
-            </button>
-          </Show>
-          <Show when={chat.isStreaming()}>
-            <button
-              type="button"
-              onClick={handleAbort}
-              class="px-2 py-0.5 text-sm bg-error text-white hover:bg-error/80 transition-colors"
-            >
-              Stop
-            </button>
-          </Show>
+          <div class="flex items-center gap-1 flex-shrink-0">
+            <Show when={sessionId() && !chat.isStreaming()}>
+              <button
+                type="button"
+                onClick={startReview}
+                class="px-1.5 py-0.5 text-xs bg-accent text-black hover:bg-accent-bright transition-colors whitespace-nowrap"
+              >
+                {width() < 300 ? "Review" : "Start Review"}
+              </button>
+            </Show>
+            <Show when={chat.isStreaming()}>
+              <button
+                type="button"
+                onClick={handleAbort}
+                class="px-1.5 py-0.5 text-xs bg-error text-white hover:bg-error/80 transition-colors"
+              >
+                Stop
+              </button>
+            </Show>
+          </div>
         </div>
-        <div class="flex items-center justify-between mt-1">
-          <div class="text-sm truncate">{connectionStatus()}</div>
-          <ModelSelector disabled={chat.isStreaming()} />
-        </div>
+        {/* Session selector row - show when we have a session */}
+        <Show when={sessionId()}>
+          <div
+            class="mt-1.5 gap-1.5"
+            classList={{
+              "flex flex-col": width() < 300,
+              "flex items-center justify-between": width() >= 300,
+            }}
+          >
+            <div class="flex items-center gap-1.5 min-w-0">
+              <SessionSelector
+                sessions={sessions()}
+                activeSessionId={sessionId()}
+                currentHeadSha={currentHeadSha() || undefined}
+                disabled={chat.isStreaming() || initializing()}
+                onSelect={handleSessionSwitch}
+                onNewSession={handleNewSession}
+                onHide={handleHideSession}
+              />
+              <button
+                type="button"
+                onClick={handleNewSession}
+                disabled={chat.isStreaming() || initializing()}
+                class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                title="Create new session"
+              >
+                {width() < 300 ? "+New" : "+ New"}
+              </button>
+            </div>
+            <ModelSelector disabled={chat.isStreaming()} />
+          </div>
+        </Show>
+        {/* Model selector when no session yet */}
+        <Show when={!sessionId() && props.prUrl}>
+          <div class="flex items-center justify-end mt-1.5">
+            <ModelSelector disabled={chat.isStreaming()} />
+          </div>
+        </Show>
       </div>
 
       {/* Messages */}
@@ -674,20 +886,37 @@ export function ChatPanel(props: ChatPanelProps) {
               rows={2}
             />
             <div class="flex justify-between items-center">
-              <div class="flex gap-1">
+              <div class="flex items-center gap-2">
+                {/* Connection status */}
+                <div class="flex items-center gap-1">
+                  <div
+                    class="w-1.5 h-1.5 rounded-full"
+                    classList={{
+                      "bg-success": chat.isConnected(),
+                      "bg-warning": !!sessionId() && !chat.isConnected(),
+                      "bg-text-faint": !sessionId(),
+                    }}
+                  />
+                  <span class="text-[9px] text-text-faint">
+                    {chat.isConnected() ? "Connected" : sessionId() ? "Reconnecting" : "Offline"}
+                  </span>
+                </div>
+                {/* Quick prompts */}
                 <Show when={chat.messages().length > 0}>
-                  <For each={quickPrompts}>
-                    {(qp) => (
-                      <button
-                        type="button"
-                        onClick={() => handleQuickPrompt(qp.prompt)}
-                        disabled={!sessionId() || chat.isStreaming()}
-                        class="px-1.5 py-0.5 text-[9px] border border-border text-text-faint hover:border-accent hover:text-accent transition-colors disabled:opacity-30"
-                      >
-                        {qp.label}
-                      </button>
-                    )}
-                  </For>
+                  <div class="flex gap-1">
+                    <For each={quickPrompts}>
+                      {(qp) => (
+                        <button
+                          type="button"
+                          onClick={() => handleQuickPrompt(qp.prompt)}
+                          disabled={!sessionId() || chat.isStreaming()}
+                          class="px-1.5 py-0.5 text-[9px] border border-border text-text-faint hover:border-accent hover:text-accent transition-colors disabled:opacity-30"
+                        >
+                          {qp.label}
+                        </button>
+                      )}
+                    </For>
+                  </div>
                 </Show>
               </div>
               <button

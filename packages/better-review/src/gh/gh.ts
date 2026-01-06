@@ -1,14 +1,38 @@
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { Command } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
+import type {
+  PrInfo,
+  PrState,
+  PrStatus,
+  CheckRun,
+  ReviewState,
+  CiStatus,
+  SearchedPr,
+  PRComment,
+  PrCommit,
+} from "@better-review/shared";
 
 class GhError extends Data.TaggedError("GhError")<{
   readonly command: string;
   readonly cause: unknown;
 }> { }
 
+// Re-export shared types for convenience
+export type {
+  PrInfo,
+  PrState,
+  PrStatus,
+  CheckRun,
+  ReviewState,
+  CiStatus,
+  SearchedPr,
+  PRComment,
+  PrCommit,
+};
+
 // ============================================================================
-// Schemas
+// Schemas (for runtime validation - types come from @better-review/shared)
 // ============================================================================
 
 const parseJsonPreserve = <A, I, R>(schema: Schema.Schema<A, I, R>) =>
@@ -31,7 +55,6 @@ const PRCommentSchema = Schema.Struct({
   created_at: Schema.String,
   in_reply_to_id: Schema.optional(Schema.Number),
 })
-export type PRComment = typeof PRCommentSchema.Type
 
 export interface AddCommentParams {
   prUrl: string;
@@ -63,14 +86,7 @@ export interface ApprovePrParams {
   body?: string;
 }
 
-export interface PrInfo {
-  owner: string;
-  repo: string;
-  number: string;
-}
-
 const PrStateSchema = Schema.Literal("open", "closed", "merged")
-export type PrState = typeof PrStateSchema.Type
 
 const CheckRunSchema = Schema.Struct({
   name: Schema.String,
@@ -79,7 +95,6 @@ const CheckRunSchema = Schema.Struct({
     Schema.Literal("success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required")
   ),
 })
-export type CheckRun = typeof CheckRunSchema.Type
 
 const PrStatusSchema = Schema.Struct({
   state: PrStateSchema,
@@ -91,12 +106,10 @@ const PrStatusSchema = Schema.Struct({
   url: Schema.String,
   checks: Schema.Array(CheckRunSchema),
 })
-export type PrStatus = typeof PrStatusSchema.Type
 
 const ReviewStateSchema = Schema.NullOr(
   Schema.Literal("PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED")
 )
-export type ReviewState = typeof ReviewStateSchema.Type
 
 const RepositorySchema = Schema.Struct({
   name: Schema.String,
@@ -112,7 +125,6 @@ const CiStatusSchema = Schema.Struct({
   total: Schema.Number,
   state: Schema.Literal("SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"),
 })
-export type CiStatus = typeof CiStatusSchema.Type
 
 const SearchedPrSchema = Schema.Struct({
   number: Schema.Number,
@@ -129,7 +141,6 @@ const SearchedPrSchema = Schema.Struct({
   deletions: Schema.Number,
   ciStatus: Schema.NullOr(CiStatusSchema),
 })
-export type SearchedPr = typeof SearchedPrSchema.Type
 
 const PrCommitSchema = Schema.Struct({
   sha: Schema.String,
@@ -140,7 +151,6 @@ const PrCommitSchema = Schema.Struct({
   }),
   date: Schema.String,
 })
-export type PrCommit = typeof PrCommitSchema.Type
 
 // ============================================================================
 // Internal API Response Schemas
