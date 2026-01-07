@@ -173,6 +173,31 @@ const main = Effect.gen(function* () {
           );
         },
       },
+      // Batch CI status endpoint - fetch multiple PR statuses in one request
+      "/api/prs/ci-status/batch": {
+        POST: async (req) => {
+          const body = (await req.json()) as { urls: string[] };
+
+          if (!body.urls || !Array.isArray(body.urls)) {
+            return validationError("Missing urls array");
+          }
+
+          return runJson(
+            Effect.gen(function* () {
+              const results = yield* Effect.all(
+                body.urls.map((url) =>
+                  gh.getPrCiStatus(url).pipe(
+                    Effect.map((status) => ({ url, status })),
+                    Effect.catchAll(() => Effect.succeed({ url, status: null })),
+                  ),
+                ),
+                { concurrency: 10 },
+              );
+              return { statuses: Object.fromEntries(results.map((r) => [r.url, r.status])) };
+            }),
+          );
+        },
+      },
       "/api/pr/diff": {
         GET: (req) => {
           const url = new URL(req.url);
@@ -272,6 +297,40 @@ const main = Effect.gen(function* () {
               const { owner, repo } = yield* gh.getPrInfo(prUrl);
               const diff = yield* gh.getCommitDiff({ owner, repo, sha });
               return { diff, sha };
+            }),
+          );
+        },
+      },
+      // Batch commit diffs endpoint - fetch all commit diffs for a PR
+      "/api/pr/commit-diffs/batch": {
+        GET: (req) => {
+          const url = new URL(req.url);
+          const prUrl = url.searchParams.get("url");
+
+          if (!prUrl) {
+            return validationError("Missing url parameter");
+          }
+
+          return runJson(
+            Effect.gen(function* () {
+              const { owner, repo } = yield* gh.getPrInfo(prUrl);
+              const commits = yield* gh.listCommits(prUrl);
+
+              const diffs = yield* Effect.all(
+                commits.map((commit) =>
+                  gh.getCommitDiff({ owner, repo, sha: commit.sha }).pipe(
+                    Effect.map((diff) => ({ sha: commit.sha, diff })),
+                    Effect.catchAll(() =>
+                      Effect.succeed({ sha: commit.sha, diff: null }),
+                    ),
+                  ),
+                ),
+                { concurrency: 5 },
+              );
+
+              return {
+                diffs: Object.fromEntries(diffs.map((d) => [d.sha, d.diff])),
+              };
             }),
           );
         },

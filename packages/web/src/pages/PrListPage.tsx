@@ -1,4 +1,4 @@
-import { Component, For, Show, createEffect } from "solid-js";
+import { Component, For, Show, createEffect, createSignal } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import {
@@ -42,17 +42,13 @@ const CiStatusBadgeInner: Component<{ status: CiStatus }> = (props) => {
   );
 };
 
-// Lazy-loading CI status badge - fetches status on mount
-const LazyCiStatusBadge: Component<{ prUrl: string }> = (props) => {
-  const ciQuery = useQuery(() => ({
-    queryKey: queryKeys.pr.ciStatus(props.prUrl),
-    queryFn: ({ signal }) => api.fetchPrCiStatus(props.prUrl, signal),
-    staleTime: 60 * 1000, // Cache for 1 minute
-  }));
+// CI status badge - reads from cache (populated by batch fetch)
+const CiStatusBadge: Component<{ prUrl: string; ciStatuses: Record<string, CiStatus | null> }> = (props) => {
+  const status = () => props.ciStatuses[props.prUrl];
 
   return (
-    <Show when={ciQuery.data}>
-      {(status) => <CiStatusBadgeInner status={status()} />}
+    <Show when={status()}>
+      {(s) => <CiStatusBadgeInner status={s()} />}
     </Show>
   );
 };
@@ -105,6 +101,9 @@ const PrListPage: Component = () => {
     staleTime: 0,
   }));
 
+  // CI statuses fetched via batch
+  const [ciStatuses, setCiStatuses] = createSignal<Record<string, CiStatus | null>>({});
+
   // Prefetch on mousedown (user intent to click)
   const handleMouseDown = (prUrl: string) => {
     prefetchPr(prUrl);
@@ -155,10 +154,21 @@ const PrListPage: Component = () => {
     return result;
   };
 
-  // Prefetch first 3 PRs in the filtered list
+  // Prefetch first 5 PRs in the filtered list
   createEffect(() => {
     const prs = filteredPrs().slice(0, 5);
     prs.forEach((pr) => prefetchPr(pr.url));
+  });
+
+  // Batch fetch CI statuses for all visible PRs
+  createEffect(() => {
+    const prs = filteredPrs();
+    if (prs.length > 0) {
+      const urls = prs.map((pr) => pr.url);
+      api.fetchCiStatusBatch(urls).then((statuses) => {
+        setCiStatuses((prev) => ({ ...prev, ...statuses }));
+      }).catch(console.error);
+    }
   });
 
   return (
@@ -336,7 +346,7 @@ const PrListPage: Component = () => {
                                 additions={pr.additions}
                                 deletions={pr.deletions}
                               />
-                              <LazyCiStatusBadge prUrl={pr.url} />
+                              <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
                             </span>
                           </div>
                         </div>
