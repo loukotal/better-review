@@ -114,7 +114,7 @@ const PrListPage: Component = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const showMyPrs = () => searchParams.mine === "1";
   const showDrafts = () => searchParams.drafts !== "0";
-  const showNeedsReview = () => searchParams.needsReview === "1";
+  const showNeedsReview = () => searchParams.needsReview !== "0";
   const repoFilter = () => searchParams.repo ?? "";
 
   // Get unique repos from PR list
@@ -225,7 +225,7 @@ const PrListPage: Component = () => {
             <button
               onClick={() =>
                 setSearchParams({
-                  needsReview: showNeedsReview() ? undefined : "1",
+                  needsReview: showNeedsReview() ? "0" : undefined,
                 })
               }
               class={`px-3 py-1 border transition-colors ${
