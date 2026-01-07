@@ -1,10 +1,12 @@
-import { Component, For, Show, createEffect, createSignal } from "solid-js";
+import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import {
   queryKeys,
   api,
   prefetchPr,
+  prefetchCiStatuses,
+  queryClient,
   type SearchedPr,
   type CiStatus,
 } from "../lib/query";
@@ -163,15 +165,36 @@ const PrListPage: Component = () => {
     prs.forEach((pr) => prefetchPr(pr.url));
   });
 
-  // Batch fetch CI statuses for all visible PRs
+  // Batch fetch CI statuses for all visible PRs (debounced)
+  let ciStatusTimeout: ReturnType<typeof setTimeout> | undefined;
   createEffect(() => {
     const prs = filteredPrs();
     if (prs.length > 0) {
       const urls = prs.map((pr) => pr.url);
-      api.fetchCiStatusBatch(urls).then((statuses) => {
-        setCiStatuses((prev) => ({ ...prev, ...statuses }));
-      }).catch(console.error);
+
+      // Debounce to avoid rapid requests when filters change quickly
+      clearTimeout(ciStatusTimeout);
+      ciStatusTimeout = setTimeout(async () => {
+        try {
+          // Use prefetchCiStatuses which has caching logic to skip already-cached URLs
+          await prefetchCiStatuses(urls);
+
+          // Read from query cache and update local signal
+          const statuses: Record<string, CiStatus | null> = {};
+          for (const url of urls) {
+            const cached = queryClient.getQueryData<CiStatus | null>(queryKeys.pr.ciStatus(url));
+            if (cached !== undefined) {
+              statuses[url] = cached;
+            }
+          }
+          setCiStatuses((prev) => ({ ...prev, ...statuses }));
+        } catch (e) {
+          console.error("Failed to fetch CI statuses:", e);
+        }
+      }, 100);
     }
+
+    onCleanup(() => clearTimeout(ciStatusTimeout));
   });
 
   return (
