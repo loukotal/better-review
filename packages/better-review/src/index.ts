@@ -276,6 +276,44 @@ const main = Effect.gen(function* () {
           );
         },
       },
+      // Batch endpoint to fetch all PR data in one request
+      "/api/pr/batch": {
+        GET: (req) => {
+          const url = new URL(req.url);
+          const prUrl = url.searchParams.get("url");
+
+          if (!prUrl) {
+            return validationError("Missing url parameter");
+          }
+
+          return runJson(
+            Effect.gen(function* () {
+              // Fetch all data in parallel
+              const [diff, info, commits, comments, issueComments, status] =
+                yield* Effect.all(
+                  [
+                    gh.getDiff(prUrl),
+                    gh.getPrInfo(prUrl),
+                    gh.listCommits(prUrl),
+                    gh.listComments(prUrl),
+                    gh.listIssueComments(prUrl),
+                    gh.getPrStatus(prUrl),
+                  ],
+                  { concurrency: "unbounded" },
+                );
+
+              return {
+                diff,
+                info,
+                commits,
+                comments,
+                issueComments,
+                status,
+              };
+            }),
+          );
+        },
+      },
       "/api/pr/comment": {
         POST: async (req) => {
           const body = (await req.json()) as AddCommentParams;
