@@ -464,43 +464,40 @@ const AppContent: Component = () => {
     }
 
     try {
-      // Fetch fresh data (staleTime: 0 forces refetch even if cached)
-      const [diffData, infoData, commitsData] = await Promise.all([
-        queryClient.fetchQuery({
-          queryKey: queryKeys.pr.diff(currentPrUrl),
-          queryFn: () => api.fetchDiff(currentPrUrl),
-          staleTime: 0, // Always fetch fresh
-        }),
-        queryClient.fetchQuery({
-          queryKey: queryKeys.pr.info(currentPrUrl),
-          queryFn: () => api.fetchInfo(currentPrUrl),
-          staleTime: 0,
-        }),
-        queryClient.fetchQuery({
-          queryKey: queryKeys.pr.commits(currentPrUrl),
-          queryFn: () => api.fetchCommits(currentPrUrl),
-          staleTime: 0,
-        }),
-      ]);
+      // Use batch endpoint to fetch all data in one request
+      // Respects cache - only fetches if data is stale or missing
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.pr.batch(currentPrUrl),
+        queryFn: () => api.fetchPrBatch(currentPrUrl),
+        staleTime: 5 * 60 * 1000, // 5 minutes - use cached if fresh
+      });
 
-      setDiff(diffData);
+      // Populate individual query caches for components that use them
+      queryClient.setQueryData(queryKeys.pr.diff(currentPrUrl), data.diff);
+      queryClient.setQueryData(queryKeys.pr.info(currentPrUrl), data.info);
+      queryClient.setQueryData(queryKeys.pr.commits(currentPrUrl), data.commits);
+      queryClient.setQueryData(queryKeys.pr.comments(currentPrUrl), data.comments);
+      queryClient.setQueryData(queryKeys.pr.issueComments(currentPrUrl), data.issueComments);
+      queryClient.setQueryData(queryKeys.pr.status(currentPrUrl), data.status);
+
+      setDiff(data.diff);
       setLoadedPrUrl(currentPrUrl);
       setContextPrUrl(currentPrUrl);
-      setCommits(commitsData);
-      if (infoData) {
-        setPrInfo(infoData);
+      setCommits(data.commits);
+      if (data.info) {
+        setPrInfo(data.info);
       }
 
       // Restore commit mode from URL params (commit is a SHA prefix)
       const urlMode = searchParams.mode;
       const urlCommitSha = searchParams.commit as string | undefined;
-      if (urlMode === "commit" && commitsData.length > 0) {
+      if (urlMode === "commit" && data.commits.length > 0) {
         let idx = urlCommitSha
-          ? commitsData.findIndex((c: PrCommit) => c.sha.startsWith(urlCommitSha))
+          ? data.commits.findIndex((c: PrCommit) => c.sha.startsWith(urlCommitSha))
           : 0;
         if (idx === -1) idx = 0;
         setCurrentCommitIndex(idx);
-        loadCommitDiff(commitsData[idx].sha).then(() => {
+        loadCommitDiff(data.commits[idx].sha).then(() => {
           setReviewMode("commit");
         });
       }
@@ -508,32 +505,13 @@ const AppContent: Component = () => {
       setLoading(false);
 
       // Preload all commit diffs in background
-      if (commitsData.length > 0) {
-        preloadCommitDiffs(currentPrUrl, commitsData);
+      if (data.commits.length > 0) {
+        preloadCommitDiffs(currentPrUrl, data.commits);
       }
 
-      // Then load comments and status in parallel (background refresh)
-      setLoadingComments(true);
-      setLoadingStatus(true);
-
-      const [commentsData, issueCommentsData, statusData] = await Promise.all([
-        queryClient.fetchQuery({
-          queryKey: queryKeys.pr.comments(currentPrUrl),
-          queryFn: () => api.fetchComments(currentPrUrl),
-        }),
-        queryClient.fetchQuery({
-          queryKey: queryKeys.pr.issueComments(currentPrUrl),
-          queryFn: () => api.fetchIssueComments(currentPrUrl),
-        }),
-        queryClient.fetchQuery({
-          queryKey: queryKeys.pr.status(currentPrUrl),
-          queryFn: () => api.fetchStatus(currentPrUrl),
-        }),
-      ]);
-
-      setComments(commentsData);
-      setIssueComments(issueCommentsData);
-      setPrStatus(statusData);
+      setComments(data.comments);
+      setIssueComments(data.issueComments);
+      setPrStatus(data.status);
       setLoadingStatus(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load PR");

@@ -1,10 +1,12 @@
-import { Component, For, Show, createEffect } from "solid-js";
+import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import {
   queryKeys,
   api,
   prefetchPr,
+  prefetchCiStatuses,
+  queryClient,
   type SearchedPr,
   type CiStatus,
 } from "../lib/query";
@@ -42,17 +44,13 @@ const CiStatusBadgeInner: Component<{ status: CiStatus }> = (props) => {
   );
 };
 
-// Lazy-loading CI status badge - fetches status on mount
-const LazyCiStatusBadge: Component<{ prUrl: string }> = (props) => {
-  const ciQuery = useQuery(() => ({
-    queryKey: queryKeys.pr.ciStatus(props.prUrl),
-    queryFn: ({ signal }) => api.fetchPrCiStatus(props.prUrl, signal),
-    staleTime: 60 * 1000, // Cache for 1 minute
-  }));
+// CI status badge - reads from cache (populated by batch fetch)
+const CiStatusBadge: Component<{ prUrl: string; ciStatuses: Record<string, CiStatus | null> }> = (props) => {
+  const status = () => props.ciStatuses[props.prUrl];
 
   return (
-    <Show when={ciQuery.data}>
-      {(status) => <CiStatusBadgeInner status={status()} />}
+    <Show when={status()}>
+      {(s) => <CiStatusBadgeInner status={s()} />}
     </Show>
   );
 };
@@ -99,11 +97,17 @@ function formatRelativeTime(dateString: string): string {
 const PrListPage: Component = () => {
   // Use TanStack Query for PR list - automatically cached in IndexedDB
   // staleTime: 0 ensures we always fetch fresh data on mount while showing cached immediately
+  // refetchInterval: refresh every minute, but not when tab is in background
   const prsQuery = useQuery(() => ({
     queryKey: queryKeys.prs.list,
     queryFn: ({ signal }) => api.fetchPrList(signal),
     staleTime: 0,
+    refetchInterval: 60 * 1000,
+    refetchIntervalInBackground: true,
   }));
+
+  // CI statuses fetched via batch
+  const [ciStatuses, setCiStatuses] = createSignal<Record<string, CiStatus | null>>({});
 
   // Prefetch on mousedown (user intent to click)
   const handleMouseDown = (prUrl: string) => {
@@ -113,7 +117,7 @@ const PrListPage: Component = () => {
   // Filter state from URL params
   const [searchParams, setSearchParams] = useSearchParams();
   const showMyPrs = () => searchParams.mine === "1";
-  const showDrafts = () => searchParams.drafts !== "0";
+  const showDrafts = () => searchParams.drafts === "1";
   const showNeedsReview = () => searchParams.needsReview !== "0";
   const repoFilter = () => searchParams.repo ?? "";
 
@@ -155,10 +159,42 @@ const PrListPage: Component = () => {
     return result;
   };
 
-  // Prefetch first 3 PRs in the filtered list
+  // Prefetch first 5 PRs in the filtered list
   createEffect(() => {
     const prs = filteredPrs().slice(0, 5);
     prs.forEach((pr) => prefetchPr(pr.url));
+  });
+
+  // Batch fetch CI statuses for all visible PRs (debounced)
+  let ciStatusTimeout: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    const prs = filteredPrs();
+    if (prs.length > 0) {
+      const urls = prs.map((pr) => pr.url);
+
+      // Debounce to avoid rapid requests when filters change quickly
+      clearTimeout(ciStatusTimeout);
+      ciStatusTimeout = setTimeout(async () => {
+        try {
+          // Use prefetchCiStatuses which has caching logic to skip already-cached URLs
+          await prefetchCiStatuses(urls);
+
+          // Read from query cache and update local signal
+          const statuses: Record<string, CiStatus | null> = {};
+          for (const url of urls) {
+            const cached = queryClient.getQueryData<CiStatus | null>(queryKeys.pr.ciStatus(url));
+            if (cached !== undefined) {
+              statuses[url] = cached;
+            }
+          }
+          setCiStatuses((prev) => ({ ...prev, ...statuses }));
+        } catch (e) {
+          console.error("Failed to fetch CI statuses:", e);
+        }
+      }, 100);
+    }
+
+    onCleanup(() => clearTimeout(ciStatusTimeout));
   });
 
   return (
@@ -218,7 +254,7 @@ const PrListPage: Component = () => {
             </button>
             <button
               onClick={() =>
-                setSearchParams({ drafts: showDrafts() ? "0" : undefined })
+                setSearchParams({ drafts: showDrafts() ? undefined : "1" })
               }
               class={`px-3 py-1 border transition-colors ${
                 showDrafts()
@@ -336,7 +372,7 @@ const PrListPage: Component = () => {
                                 additions={pr.additions}
                                 deletions={pr.deletions}
                               />
-                              <LazyCiStatusBadge prUrl={pr.url} />
+                              <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
                             </span>
                           </div>
                         </div>

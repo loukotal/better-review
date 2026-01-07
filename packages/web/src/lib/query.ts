@@ -56,14 +56,17 @@ export interface IssueComment {
 export const queryKeys = {
   pr: {
     all: ["pr"] as const,
+    batch: (url: string) => ["pr", "batch", url] as const,
     diff: (url: string) => ["pr", "diff", url] as const,
     info: (url: string) => ["pr", "info", url] as const,
     commits: (url: string) => ["pr", "commits", url] as const,
     commitDiff: (url: string, sha: string) => ["pr", "commitDiff", url, sha] as const,
+    commitDiffsBatch: (url: string) => ["pr", "commitDiffsBatch", url] as const,
     comments: (url: string) => ["pr", "comments", url] as const,
     issueComments: (url: string) => ["pr", "issueComments", url] as const,
     status: (url: string) => ["pr", "status", url] as const,
     ciStatus: (url: string) => ["pr", "ci-status", url] as const,
+    ciStatusBatch: (urls: string[]) => ["pr", "ci-status-batch", urls.toSorted().join(",")] as const,
   },
   prs: {
     list: ["prs", "list"] as const,
@@ -138,57 +141,128 @@ export const api = {
     return data.ciStatus ?? null;
   },
 
+  async fetchCiStatusBatch(urls: string[], signal?: AbortSignal): Promise<Record<string, CiStatus | null>> {
+    const res = await fetch("/api/prs/ci-status/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls }),
+      signal,
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data.statuses ?? {};
+  },
+
+  async fetchCommitDiffsBatch(url: string, signal?: AbortSignal): Promise<Record<string, string | null>> {
+    const res = await fetch(`/api/pr/commit-diffs/batch?url=${encodeURIComponent(url)}`, { signal });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data.diffs ?? {};
+  },
+
   async fetchCurrentUser(signal?: AbortSignal): Promise<string | null> {
     const res = await fetch("/api/user", { signal });
     const data = await res.json();
     return data.login ?? null;
   },
+
+  async fetchPrBatch(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    diff: string;
+    info: { owner: string; repo: string; number: string };
+    commits: PrCommit[];
+    comments: PRComment[];
+    issueComments: IssueComment[];
+    status: PrStatus;
+  }> {
+    const res = await fetch(`/api/pr/batch?url=${encodeURIComponent(url)}`, { signal });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data;
+  },
 };
 
-// Prefetch a full PR (all related data)
+// Prefetch a full PR using batch endpoint (single request)
 export async function prefetchPr(url: string): Promise<void> {
-  await Promise.all([
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.pr.diff(url),
-      queryFn: ({ signal }) => api.fetchDiff(url, signal),
-    }),
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.pr.info(url),
-      queryFn: ({ signal }) => api.fetchInfo(url, signal),
-    }),
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.pr.commits(url),
-      queryFn: ({ signal }) => api.fetchCommits(url, signal),
-    }),
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.pr.comments(url),
-      queryFn: ({ signal }) => api.fetchComments(url, signal),
-    }),
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.pr.issueComments(url),
-      queryFn: ({ signal }) => api.fetchIssueComments(url, signal),
-    }),
-    queryClient.prefetchQuery({
-      queryKey: queryKeys.pr.status(url),
-      queryFn: ({ signal }) => api.fetchStatus(url, signal),
-    }),
-  ]);
+  // Check if batch is already cached
+  const existingBatch = queryClient.getQueryData(queryKeys.pr.batch(url));
+  if (existingBatch) return;
 
-  // After fetching commits, prefetch all commit diffs
-  const commits = queryClient.getQueryData<PrCommit[]>(queryKeys.pr.commits(url));
-  if (commits && commits.length > 0) {
-    // Prefetch commit diffs in background (don't await)
-    prefetchCommitDiffs(url, commits);
+  try {
+    // Use prefetchQuery so it respects staleTime and doesn't duplicate requests
+    await queryClient.prefetchQuery({
+      queryKey: queryKeys.pr.batch(url),
+      queryFn: () => api.fetchPrBatch(url),
+      staleTime: 5 * 60 * 1000, // 5 minutes
+    });
+
+    // Get the fetched data and populate individual caches
+    const data = queryClient.getQueryData<Awaited<ReturnType<typeof api.fetchPrBatch>>>(queryKeys.pr.batch(url));
+    if (data) {
+      queryClient.setQueryData(queryKeys.pr.diff(url), data.diff);
+      queryClient.setQueryData(queryKeys.pr.info(url), data.info);
+      queryClient.setQueryData(queryKeys.pr.commits(url), data.commits);
+      queryClient.setQueryData(queryKeys.pr.comments(url), data.comments);
+      queryClient.setQueryData(queryKeys.pr.issueComments(url), data.issueComments);
+      queryClient.setQueryData(queryKeys.pr.status(url), data.status);
+
+      // Prefetch commit diffs in background
+      if (data.commits.length > 0) {
+        prefetchCommitDiffs(url, data.commits);
+      }
+    }
+  } catch (e) {
+    console.error("Failed to prefetch PR:", e);
   }
 }
 
-// Prefetch all commit diffs for a PR (runs sequentially to avoid overwhelming server)
+// Prefetch all commit diffs for a PR using batch endpoint
 export async function prefetchCommitDiffs(url: string, commits: PrCommit[]): Promise<void> {
-  for (const commit of commits) {
-    await queryClient.prefetchQuery({
-      queryKey: queryKeys.pr.commitDiff(url, commit.sha),
-      queryFn: ({ signal }) => api.fetchCommitDiff(url, commit.sha, signal),
-    });
+  if (commits.length === 0) return;
+
+  // Check if already cached
+  const existingBatch = queryClient.getQueryData(queryKeys.pr.commitDiffsBatch(url));
+  if (existingBatch) return;
+
+  try {
+    const diffs = await api.fetchCommitDiffsBatch(url);
+
+    // Populate individual query caches
+    for (const [sha, diff] of Object.entries(diffs)) {
+      if (diff) {
+        queryClient.setQueryData(queryKeys.pr.commitDiff(url, sha), diff);
+      }
+    }
+
+    // Mark batch as complete
+    queryClient.setQueryData(queryKeys.pr.commitDiffsBatch(url), diffs);
+  } catch (e) {
+    console.error("Failed to prefetch commit diffs:", e);
+  }
+}
+
+// Prefetch CI statuses for multiple PRs using batch endpoint
+export async function prefetchCiStatuses(urls: string[]): Promise<void> {
+  if (urls.length === 0) return;
+
+  // Filter out already cached URLs
+  const uncachedUrls = urls.filter(
+    (url) => !queryClient.getQueryData(queryKeys.pr.ciStatus(url))
+  );
+
+  if (uncachedUrls.length === 0) return;
+
+  try {
+    const statuses = await api.fetchCiStatusBatch(uncachedUrls);
+
+    // Populate individual query caches
+    for (const [url, status] of Object.entries(statuses)) {
+      queryClient.setQueryData(queryKeys.pr.ciStatus(url), status);
+    }
+  } catch (e) {
+    console.error("Failed to prefetch CI statuses:", e);
   }
 }
 
