@@ -66,7 +66,7 @@ export const queryKeys = {
     issueComments: (url: string) => ["pr", "issueComments", url] as const,
     status: (url: string) => ["pr", "status", url] as const,
     ciStatus: (url: string) => ["pr", "ci-status", url] as const,
-    ciStatusBatch: (urls: string[]) => ["pr", "ci-status-batch", urls.join(",")] as const,
+    ciStatusBatch: (urls: string[]) => ["pr", "ci-status-batch", urls.toSorted().join(",")] as const,
   },
   prs: {
     list: ["prs", "list"] as const,
