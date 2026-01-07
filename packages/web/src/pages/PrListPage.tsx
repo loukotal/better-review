@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js";
+import { Component, For, Show, createEffect } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import {
@@ -154,6 +154,12 @@ const PrListPage: Component = () => {
 
     return result;
   };
+
+  // Prefetch first 3 PRs in the filtered list
+  createEffect(() => {
+    const prs = filteredPrs().slice(0, 5);
+    prs.forEach((pr) => prefetchPr(pr.url));
+  });
 
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
