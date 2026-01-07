@@ -6,11 +6,12 @@ export default tool({
   description:
     "Get PR metadata including title, description, and list of changed files with line counts (+added -removed). Use this to understand the scope of the PR before diving into specific files.",
   args: {},
-  async execute() {
-    console.log(`[pr-metadata] Fetching PR metadata`);
+  async execute(_args, context) {
+    console.log(`[pr-metadata] Fetching PR metadata for session: ${context.sessionID}`);
 
     try {
-      const response = await fetch(`${API_BASE}/api/pr/metadata`);
+      // Include sessionId to support multiple tabs with different PRs
+      const response = await fetch(`${API_BASE}/api/pr/metadata?sessionId=${encodeURIComponent(context.sessionID)}`);
       const data = await response.json();
 
       if (!response.ok) {

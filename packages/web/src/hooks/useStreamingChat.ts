@@ -127,25 +127,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       }
     };
 
-    let eventCount = 0;
     eventSource.onmessage = (msg) => {
       try {
-        eventCount++;
         const event = JSON.parse(msg.data) as StreamEvent;
-
-        // Log first 15 events with timing for debugging
-        if (eventCount <= 15) {
-          const now = performance.now().toFixed(1);
-          console.log(
-            `[useStreamingChat] Event #${eventCount} @${now}ms: type=${event.type}`,
-            event.type === "text"
-              ? `delta.len=${event.delta.length}`
-              : event.type === "status"
-                ? `status=${event.status}`
-                : "",
-          );
-        }
-
         handleEvent(event);
       } catch (e) {
         console.error("[useStreamingChat] Failed to parse event:", e);
@@ -169,20 +153,8 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
       case "text":
         // Append streaming text
-        setStreamingContent((prev) => {
-          const newContent = prev + event.delta;
-          // Log first text content for debugging
-          if (prev.length === 0) {
-            console.log(
-              `[useStreamingChat] FIRST TEXT: "${event.delta.slice(0, 50)}..."`,
-            );
-          }
-          return newContent;
-        });
+        setStreamingContent((prev) => prev + event.delta);
         if (!currentMessageId()) {
-          console.log(
-            `[useStreamingChat] Setting currentMessageId: ${event.messageId}`,
-          );
           setCurrentMessageId(event.messageId);
         }
         break;
@@ -242,16 +214,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
       case "status":
         if (event.status === "busy") {
-          console.log(`[useStreamingChat] STATUS: busy -> setIsStreaming(true)`);
           setIsStreaming(true);
         } else if (event.status === "idle") {
-          console.log(
-            `[useStreamingChat] STATUS: idle -> finalizeMessage (content.len=${streamingContent().length})`,
-          );
-          // Finalize the current message
           finalizeMessage();
-        } else if (event.status === "retry") {
-          console.log("[useStreamingChat] Retry:", event.message);
         }
         break;
 
@@ -274,13 +239,8 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     const tools = activeTools();
     const msgId = currentMessageId();
 
-    console.log(
-      `[useStreamingChat] finalizeMessage: content.len=${content.length}, reasoning.len=${reasoning.length}, tools=${tools.length}, msgId=${msgId}`,
-    );
-
     if (!content && !reasoning && tools.length === 0) {
       // Nothing to finalize
-      console.log(`[useStreamingChat] Nothing to finalize, skipping`);
       setIsStreaming(false);
       return;
     }

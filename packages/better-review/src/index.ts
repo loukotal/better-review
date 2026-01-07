@@ -360,6 +360,7 @@ const main = Effect.gen(function* () {
         GET: async (req) => {
           const url = new URL(req.url);
           const file = url.searchParams.get("file");
+          const sessionId = url.searchParams.get("sessionId");
           const startLineParam = url.searchParams.get("startLine");
           const endLineParam = url.searchParams.get("endLine");
 
@@ -368,42 +369,30 @@ const main = Effect.gen(function* () {
             : undefined;
           const endLine = endLineParam ? parseInt(endLineParam, 10) : undefined;
 
-          if (!file) {
+          if (!file || !sessionId) {
             return Response.json(
-              { error: "Missing file parameter" },
+              { error: "Missing file or sessionId parameter" },
               { status: 400 },
             );
           }
 
           return runJson(
             Effect.gen(function* () {
-              const ctx = yield* prContext.getCurrent;
-
-              yield* Effect.log(
-                `[file-diff] Request for file: ${file}, startLine: ${startLine}, endLine: ${endLine}`,
-              );
-              yield* Effect.log(`[file-diff] Current PR: ${ctx.prUrl}`);
-              yield* Effect.log(
-                `[file-diff] Available files: ${ctx.files.length}`,
-              );
-
-              if (!ctx.prUrl) {
+              // O(1) lookup of PR URL from session
+              const prUrl = yield* prContext.getPrUrlBySessionId(sessionId);
+              
+              if (!prUrl) {
                 return yield* Effect.fail(
-                  new Error("No PR context. Load a PR first."),
+                  new Error("Session not found. Load a PR first."),
                 );
               }
 
-              // Check if file is in the list of changed files
-              if (!ctx.files.includes(file)) {
-                return yield* Effect.fail(
-                  new Error(
-                    `File "${file}" is not in the list of changed files`,
-                  ),
-                );
-              }
+              yield* Effect.log(
+                `[file-diff] Session ${sessionId} -> PR ${prUrl}, file: ${file}`,
+              );
 
               // Get from cache
-              const prDiffs = yield* diffCache.get(ctx.prUrl);
+              const prDiffs = yield* diffCache.get(prUrl);
               if (!prDiffs) {
                 return yield* Effect.fail(
                   new Error("Diffs not cached. This shouldn't happen."),
@@ -438,47 +427,63 @@ const main = Effect.gen(function* () {
 
       // PR metadata endpoint for the pr_metadata tool
       "/api/pr/metadata": {
-        GET: async () => {
+        GET: async (req) => {
+          const url = new URL(req.url);
+          const sessionId = url.searchParams.get("sessionId");
+
+          if (!sessionId) {
+            return Response.json(
+              { error: "Missing sessionId parameter" },
+              { status: 400 },
+            );
+          }
+
           return runJson(
             Effect.gen(function* () {
-              const ctx = yield* prContext.getCurrent;
-
-              if (!ctx.prUrl || !ctx.info) {
+              // O(1) lookup of PR URL from session
+              const prUrl = yield* prContext.getPrUrlBySessionId(sessionId);
+              
+              if (!prUrl) {
                 return yield* Effect.fail(
-                  new Error("No PR context. Load a PR first."),
+                  new Error("Session not found. Load a PR first."),
                 );
               }
 
+              yield* Effect.log(`[metadata] Session ${sessionId} -> PR ${prUrl}`);
+
               // Get PR status (includes description)
-              const prStatus = yield* gh.getPrStatus(ctx.prUrl);
+              const prStatus = yield* gh.getPrStatus(prUrl);
 
               // Get cached diffs and compute line counts
-              const prDiffs = yield* diffCache.get(ctx.prUrl);
+              const prDiffs = yield* diffCache.get(prUrl);
               const fileStats: string[] = [];
+              const files: string[] = [];
 
               if (prDiffs) {
-                for (const file of ctx.files) {
-                  const fileMeta = prDiffs.get(file);
-                  if (fileMeta) {
-                    const { totalAdded, totalRemoved, hunks } = fileMeta;
-                    // Show hunk ranges for large files (>1k lines changed)
-                    if (totalAdded + totalRemoved > 1000 && hunks.length > 0) {
-                      const ranges = hunks
-                        .map(
-                          (h) => `${h.newStart}-${h.newStart + h.newCount - 1}`,
-                        )
-                        .join(", ");
-                      fileStats.push(
-                        `${file} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`,
-                      );
-                    } else {
-                      fileStats.push(`${file} +${totalAdded} -${totalRemoved}`);
-                    }
+                for (const [file, fileMeta] of prDiffs) {
+                  files.push(file);
+                  const { totalAdded, totalRemoved, hunks } = fileMeta;
+                  // Show hunk ranges for large files (>1k lines changed)
+                  if (totalAdded + totalRemoved > 1000 && hunks.length > 0) {
+                    const ranges = hunks
+                      .map(
+                        (h) => `${h.newStart}-${h.newStart + h.newCount - 1}`,
+                      )
+                      .join(", ");
+                    fileStats.push(
+                      `${file} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`,
+                    );
                   } else {
-                    fileStats.push(`${file} (no diff)`);
+                    fileStats.push(`${file} +${totalAdded} -${totalRemoved}`);
                   }
                 }
               }
+
+              // Parse owner/repo/number from PR URL
+              const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+              const owner = match?.[1] ?? "unknown";
+              const repo = match?.[2] ?? "unknown";
+              const number = match?.[3] ?? "?";
 
               // Build compact text output
               const description = prStatus.body
@@ -487,7 +492,7 @@ const main = Effect.gen(function* () {
                   : prStatus.body
                 : "(no description)";
 
-              const metadata = `PR: ${ctx.info.owner}/${ctx.info.repo}#${ctx.info.number}
+              const metadata = `PR: ${owner}/${repo}#${number}
 Title: ${prStatus.title}
 Author: ${prStatus.author}
 State: ${prStatus.state}${prStatus.draft ? " (draft)" : ""}
@@ -495,7 +500,7 @@ State: ${prStatus.state}${prStatus.draft ? " (draft)" : ""}
 Description:
 ${description}
 
-Files (${ctx.files.length} changed):
+Files (${files.length} changed):
 ${fileStats.join("\n")}`;
 
               console.log({ metadata });
@@ -551,6 +556,8 @@ ${fileStats.join("\n")}`;
           return runJson(
             Effect.gen(function* () {
               yield* prContext.setActiveSession(body.prUrl, body.sessionId);
+              // Register session → PR mapping for O(1) lookup by tools
+              yield* prContext.registerSession(body.sessionId, body.prUrl);
               return { success: true, activeSessionId: body.sessionId };
             }),
           );
@@ -731,6 +738,9 @@ ${fileStats.join("\n")}`;
                   );
 
                   if (existingSessionData.data) {
+                    // Register session → PR mapping for O(1) lookup by tools
+                    yield* prContext.registerSession(activeSessionId, body.prUrl);
+                    
                     yield* Effect.log(
                       "[API] Reusing session:",
                       activeSessionId,

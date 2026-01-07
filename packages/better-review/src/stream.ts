@@ -124,14 +124,33 @@ export function transformEvent(
   event: OpenCodeEvent,
   sessionId: string,
 ): StreamEvent | null {
-  // Filter events for this session
   const props = event.properties as Record<string, unknown>;
 
-  // Check if event belongs to this session
-  if ("sessionID" in props && props.sessionID !== sessionId) {
-    console.log(
-      `[transformEvent] FILTERED: sessionID mismatch (event: ${props.sessionID}, expected: ${sessionId})`,
-    );
+  // Extract sessionID based on event type - it's nested differently for each
+  let eventSessionId: string | undefined;
+
+  switch (event.type) {
+    case "message.part.updated":
+    case "message.part.removed":
+      // sessionID is inside the part object
+      eventSessionId = (props.part as { sessionID?: string })?.sessionID;
+      break;
+    case "message.updated":
+    case "message.removed":
+      // sessionID is inside the info/message object
+      eventSessionId = (props.info as { sessionID?: string })?.sessionID;
+      break;
+    case "server.connected":
+      // Global event, no sessionID - let it through
+      eventSessionId = undefined;
+      break;
+    default:
+      // Most events (session.status, session.idle, session.error, etc.) have sessionID at top level
+      eventSessionId = props.sessionID as string | undefined;
+  }
+
+  // Filter events that don't belong to this session
+  if (eventSessionId && eventSessionId !== sessionId) {
     return null;
   }
 
