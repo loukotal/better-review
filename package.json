@@ -9,7 +9,8 @@
   ],
   "scripts": {
     "dev": "bun run --cwd packages/better-review dev & bun run --cwd packages/web dev",
-    "start": "bun run --cwd packages/web build && bun run --cwd packages/better-review start"
+    "start": "bun run --cwd packages/web build && bun run --cwd packages/better-review start",
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist bun.lockb && bun install"
   },
   "devDependencies": {
     "@types/bun": "latest"
