@@ -112,7 +112,7 @@ const PrListPage: Component = () => {
   // Filter state from URL params
   const [searchParams, setSearchParams] = useSearchParams();
   const showMyPrs = () => searchParams.mine === "1";
-  const showDrafts = () => searchParams.drafts !== "0";
+  const showDrafts = () => searchParams.drafts === "1";
   const showNeedsReview = () => searchParams.needsReview !== "0";
   const repoFilter = () => searchParams.repo ?? "";
 
@@ -228,7 +228,7 @@ const PrListPage: Component = () => {
             </button>
             <button
               onClick={() =>
-                setSearchParams({ drafts: showDrafts() ? "0" : undefined })
+                setSearchParams({ drafts: showDrafts() ? undefined : "1" })
               }
               class={`px-3 py-1 border transition-colors ${
                 showDrafts()
