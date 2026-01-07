@@ -1,4 +1,3 @@
-import { Console, Effect, Stream, Queue, Data, Option, Fiber } from "effect";
 import type {
   Event as OpenCodeEvent,
   ToolState,
@@ -54,19 +53,6 @@ export type StreamEvent =
   | { type: "connected" };
 
 // =============================================================================
-// Error Types
-// =============================================================================
-
-export class StreamError extends Data.TaggedError("StreamError")<{
-  readonly cause: unknown;
-  readonly message: string;
-}> {}
-
-export class ConnectionError extends Data.TaggedError("ConnectionError")<{
-  readonly cause: unknown;
-}> {}
-
-// =============================================================================
 // Event Transformation
 // =============================================================================
 
@@ -120,6 +106,10 @@ function transformToolState(
   }
 }
 
+/**
+ * Transform an OpenCode SDK event into a simplified StreamEvent for the frontend.
+ * Returns null if the event should be filtered out.
+ */
 export function transformEvent(
   event: OpenCodeEvent,
   sessionId: string,
@@ -252,190 +242,4 @@ export function transformEvent(
     default:
       return null;
   }
-}
-
-// =============================================================================
-// SSE Formatting
-// =============================================================================
-
-export function formatSSE(event: StreamEvent): string {
-  const data = JSON.stringify(event);
-  return `data: ${data}\n\n`;
-}
-
-export function formatSSEComment(comment: string): string {
-  return `: ${comment}\n\n`;
-}
-
-// =============================================================================
-// OpenCode Event Stream (Server-side with fetch)
-// =============================================================================
-
-/**
- * Creates an Effect Stream that connects to OpenCode's SSE endpoint
- * and emits transformed events for a specific session.
- */
-export function createOpenCodeStream(
-  baseUrl: string,
-  sessionId: string,
-): Stream.Stream<StreamEvent, StreamError> {
-  return Stream.unwrap(
-    Effect.gen(function* () {
-      const eventUrl = `${baseUrl}/event`;
-      yield* Effect.log(`[SSE] Connecting to OpenCode: ${eventUrl}`);
-
-      const response = yield* Effect.tryPromise({
-        try: () =>
-          fetch(eventUrl, { headers: { Accept: "text/event-stream" } }),
-        catch: (cause) =>
-          new StreamError({ cause, message: "Failed to connect to OpenCode" }),
-      });
-
-      if (!response.ok || !response.body) {
-        return yield* Effect.fail(
-          new StreamError({
-            cause: null,
-            message: `Failed to connect: ${response.status}`,
-          }),
-        );
-      }
-
-      yield* Effect.log(`[SSE] Connection established, starting stream`);
-
-      // Create a stream from the response body
-      const byteStream = Stream.fromReadableStream<Uint8Array, StreamError>(
-        () => response.body!,
-        (cause) => new StreamError({ cause, message: "Stream read error" }),
-      );
-
-      // Track which text messages we've logged (to avoid spam)
-      const loggedTextMessages = new Set<string>();
-      let eventCount = 0;
-
-      const eventStream: Stream.Stream<StreamEvent, StreamError> =
-        byteStream.pipe(
-          // Decode bytes to text
-          Stream.decodeText(),
-          // Parse SSE lines
-          Stream.mapAccum("", (buffer, chunk) => {
-            const combined = buffer + chunk;
-            const lines = combined.split("\n");
-            // Keep the last incomplete line in the buffer
-            const newBuffer = lines.pop() || "";
-            return [newBuffer, lines] as const;
-          }),
-          Stream.flatMap((lines) => Stream.fromIterable(lines)),
-          // Filter and parse data lines
-          Stream.filter((line) => line.startsWith("data: ")),
-          Stream.map((line) => line.slice(6)),
-          Stream.filterMap((data) => {
-            try {
-              eventCount++;
-              const event = JSON.parse(data) as OpenCodeEvent;
-
-              // Log first 10 raw events for debugging
-              if (eventCount <= 10) {
-                console.log(
-                  `[SSE] Raw event #${eventCount}: type=${event.type}`,
-                  event.type === "message.part.updated"
-                    ? `part.type=${(event.properties as { part?: { type?: string } })?.part?.type}, delta=${!!(event.properties as { delta?: string })?.delta}`
-                    : "",
-                );
-              }
-
-              const transformed = transformEvent(event, sessionId);
-
-              if (!transformed && eventCount <= 10) {
-                console.log(
-                  `[SSE] Event #${eventCount} filtered out (returned null)`,
-                );
-              }
-
-              return transformed ? Option.some(transformed) : Option.none();
-            } catch (e) {
-              console.error(`[SSE] Parse error:`, e);
-              return Option.none();
-            }
-          }),
-          // Log emitted events for debugging
-          Stream.tap((event) => {
-            // Skip reasoning entirely
-            if (event.type === "reasoning") return Effect.void;
-
-            // Log text only once per message
-            if (event.type === "text") {
-              if (loggedTextMessages.has(event.messageId)) return Effect.void;
-              loggedTextMessages.add(event.messageId);
-              return Console.log(
-                `[SSE->FE] EMIT text started (message: ${event.messageId})`,
-              );
-            }
-
-            // Log status events explicitly
-            if (event.type === "status") {
-              return Console.log(`[SSE->FE] EMIT status: ${event.status}`);
-            }
-
-            // Log errors with full details
-            if (event.type === "error") {
-              return Console.error("[SSE->FE] EMIT error:", event);
-            }
-
-            // Log everything else
-            return Console.log(`[SSE->FE] EMIT ${event.type}`);
-          }),
-        );
-
-      // Prepend connected event
-      const connectedEvent: StreamEvent = { type: "connected" };
-      return Stream.concat(Stream.make(connectedEvent), eventStream);
-    }),
-  );
-}
-
-// =============================================================================
-// SSE Response Helper for Bun
-// =============================================================================
-
-/**
- * Converts an Effect Stream of events into an SSE Response.
- * Handles error events and cleanup automatically.
- */
-export function streamToSSEResponse(
-  stream: Stream.Stream<StreamEvent, StreamError>,
-): Response {
-  const encoder = new TextEncoder();
-
-  // Convert the Effect Stream to a web ReadableStream
-  const readable = Stream.toReadableStream(
-    Stream.concat(
-      // Start with connection comment
-      Stream.make(encoder.encode(formatSSEComment("connected"))),
-      // Then the actual events
-      stream.pipe(
-        // Format each event as SSE
-        Stream.map((event) => encoder.encode(formatSSE(event))),
-        // Handle errors by sending error event then ending
-        Stream.catchAll((error) =>
-          Stream.make(
-            encoder.encode(
-              formatSSE({
-                type: "error",
-                code: "stream_error",
-                message: error.message,
-              }),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-
-  return new Response(readable, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
 }

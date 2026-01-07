@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, createEffect, batch } from "solid-js";
+import { trpc } from "../lib/trpc";
 
 // =============================================================================
 // Types (matches backend StreamEvent)
@@ -88,16 +89,16 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     null,
   );
 
-  let eventSource: EventSource | null = null;
+  let unsubscribe: (() => void) | null = null;
 
-  // Connect to SSE when sessionId changes
+  // Connect to tRPC subscription when sessionId changes
   createEffect(() => {
     const sessionId = options.getSessionId();
 
-    // Cleanup previous connection
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
+    // Cleanup previous subscription
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
       setIsConnected(false);
     }
 
@@ -107,41 +108,37 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
     console.log(`[useStreamingChat] Connecting to session: ${sessionId}`);
 
-    const url = `/api/opencode/events?sessionId=${encodeURIComponent(sessionId)}`;
-    eventSource = new EventSource(url);
+    // Subscribe using tRPC subscription
+    const subscription = trpc.opencode.events.subscribe(
+      { sessionId },
+      {
+        onStarted: () => {
+          console.log("[useStreamingChat] Subscription started");
+        },
+        onData: (event) => {
+          handleEvent(event as StreamEvent);
+        },
+        onError: (err) => {
+          console.error("[useStreamingChat] Subscription error:", err);
+          setIsConnected(false);
+          setError("Connection lost");
+          options.onError?.("Connection lost");
+        },
+        onComplete: () => {
+          console.log("[useStreamingChat] Subscription completed");
+          setIsConnected(false);
+        },
+      },
+    );
 
-    eventSource.onopen = () => {
-      console.log("[useStreamingChat] SSE connected");
-      setIsConnected(true);
-      setError(null);
-    };
-
-    eventSource.onerror = (err) => {
-      console.error("[useStreamingChat] SSE error:", err);
-      setIsConnected(false);
-
-      // Don't set error immediately - EventSource will auto-reconnect
-      if (eventSource?.readyState === EventSource.CLOSED) {
-        setError("Connection lost");
-        options.onError?.("Connection lost");
-      }
-    };
-
-    eventSource.onmessage = (msg) => {
-      try {
-        const event = JSON.parse(msg.data) as StreamEvent;
-        handleEvent(event);
-      } catch (e) {
-        console.error("[useStreamingChat] Failed to parse event:", e);
-      }
-    };
+    unsubscribe = subscription.unsubscribe;
   });
 
   // Cleanup on unmount
   onCleanup(() => {
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
     }
   });
 
@@ -149,6 +146,8 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     switch (event.type) {
       case "connected":
         console.log("[useStreamingChat] Connected to event stream");
+        setIsConnected(true);
+        setError(null);
         break;
 
       case "text":
@@ -293,22 +292,13 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     setError(null);
 
     try {
-      const response = await fetch("/api/opencode/prompt-start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          message,
-          agent,
-        }),
+      await trpc.opencode.promptStart.mutate({
+        sessionId,
+        message,
+        agent,
       });
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
-      // Success - streaming will happen via SSE
+      // Success - streaming will happen via subscription
       return true;
     } catch (err) {
       const errorMsg =
@@ -325,11 +315,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     if (!sessionId) return;
 
     try {
-      await fetch("/api/opencode/abort", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
-      });
+      await trpc.opencode.abort.mutate({ sessionId });
     } catch (err) {
       console.error("[useStreamingChat] Abort error:", err);
     }
