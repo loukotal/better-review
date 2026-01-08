@@ -11,7 +11,9 @@ export default tool({
 
     try {
       // Include sessionId to support multiple tabs with different PRs
-      const response = await fetch(`${API_BASE}/api/pr/metadata?sessionId=${encodeURIComponent(context.sessionID)}`);
+      const response = await fetch(
+        `${API_BASE}/api/pr/metadata?sessionId=${encodeURIComponent(context.sessionID)}`,
+      );
       const data = await response.json();
 
       if (!response.ok) {

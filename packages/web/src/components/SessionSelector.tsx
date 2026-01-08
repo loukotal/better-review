@@ -1,4 +1,5 @@
 import { createSignal, For, Show, createMemo, onCleanup, onMount } from "solid-js";
+
 import type { StoredSession } from "@better-review/shared";
 
 interface SessionSelectorProps {
@@ -82,18 +83,13 @@ export function SessionSelector(props: SessionSelectorProps) {
         class="flex items-center gap-1.5 px-2 py-0.5 text-sm border border-border hover:border-text-faint disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         title="Switch session"
       >
-        <span class="text-text-muted">
-          Session {activeIndex() || 1}
-        </span>
+        <span class="text-text-muted">Session {activeIndex() || 1}</span>
         <Show when={activeSession() && isShaOutdated(activeSession()!.headSha)}>
-          <span class="text-warning text-xs" title="PR has new commits">*</span>
+          <span class="text-warning text-xs" title="PR has new commits">
+            *
+          </span>
         </Show>
-        <svg
-          class="w-3 h-3 text-text-faint"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
+        <svg class="w-3 h-3 text-text-faint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
@@ -119,14 +115,9 @@ export function SessionSelector(props: SessionSelectorProps) {
                 >
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
-                      <span class="text-sm text-text">
-                        Session {index() + 1}
-                      </span>
+                      <span class="text-sm text-text">Session {index() + 1}</span>
                       <Show when={isShaOutdated(session.headSha)}>
-                        <span
-                          class="text-warning text-xs"
-                          title="Created on older commit"
-                        >
+                        <span class="text-warning text-xs" title="Created on older commit">
                           (outdated)
                         </span>
                       </Show>
@@ -146,12 +137,7 @@ export function SessionSelector(props: SessionSelectorProps) {
                       class="opacity-0 group-hover:opacity-100 p-1 text-text-faint hover:text-error transition-opacity"
                       title="Hide session"
                     >
-                      <svg
-                        class="w-3 h-3"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path
                           stroke-linecap="round"
                           stroke-linejoin="round"
@@ -173,12 +159,7 @@ export function SessionSelector(props: SessionSelectorProps) {
               onClick={handleNewSession}
               class="w-full flex items-center gap-2 px-3 py-2 text-sm text-accent hover:bg-bg-elevated transition-colors"
             >
-              <svg
-                class="w-4 h-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"

@@ -1,13 +1,13 @@
 /**
  * Token parser for AI review responses.
- * 
+ *
  * Parses special tokens:
  * - <<REVIEW_ORDER>>["file1", "file2"]<</REVIEW_ORDER>>
  * - <<ANNOTATION file="path" line="42" severity="warning">>message<</ANNOTATION>>
  * - [[file:path/to/file.ts]] or [[file:path/to/file.ts:42]]
  */
 
-export type AnnotationSeverity = 'info' | 'warning' | 'critical';
+export type AnnotationSeverity = "info" | "warning" | "critical";
 
 export interface Annotation {
   id: string;
@@ -23,10 +23,10 @@ export interface FileRef {
 }
 
 export type MessageSegment =
-  | { type: 'text'; content: string }
-  | { type: 'file-ref'; file: string; line?: number }
-  | { type: 'annotation'; annotation: Annotation }
-  | { type: 'review-order'; files: string[] };
+  | { type: "text"; content: string }
+  | { type: "file-ref"; file: string; line?: number }
+  | { type: "annotation"; annotation: Annotation }
+  | { type: "review-order"; files: string[] };
 
 export interface ParsedMessage {
   segments: MessageSegment[];
@@ -36,7 +36,8 @@ export interface ParsedMessage {
 
 // Regex patterns - note: closing tags use << >> not </ >>
 const REVIEW_ORDER_PATTERN = /<<REVIEW_ORDER>>([\s\S]*?)<<\/REVIEW_ORDER>>/g;
-const ANNOTATION_PATTERN = /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
+const ANNOTATION_PATTERN =
+  /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
 const FILE_REF_PATTERN = /\[\[file:([^\]:\s]+)(?::(\d+))?\]\]/g;
 // Pattern to clean up hallucinated placeholder-like strings from the AI
 const HALLUCINATED_PLACEHOLDER_PATTERN = /#{1,3}\s*__FILE_REF_[^_\s]+_[^_\s]+__\s*\n?/g;
@@ -51,14 +52,14 @@ export function parseReviewTokens(content: string): ParsedMessage {
   const annotations: Annotation[] = [];
   let reviewOrder: string[] | null = null;
   const segments: MessageSegment[] = [];
-  
+
   // First pass: Extract review order and annotations, replace with placeholders
   let processedContent = content;
   const placeholders: Map<string, MessageSegment> = new Map();
-  
+
   // Clean up any hallucinated placeholder-like strings from the AI
-  processedContent = processedContent.replace(HALLUCINATED_PLACEHOLDER_PATTERN, '');
-  
+  processedContent = processedContent.replace(HALLUCINATED_PLACEHOLDER_PATTERN, "");
+
   // Extract review order
   processedContent = processedContent.replace(REVIEW_ORDER_PATTERN, (match, jsonContent) => {
     try {
@@ -66,7 +67,7 @@ export function parseReviewTokens(content: string): ParsedMessage {
       if (Array.isArray(files)) {
         reviewOrder = files;
         const placeholder = `__REVIEW_ORDER_${Date.now()}__`;
-        placeholders.set(placeholder, { type: 'review-order', files });
+        placeholders.set(placeholder, { type: "review-order", files });
         return placeholder;
       }
     } catch {
@@ -74,73 +75,76 @@ export function parseReviewTokens(content: string): ParsedMessage {
     }
     return match;
   });
-  
+
   // Extract annotations
-  processedContent = processedContent.replace(ANNOTATION_PATTERN, (match, file, lineStr, severity, message) => {
-    // Handle line ranges like "15-16" by taking the first number
-    const lineMatch = lineStr.match(/^(\d+)/);
-    const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
-    
-    const annotation: Annotation = {
-      id: generateAnnotationId(),
-      file,
-      line,
-      severity: severity as AnnotationSeverity,
-      message: message.trim(),
-    };
-    annotations.push(annotation);
-    const placeholder = `__ANNOTATION_${annotation.id}__`;
-    placeholders.set(placeholder, { type: 'annotation', annotation });
-    return placeholder;
-  });
-  
+  processedContent = processedContent.replace(
+    ANNOTATION_PATTERN,
+    (match, file, lineStr, severity, message) => {
+      // Handle line ranges like "15-16" by taking the first number
+      const lineMatch = lineStr.match(/^(\d+)/);
+      const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
+
+      const annotation: Annotation = {
+        id: generateAnnotationId(),
+        file,
+        line,
+        severity: severity as AnnotationSeverity,
+        message: message.trim(),
+      };
+      annotations.push(annotation);
+      const placeholder = `__ANNOTATION_${annotation.id}__`;
+      placeholders.set(placeholder, { type: "annotation", annotation });
+      return placeholder;
+    },
+  );
+
   // Extract file references
   processedContent = processedContent.replace(FILE_REF_PATTERN, (match, file, line) => {
     const placeholder = `__FILE_REF_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
-    placeholders.set(placeholder, { 
-      type: 'file-ref', 
-      file, 
-      line: line ? parseInt(line, 10) : undefined 
+    placeholders.set(placeholder, {
+      type: "file-ref",
+      file,
+      line: line ? parseInt(line, 10) : undefined,
     });
     return placeholder;
   });
-  
+
   // Build segments by splitting on placeholders
   const placeholderPattern = /__(?:REVIEW_ORDER|ANNOTATION|FILE_REF)_[^_]+__/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
-  
+
   while ((match = placeholderPattern.exec(processedContent)) !== null) {
     // Add text before placeholder
     if (match.index > lastIndex) {
       const text = processedContent.slice(lastIndex, match.index);
       if (text) {
-        segments.push({ type: 'text', content: text });
+        segments.push({ type: "text", content: text });
       }
     }
-    
+
     // Add placeholder content
     const segment = placeholders.get(match[0]);
     if (segment) {
       segments.push(segment);
     }
-    
+
     lastIndex = match.index + match[0].length;
   }
-  
+
   // Add remaining text
   if (lastIndex < processedContent.length) {
     const text = processedContent.slice(lastIndex);
     if (text) {
-      segments.push({ type: 'text', content: text });
+      segments.push({ type: "text", content: text });
     }
   }
-  
+
   // If no segments were created, treat the whole content as text
   if (segments.length === 0 && content) {
-    segments.push({ type: 'text', content });
+    segments.push({ type: "text", content });
   }
-  
+
   return { segments, reviewOrder, annotations };
 }
 
@@ -178,14 +182,15 @@ export function extractReviewOrder(content: string): string[] | null {
  */
 export function extractAnnotations(content: string): Annotation[] {
   const annotations: Annotation[] = [];
-  const pattern = /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
+  const pattern =
+    /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
   let match: RegExpExecArray | null;
-  
+
   while ((match = pattern.exec(content)) !== null) {
     // Handle line ranges like "15-16" by taking the first number
     const lineMatch = match[2].match(/^(\d+)/);
     const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
-    
+
     annotations.push({
       id: generateAnnotationId(),
       file: match[1],
@@ -194,6 +199,6 @@ export function extractAnnotations(content: string): Annotation[] {
       message: match[4].trim(),
     });
   }
-  
+
   return annotations;
 }

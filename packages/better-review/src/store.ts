@@ -2,9 +2,10 @@
 // StoreService - Generic disk-backed key-value store
 // =============================================================================
 
-import { Effect, Ref } from "effect";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+import { Effect, Ref } from "effect";
 
 const BASE_DIR = join(homedir(), ".local", "share", "better-review");
 
@@ -80,9 +81,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
         yield* ensureNamespace(namespace);
 
         const filePath = getFilePath(namespace, key);
-        yield* Effect.tryPromise(() =>
-          Bun.write(filePath, JSON.stringify(data, null, 2)),
-        );
+        yield* Effect.tryPromise(() => Bun.write(filePath, JSON.stringify(data, null, 2)));
 
         // Update cache
         yield* Ref.update(cache, (c) => {
@@ -140,9 +139,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
           }),
         );
 
-        return files
-          .filter((f) => f.endsWith(".json"))
-          .map((f) => f.slice(0, -5)); // Remove .json extension
+        return files.filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)); // Remove .json extension
       });
 
     /**

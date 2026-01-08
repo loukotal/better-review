@@ -1,5 +1,5 @@
-import { createSignal, createMemo, For, Show } from "solid-js";
 import type { FileDiffMetadata } from "@pierre/diffs";
+import { createSignal, createMemo, For, Show } from "solid-js";
 
 interface FileTreePanelProps {
   files: FileDiffMetadata[];
@@ -92,11 +92,7 @@ function FileStatusIndicator(props: { type: FileDiffMetadata["type"] }) {
     }
   };
 
-  return (
-    <span class={`text-base w-3 text-center ${indicator().class}`}>
-      {indicator().char}
-    </span>
-  );
+  return <span class={`text-base w-3 text-center ${indicator().class}`}>{indicator().char}</span>;
 }
 
 function TreeNodeView(props: {
@@ -154,9 +150,7 @@ function TreeNodeView(props: {
             style={{ "padding-left": `${props.depth * 10 + 8}px` }}
           >
             <FileStatusIndicator type={props.node.file!.type} />
-            <span class="text-text-muted group-hover:text-text truncate">
-              {props.node.name}
-            </span>
+            <span class="text-text-muted group-hover:text-text truncate">{props.node.name}</span>
           </button>
         )}
       </div>
@@ -193,7 +187,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
   const effectiveExpandedFolders = createMemo(() => {
     const allFolders = new Set(getAllFolderPaths(tree()));
     const matching = matchingPaths();
-    
+
     if (matching) {
       // When searching, expand all folders that are in the matching paths
       const expanded = new Set<string>();
@@ -207,7 +201,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
       }
       return expanded;
     }
-    
+
     // Default: all folders expanded, minus manually collapsed
     const collapsed = manuallyCollapsed();
     const expanded = new Set<string>();
@@ -246,13 +240,13 @@ export function FileTreePanel(props: FileTreePanelProps) {
           class="w-full px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent"
         />
       </div>
-      
+
       {/* AI Order indicator */}
       <Show when={props.reviewOrder && props.reviewOrder.length > 0}>
         <div class="px-2 py-1.5 border-b border-accent/30 bg-accent/5">
           <div class="flex items-center gap-1.5 text-base text-accent">
             <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M7 5.75A.75.75 0 0 1 7.75 5h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 5.75zm0 4A.75.75 0 0 1 7.75 9h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 9.75zM3.5 6a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5zM4.25 10a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0z"/>
+              <path d="M7 5.75A.75.75 0 0 1 7.75 5h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 5.75zm0 4A.75.75 0 0 1 7.75 9h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 9.75zM3.5 6a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5zM4.25 10a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0z" />
             </svg>
             <span>AI review order applied</span>
           </div>

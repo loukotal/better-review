@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/solid-query";
 import { createMemo, createEffect } from "solid-js";
-import { queryKeys, api, prefetchCommitDiffs, type PrCommit, type PRComment } from "../lib/query";
+
+import { queryKeys, api, prefetchCommitDiffs, type PRComment } from "../lib/query";
 
 /**
  * Custom hook that manages all PR data fetching using TanStack Query.
@@ -63,17 +64,13 @@ export function usePrData(prUrl: () => string | null) {
   };
 
   // Combined loading state
-  const isLoading = createMemo(() =>
-    diffQuery.isPending || infoQuery.isPending
-  );
+  const isLoading = createMemo(() => diffQuery.isPending || infoQuery.isPending);
 
   const isLoadingComments = createMemo(() => commentsQuery.isPending);
   const isLoadingStatus = createMemo(() => statusQuery.isPending);
 
   // Combined error state
-  const error = createMemo(() =>
-    diffQuery.error?.message || infoQuery.error?.message || null
-  );
+  const error = createMemo(() => diffQuery.error?.message || infoQuery.error?.message || null);
 
   // Refetch all data
   const refetchAll = async () => {
@@ -90,10 +87,7 @@ export function usePrData(prUrl: () => string | null) {
   const updateComments = (updater: (prev: PRComment[]) => PRComment[]) => {
     const url = prUrl();
     if (!url) return;
-    queryClient.setQueryData<PRComment[]>(
-      queryKeys.pr.comments(url),
-      (old) => updater(old ?? [])
-    );
+    queryClient.setQueryData<PRComment[]>(queryKeys.pr.comments(url), (old) => updater(old ?? []));
   };
 
   // Add a comment to the cache
@@ -103,9 +97,7 @@ export function usePrData(prUrl: () => string | null) {
 
   // Update a comment in the cache
   const updateCommentInCache = (commentId: number, body: string) => {
-    updateComments((prev) =>
-      prev.map((c) => (c.id === commentId ? { ...c, body } : c))
-    );
+    updateComments((prev) => prev.map((c) => (c.id === commentId ? { ...c, body } : c)));
   };
 
   // Remove a comment from the cache

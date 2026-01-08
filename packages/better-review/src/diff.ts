@@ -58,11 +58,7 @@ export function parseDiffMeta(diff: string): Omit<FileDiffMeta, "diff"> {
 // Filter a unified diff to only include lines within the specified line range
 // Line numbers refer to the NEW file (right side of diff)
 // This filters at the LINE level, not just hunk level
-export function filterDiffByLineRange(
-  diff: string,
-  startLine?: number,
-  endLine?: number,
-): string {
+export function filterDiffByLineRange(diff: string, startLine?: number, endLine?: number): string {
   if (startLine === undefined && endLine === undefined) {
     return diff;
   }
@@ -154,10 +150,8 @@ export function filterDiffByLineRange(
 
     if (finalLines.length > 0) {
       // Generate new hunk header
-      const oldPart =
-        newOldCount === 1 ? `${newOldStart}` : `${newOldStart},${newOldCount}`;
-      const newPart =
-        newNewCount === 1 ? `${newNewStart}` : `${newNewStart},${newNewCount}`;
+      const oldPart = newOldCount === 1 ? `${newOldStart}` : `${newOldStart},${newOldCount}`;
+      const newPart = newNewCount === 1 ? `${newNewStart}` : `${newNewStart},${newNewCount}`;
       result.push(`@@ -${oldPart} +${newPart} @@`);
       result.push(...finalLines);
     }
@@ -194,14 +188,12 @@ export function filterDiffByLineRange(
       } else if (line.startsWith("+")) {
         // Added line
         const newLineNum =
-          currentHunkLines.filter((e) => !e.line.startsWith("-")).length +
-          hunkNewStart;
+          currentHunkLines.filter((e) => !e.line.startsWith("-")).length + hunkNewStart;
         currentHunkLines.push({ line, newLineNum });
       } else {
         // Context line
         const newLineNum =
-          currentHunkLines.filter((e) => !e.line.startsWith("-")).length +
-          hunkNewStart;
+          currentHunkLines.filter((e) => !e.line.startsWith("-")).length + hunkNewStart;
         currentHunkLines.push({ line, newLineNum });
       }
     }

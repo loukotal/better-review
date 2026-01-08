@@ -1,4 +1,5 @@
 import { Effect, Layer, ManagedRuntime } from "effect";
+
 import { GhService, GhServiceLive } from "../gh/gh";
 import { OpencodeService } from "../opencode";
 import { DiffCacheService, PrContextService } from "../state";
@@ -12,11 +13,7 @@ const layers = Layer.mergeAll(
 );
 
 // Type representing all services provided by the runtime
-export type RuntimeContext =
-  | GhService
-  | OpencodeService
-  | DiffCacheService
-  | PrContextService;
+export type RuntimeContext = GhService | OpencodeService | DiffCacheService | PrContextService;
 
 // Create a managed runtime that can be reused across requests
 export const runtime = ManagedRuntime.make(layers);

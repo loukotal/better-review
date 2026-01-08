@@ -1,3 +1,5 @@
+import { marked } from "marked";
+import remend from "remend";
 import {
   createSignal,
   createEffect,
@@ -10,21 +12,24 @@ import {
   onCleanup,
   batch,
 } from "solid-js";
-import { marked } from "marked";
-import remend from "remend";
+
+import {
+  SYSTEM_CONTEXT_MARKER,
+  type StoredSession,
+} from "@better-review/shared";
+
+import { AnnotationBlock } from "./components/AnnotationBlock";
+import { FileLink } from "./components/FileLink";
+import { ModelSelector } from "./components/ModelSelector";
+import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
+import { SessionSelector } from "./components/SessionSelector";
+import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
+import { trpc } from "./lib/trpc";
 import {
   parseReviewTokens,
   type Annotation,
   type MessageSegment,
 } from "./utils/parseReviewTokens";
-import { FileLink } from "./components/FileLink";
-import { AnnotationBlock } from "./components/AnnotationBlock";
-import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
-import { ModelSelector } from "./components/ModelSelector";
-import { SessionSelector } from "./components/SessionSelector";
-import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
-import { SYSTEM_CONTEXT_MARKER, type StoredSession } from "@better-review/shared";
-import { trpc } from "./lib/trpc";
 
 // Configure marked for safe, minimal output
 marked.setOptions({
@@ -83,7 +88,7 @@ export function ChatPanel(props: ChatPanelProps) {
     onError: (err) => console.error("[ChatPanel] Stream error:", err),
   });
 
-  let messagesContainer: HTMLDivElement | undefined;
+  let _messagesContainer: HTMLDivElement | undefined;
 
   // Auto-scroll to bottom when messages or streaming content changes
   createEffect(() => {
@@ -92,11 +97,11 @@ export function ChatPanel(props: ChatPanelProps) {
     chat.streamingContent();
     chat.isStreaming();
     chat.activeTools();
-    
+
     // Defer scroll to next frame to ensure DOM has updated
     requestAnimationFrame(() => {
-      if (messagesContainer) {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      if (_messagesContainer) {
+        _messagesContainer.scrollTop = _messagesContainer.scrollHeight;
       }
     });
   });
@@ -232,7 +237,7 @@ export function ChatPanel(props: ChatPanelProps) {
     }>) {
       const msg = item.info;
       const parts = item.parts || [];
-      
+
       // Skip messages with no parts
       if (parts.length === 0) continue;
 
@@ -300,7 +305,9 @@ export function ChatPanel(props: ChatPanelProps) {
       });
 
       // Load messages for the new session BEFORE switching
-      const messagesData = await trpc.opencode.messages.query({ sessionId: newSessionId });
+      const messagesData = await trpc.opencode.messages.query({
+        sessionId: newSessionId,
+      });
 
       let newMessages: Parameters<typeof chat.loadExistingMessages>[0] = [];
       if (messagesData.messages && Array.isArray(messagesData.messages)) {
@@ -318,7 +325,8 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   async function handleNewSession() {
-    if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return;
+    if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName)
+      return;
 
     try {
       const data = await trpc.sessions.create.mutate({
@@ -373,7 +381,10 @@ export function ChatPanel(props: ChatPanelProps) {
           try {
             await handleNewSession();
           } catch (newSessionErr) {
-            console.error("Failed to create new session after hiding:", newSessionErr);
+            console.error(
+              "Failed to create new session after hiding:",
+              newSessionErr,
+            );
             // Clear state so UI shows proper "no session" state
             batch(() => {
               setSessionId(null);
@@ -615,7 +626,9 @@ export function ChatPanel(props: ChatPanelProps) {
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
             <span class="text-accent text-sm flex-shrink-0">AI</span>
-            <h2 class="text-sm text-text font-medium truncate">Review Assistant</h2>
+            <h2 class="text-sm text-text font-medium truncate">
+              Review Assistant
+            </h2>
           </div>
           <div class="flex items-center gap-1 flex-shrink-0">
             <Show when={sessionId() && !chat.isStreaming()}>
@@ -680,7 +693,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
       {/* Messages */}
       <div
-        ref={messagesContainer}
+        ref={_messagesContainer}
         class="flex-1 overflow-y-auto px-3 py-2 space-y-3"
       >
         <Show when={!props.prUrl}>
@@ -873,7 +886,11 @@ export function ChatPanel(props: ChatPanelProps) {
                     }}
                   />
                   <span class="text-[9px] text-text-faint">
-                    {chat.isConnected() ? "Connected" : sessionId() ? "Reconnecting" : "Offline"}
+                    {chat.isConnected()
+                      ? "Connected"
+                      : sessionId()
+                        ? "Reconnecting"
+                        : "Offline"}
                   </span>
                 </div>
                 {/* Quick prompts */}

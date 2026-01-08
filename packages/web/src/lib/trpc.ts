@@ -1,6 +1,6 @@
 import { createTRPCClient, httpLink, splitLink, unstable_httpSubscriptionLink } from "@trpc/client";
-import superjson from "superjson";
 import type { AppRouter } from "better-review/src/trpc/routers";
+import superjson from "superjson";
 
 // Create tRPC client with individual requests (no batching)
 export const trpc = createTRPCClient<AppRouter>({

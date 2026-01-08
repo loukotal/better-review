@@ -1,8 +1,4 @@
-import type {
-  Event as OpenCodeEvent,
-  ToolState,
-  ToolPart,
-} from "@opencode-ai/sdk";
+import type { Event as OpenCodeEvent, ToolState, ToolPart } from "@opencode-ai/sdk";
 
 // Type alias for error data with optional message
 type ErrorData = { message?: string } | { [key: string]: unknown };
@@ -110,10 +106,7 @@ function transformToolState(
  * Transform an OpenCode SDK event into a simplified StreamEvent for the frontend.
  * Returns null if the event should be filtered out.
  */
-export function transformEvent(
-  event: OpenCodeEvent,
-  sessionId: string,
-): StreamEvent | null {
+export function transformEvent(event: OpenCodeEvent, sessionId: string): StreamEvent | null {
   const props = event.properties as Record<string, unknown>;
 
   // Extract sessionID based on event type - it's nested differently for each
@@ -213,9 +206,7 @@ export function transformEvent(
 
       const errorData = error.data as ErrorData | undefined;
       const errorMessage: string =
-        errorData &&
-        "message" in errorData &&
-        typeof errorData.message === "string"
+        errorData && "message" in errorData && typeof errorData.message === "string"
           ? errorData.message
           : "Unknown error";
 

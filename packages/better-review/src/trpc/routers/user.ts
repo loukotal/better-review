@@ -1,6 +1,7 @@
-import { router, publicProcedure, runEffect } from "../index";
-import { GhService } from "../../gh/gh";
 import { Effect } from "effect";
+
+import { GhService } from "../../gh/gh";
+import { router, publicProcedure, runEffect } from "../index";
 
 export const userRouter = router({
   current: publicProcedure.query(() =>
@@ -9,7 +10,7 @@ export const userRouter = router({
         const gh = yield* GhService;
         const login = yield* gh.getCurrentUser();
         return { login };
-      })
-    )
+      }),
+    ),
   ),
 });

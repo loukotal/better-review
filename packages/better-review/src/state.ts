@@ -3,14 +3,12 @@
 // =============================================================================
 
 import { Effect, Ref } from "effect";
+
+import type { PrInfo, StoredSession, PrSessionData } from "@better-review/shared";
+
 import { type FileDiffMeta, parseFullDiff } from "./diff";
 import { GhService, GhServiceLive } from "./gh/gh";
 import { StoreService } from "./store";
-import type {
-  PrInfo,
-  StoredSession,
-  PrSessionData,
-} from "@better-review/shared";
 
 // =============================================================================
 // Types
@@ -29,9 +27,7 @@ export type { PrInfo, StoredSession, PrSessionData };
 // Helpers
 // =============================================================================
 
-function parsePrUrl(
-  url: string,
-): { owner: string; repo: string; number: number } | null {
+function parsePrUrl(url: string): { owner: string; repo: string; number: number } | null {
   const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
   if (!match) return null;
   return {
@@ -51,80 +47,71 @@ function prUrlToKey(url: string): string | null {
 // DiffCacheService
 // =============================================================================
 
-export class DiffCacheService extends Effect.Service<DiffCacheService>()(
-  "DiffCacheService",
-  {
-    scoped: Effect.gen(function* () {
-      // Ref holding: prUrl -> Map<fileName, FileDiffMeta>
-      const cache = yield* Ref.make(
-        new Map<string, Map<string, FileDiffMeta>>(),
-      );
+export class DiffCacheService extends Effect.Service<DiffCacheService>()("DiffCacheService", {
+  scoped: Effect.gen(function* () {
+    // Ref holding: prUrl -> Map<fileName, FileDiffMeta>
+    const cache = yield* Ref.make(new Map<string, Map<string, FileDiffMeta>>());
 
-      // Capture GhService at construction time
-      const gh = yield* GhService;
+    // Capture GhService at construction time
+    const gh = yield* GhService;
 
-      return {
-        /**
-         * Get cached diffs for a PR, or fetch and cache them
-         */
-        getOrFetch: (prUrl: string) =>
-          Effect.gen(function* () {
-            const current = yield* Ref.get(cache);
-            const existing = current.get(prUrl);
-            if (existing) {
-              yield* Effect.log(
-                `[cache] Using cached diffs for ${prUrl} (${existing.size} files)`,
-              );
-              return existing;
-            }
+    return {
+      /**
+       * Get cached diffs for a PR, or fetch and cache them
+       */
+      getOrFetch: (prUrl: string) =>
+        Effect.gen(function* () {
+          const current = yield* Ref.get(cache);
+          const existing = current.get(prUrl);
+          if (existing) {
+            yield* Effect.log(`[cache] Using cached diffs for ${prUrl} (${existing.size} files)`);
+            return existing;
+          }
 
-            // Fetch using GhService (captured at construction)
-            yield* Effect.log(`[cache] Fetching full diff for ${prUrl}...`);
-            const fullDiff = yield* gh.getDiff(prUrl);
-            yield* Effect.log(
-              `[cache] Full diff fetched (${fullDiff.length} chars)`,
-            );
+          // Fetch using GhService (captured at construction)
+          yield* Effect.log(`[cache] Fetching full diff for ${prUrl}...`);
+          const fullDiff = yield* gh.getDiff(prUrl);
+          yield* Effect.log(`[cache] Full diff fetched (${fullDiff.length} chars)`);
 
-            const fileDiffs = parseFullDiff(fullDiff);
-            yield* Effect.log(`[cache] Cached ${fileDiffs.size} file diffs`);
+          const fileDiffs = parseFullDiff(fullDiff);
+          yield* Effect.log(`[cache] Cached ${fileDiffs.size} file diffs`);
 
-            yield* Ref.update(cache, (m) => {
-              const newMap = new Map(m);
-              newMap.set(prUrl, fileDiffs);
-              return newMap;
-            });
-
-            return fileDiffs;
-          }),
-
-        /**
-         * Get cached diffs without fetching (returns undefined if not cached)
-         */
-        get: (prUrl: string) =>
-          Effect.gen(function* () {
-            const current = yield* Ref.get(cache);
-            return current.get(prUrl);
-          }),
-
-        /**
-         * Clear cache for a specific PR
-         */
-        clear: (prUrl: string) =>
-          Ref.update(cache, (m) => {
+          yield* Ref.update(cache, (m) => {
             const newMap = new Map(m);
-            newMap.delete(prUrl);
+            newMap.set(prUrl, fileDiffs);
             return newMap;
-          }),
+          });
 
-        /**
-         * Clear all cached diffs
-         */
-        clearAll: Ref.set(cache, new Map()),
-      };
-    }),
-    dependencies: [GhServiceLive],
-  },
-) {}
+          return fileDiffs;
+        }),
+
+      /**
+       * Get cached diffs without fetching (returns undefined if not cached)
+       */
+      get: (prUrl: string) =>
+        Effect.gen(function* () {
+          const current = yield* Ref.get(cache);
+          return current.get(prUrl);
+        }),
+
+      /**
+       * Clear cache for a specific PR
+       */
+      clear: (prUrl: string) =>
+        Ref.update(cache, (m) => {
+          const newMap = new Map(m);
+          newMap.delete(prUrl);
+          return newMap;
+        }),
+
+      /**
+       * Clear all cached diffs
+       */
+      clearAll: Ref.set(cache, new Map()),
+    };
+  }),
+  dependencies: [GhServiceLive],
+}) {}
 
 // =============================================================================
 // PrContextService
@@ -132,254 +119,222 @@ export class DiffCacheService extends Effect.Service<DiffCacheService>()(
 
 const SESSIONS_NAMESPACE = "prs";
 
-export class PrContextService extends Effect.Service<PrContextService>()(
-  "PrContextService",
-  {
-    scoped: Effect.gen(function* () {
-      // Current PR context (runtime only)
-      const context = yield* Ref.make<PrContext>({
-        prUrl: null,
-        files: [],
-        info: null,
-      });
+export class PrContextService extends Effect.Service<PrContextService>()("PrContextService", {
+  scoped: Effect.gen(function* () {
+    // Current PR context (runtime only)
+    const context = yield* Ref.make<PrContext>({
+      prUrl: null,
+      files: [],
+      info: null,
+    });
 
-      // Session -> PR URL mapping (in-memory, populated at runtime)
-      const sessionToPr = yield* Ref.make(new Map<string, string>());
+    // Session -> PR URL mapping (in-memory, populated at runtime)
+    const sessionToPr = yield* Ref.make(new Map<string, string>());
 
-      // Get store service for persistence
-      const store = yield* StoreService;
+    // Get store service for persistence
+    const store = yield* StoreService;
 
-      return {
-        // =====================================================================
-        // Runtime Context
-        // =====================================================================
+    return {
+      // =====================================================================
+      // Runtime Context
+      // =====================================================================
 
-        /**
-         * Set the current PR context
-         */
-        setCurrent: (prUrl: string, files: string[], info: PrInfo) =>
-          Ref.set(context, { prUrl, files, info }),
+      /**
+       * Set the current PR context
+       */
+      setCurrent: (prUrl: string, files: string[], info: PrInfo) =>
+        Ref.set(context, { prUrl, files, info }),
 
-        /**
-         * Get the current PR context
-         */
-        getCurrent: Ref.get(context),
+      /**
+       * Get the current PR context
+       */
+      getCurrent: Ref.get(context),
 
-        // =====================================================================
-        // Session → PR Mapping (in-memory, O(1) lookup)
-        // =====================================================================
+      // =====================================================================
+      // Session → PR Mapping (in-memory, O(1) lookup)
+      // =====================================================================
 
-        /**
-         * Register a session → PR URL mapping (call when session is activated)
-         */
-        registerSession: (sessionId: string, prUrl: string) =>
-          Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl)),
+      /**
+       * Register a session → PR URL mapping (call when session is activated)
+       */
+      registerSession: (sessionId: string, prUrl: string) =>
+        Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl)),
 
-        /**
-         * Get PR URL for a session (O(1) lookup)
-         */
-        getPrUrlBySessionId: (sessionId: string) =>
-          Effect.gen(function* () {
-            const map = yield* Ref.get(sessionToPr);
-            return map.get(sessionId) ?? null;
-          }),
+      /**
+       * Get PR URL for a session (O(1) lookup)
+       */
+      getPrUrlBySessionId: (sessionId: string) =>
+        Effect.gen(function* () {
+          const map = yield* Ref.get(sessionToPr);
+          return map.get(sessionId) ?? null;
+        }),
 
-        // =====================================================================
-        // Session Management (persisted via StoreService)
-        // =====================================================================
+      // =====================================================================
+      // Session Management (persisted via StoreService)
+      // =====================================================================
 
-        /**
-         * Get all session data for a PR
-         */
-        getSessionData: (prUrl: string) =>
-          Effect.gen(function* () {
-            const key = prUrlToKey(prUrl);
-            if (!key) return null;
-            return yield* store.get<PrSessionData>(SESSIONS_NAMESPACE, key);
-          }),
+      /**
+       * Get all session data for a PR
+       */
+      getSessionData: (prUrl: string) =>
+        Effect.gen(function* () {
+          const key = prUrlToKey(prUrl);
+          if (!key) return null;
+          return yield* store.get<PrSessionData>(SESSIONS_NAMESPACE, key);
+        }),
 
-        /**
-         * List sessions for a PR (optionally include hidden)
-         */
-        listSessions: (prUrl: string, includeHidden = false) =>
-          Effect.gen(function* () {
-            const key = prUrlToKey(prUrl);
-            if (!key) {
-              return { sessions: [], activeSessionId: null };
-            }
+      /**
+       * List sessions for a PR (optionally include hidden)
+       */
+      listSessions: (prUrl: string, includeHidden = false) =>
+        Effect.gen(function* () {
+          const key = prUrlToKey(prUrl);
+          if (!key) {
+            return { sessions: [], activeSessionId: null };
+          }
 
-            const data = yield* store.get<PrSessionData>(
-              SESSIONS_NAMESPACE,
-              key,
-            );
-            if (!data) {
-              return { sessions: [], activeSessionId: null };
-            }
+          const data = yield* store.get<PrSessionData>(SESSIONS_NAMESPACE, key);
+          if (!data) {
+            return { sessions: [], activeSessionId: null };
+          }
 
-            const sessions = includeHidden
-              ? data.sessions
-              : data.sessions.filter((s) => !s.hidden);
+          const sessions = includeHidden ? data.sessions : data.sessions.filter((s) => !s.hidden);
 
-            return {
-              sessions,
-              activeSessionId: data.activeSessionId,
-            };
-          }),
+          return {
+            sessions,
+            activeSessionId: data.activeSessionId,
+          };
+        }),
 
-        /**
-         * Add a new session to a PR
-         */
-        addSession: (prUrl: string, sessionId: string, headSha: string) =>
-          Effect.gen(function* () {
-            const pr = parsePrUrl(prUrl);
-            const key = prUrlToKey(prUrl);
-            if (!pr || !key) {
-              return yield* Effect.fail(new Error(`Invalid PR URL: ${prUrl}`));
-            }
+      /**
+       * Add a new session to a PR
+       */
+      addSession: (prUrl: string, sessionId: string, headSha: string) =>
+        Effect.gen(function* () {
+          const pr = parsePrUrl(prUrl);
+          const key = prUrlToKey(prUrl);
+          if (!pr || !key) {
+            return yield* Effect.fail(new Error(`Invalid PR URL: ${prUrl}`));
+          }
 
-            // Get existing data or create new
-            const existing = yield* store.get<PrSessionData>(
-              SESSIONS_NAMESPACE,
-              key,
-            );
-            const data: PrSessionData = existing || {
-              owner: pr.owner,
-              repo: pr.repo,
-              number: pr.number,
-              url: prUrl,
-              sessions: [],
-              activeSessionId: null,
-            };
+          // Get existing data or create new
+          const existing = yield* store.get<PrSessionData>(SESSIONS_NAMESPACE, key);
+          const data: PrSessionData = existing || {
+            owner: pr.owner,
+            repo: pr.repo,
+            number: pr.number,
+            url: prUrl,
+            sessions: [],
+            activeSessionId: null,
+          };
 
-            // Check if session already exists
-            if (data.sessions.some((s) => s.id === sessionId)) {
-              yield* Effect.log(
-                `[PrContext] Session ${sessionId} already exists`,
-              );
-              return data;
-            }
+          // Check if session already exists
+          if (data.sessions.some((s) => s.id === sessionId)) {
+            yield* Effect.log(`[PrContext] Session ${sessionId} already exists`);
+            return data;
+          }
 
-            // Add new session
-            const newSession: StoredSession = {
-              id: sessionId,
-              headSha,
-              createdAt: Date.now(),
-              hidden: false,
-            };
+          // Add new session
+          const newSession: StoredSession = {
+            id: sessionId,
+            headSha,
+            createdAt: Date.now(),
+            hidden: false,
+          };
 
-            const updated: PrSessionData = {
-              ...data,
-              sessions: [...data.sessions, newSession],
-              activeSessionId: sessionId, // New session becomes active
-            };
+          const updated: PrSessionData = {
+            ...data,
+            sessions: [...data.sessions, newSession],
+            activeSessionId: sessionId, // New session becomes active
+          };
 
-            yield* store.set(SESSIONS_NAMESPACE, key, updated);
-            
-            // Register in-memory mapping for O(1) lookup
-            yield* Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl));
-            
-            yield* Effect.log(
-              `[PrContext] Added session ${sessionId} to ${pr.owner}/${pr.repo}#${pr.number}`,
-            );
+          yield* store.set(SESSIONS_NAMESPACE, key, updated);
 
-            return updated;
-          }),
+          // Register in-memory mapping for O(1) lookup
+          yield* Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl));
 
-        /**
-         * Set the active session for a PR
-         */
-        setActiveSession: (prUrl: string, sessionId: string) =>
-          Effect.gen(function* () {
-            const key = prUrlToKey(prUrl);
-            if (!key) {
-              return yield* Effect.fail(new Error(`Invalid PR URL: ${prUrl}`));
-            }
+          yield* Effect.log(
+            `[PrContext] Added session ${sessionId} to ${pr.owner}/${pr.repo}#${pr.number}`,
+          );
 
-            const data = yield* store.get<PrSessionData>(
-              SESSIONS_NAMESPACE,
-              key,
-            );
-            if (!data) {
-              return yield* Effect.fail(new Error(`No data for PR: ${prUrl}`));
-            }
+          return updated;
+        }),
 
-            // Verify session exists
-            if (!data.sessions.some((s) => s.id === sessionId)) {
-              return yield* Effect.fail(
-                new Error(`Session ${sessionId} not found for PR`),
-              );
-            }
+      /**
+       * Set the active session for a PR
+       */
+      setActiveSession: (prUrl: string, sessionId: string) =>
+        Effect.gen(function* () {
+          const key = prUrlToKey(prUrl);
+          if (!key) {
+            return yield* Effect.fail(new Error(`Invalid PR URL: ${prUrl}`));
+          }
 
-            const updated: PrSessionData = {
-              ...data,
-              activeSessionId: sessionId,
-            };
+          const data = yield* store.get<PrSessionData>(SESSIONS_NAMESPACE, key);
+          if (!data) {
+            return yield* Effect.fail(new Error(`No data for PR: ${prUrl}`));
+          }
 
-            yield* store.set(SESSIONS_NAMESPACE, key, updated);
-            yield* Effect.log(`[PrContext] Set active session to ${sessionId}`);
+          // Verify session exists
+          if (!data.sessions.some((s) => s.id === sessionId)) {
+            return yield* Effect.fail(new Error(`Session ${sessionId} not found for PR`));
+          }
 
-            return updated;
-          }),
+          const updated: PrSessionData = {
+            ...data,
+            activeSessionId: sessionId,
+          };
 
-        /**
-         * Hide a session (soft delete)
-         */
-        hideSession: (prUrl: string, sessionId: string) =>
-          Effect.gen(function* () {
-            const key = prUrlToKey(prUrl);
-            if (!key) {
-              return yield* Effect.fail(new Error(`Invalid PR URL: ${prUrl}`));
-            }
+          yield* store.set(SESSIONS_NAMESPACE, key, updated);
+          yield* Effect.log(`[PrContext] Set active session to ${sessionId}`);
 
-            const data = yield* store.get<PrSessionData>(
-              SESSIONS_NAMESPACE,
-              key,
-            );
-            if (!data) {
-              return yield* Effect.fail(new Error(`No data for PR: ${prUrl}`));
-            }
+          return updated;
+        }),
 
-            const updated: PrSessionData = {
-              ...data,
-              sessions: data.sessions.map((s) =>
-                s.id === sessionId ? { ...s, hidden: true } : s,
-              ),
-              // If hiding the active session, clear it
-              activeSessionId:
-                data.activeSessionId === sessionId
-                  ? null
-                  : data.activeSessionId,
-            };
+      /**
+       * Hide a session (soft delete)
+       */
+      hideSession: (prUrl: string, sessionId: string) =>
+        Effect.gen(function* () {
+          const key = prUrlToKey(prUrl);
+          if (!key) {
+            return yield* Effect.fail(new Error(`Invalid PR URL: ${prUrl}`));
+          }
 
-            yield* store.set(SESSIONS_NAMESPACE, key, updated);
-            yield* Effect.log(`[PrContext] Hidden session ${sessionId}`);
+          const data = yield* store.get<PrSessionData>(SESSIONS_NAMESPACE, key);
+          if (!data) {
+            return yield* Effect.fail(new Error(`No data for PR: ${prUrl}`));
+          }
 
-            return updated;
-          }),
+          const updated: PrSessionData = {
+            ...data,
+            sessions: data.sessions.map((s) => (s.id === sessionId ? { ...s, hidden: true } : s)),
+            // If hiding the active session, clear it
+            activeSessionId: data.activeSessionId === sessionId ? null : data.activeSessionId,
+          };
 
-        /**
-         * Get the active session for a PR
-         */
-        getActiveSession: (prUrl: string) =>
-          Effect.gen(function* () {
-            const key = prUrlToKey(prUrl);
-            if (!key) return null;
+          yield* store.set(SESSIONS_NAMESPACE, key, updated);
+          yield* Effect.log(`[PrContext] Hidden session ${sessionId}`);
 
-            const data = yield* store.get<PrSessionData>(
-              SESSIONS_NAMESPACE,
-              key,
-            );
-            if (!data || !data.activeSessionId) {
-              return null;
-            }
+          return updated;
+        }),
 
-            return (
-              data.sessions.find((s) => s.id === data.activeSessionId) || null
-            );
-          }),
+      /**
+       * Get the active session for a PR
+       */
+      getActiveSession: (prUrl: string) =>
+        Effect.gen(function* () {
+          const key = prUrlToKey(prUrl);
+          if (!key) return null;
 
-      };
-    }),
-    dependencies: [StoreService.Default],
-  },
-) {}
+          const data = yield* store.get<PrSessionData>(SESSIONS_NAMESPACE, key);
+          if (!data || !data.activeSessionId) {
+            return null;
+          }
+
+          return data.sessions.find((s) => s.id === data.activeSessionId) || null;
+        }),
+    };
+  }),
+  dependencies: [StoreService.Default],
+}) {}

@@ -1,19 +1,27 @@
 {
   "name": "better-review",
-  "module": "index.ts",
-  "type": "module",
   "private": true,
   "license": "MIT",
   "workspaces": [
     "packages/*"
   ],
+  "type": "module",
+  "module": "index.ts",
   "scripts": {
     "dev": "bun run --cwd packages/better-review dev & bun run --cwd packages/web dev",
     "start": "bun run --cwd packages/web build && bun run --cwd packages/better-review start",
-    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist bun.lockb && bun install"
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist bun.lockb && bun install",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "prepare": "lefthook install"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "lefthook": "^2.0.13",
+    "oxfmt": "^0.23.0",
+    "oxlint": "^1.38.0"
   },
   "peerDependencies": {
     "typescript": "^5"

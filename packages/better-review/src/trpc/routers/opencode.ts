@@ -1,13 +1,11 @@
-import { z } from "zod";
-import { router, publicProcedure, runEffect } from "../index";
-import { runtime } from "../context";
-import { OpencodeService } from "../../opencode";
-import { Effect } from "effect";
 import { observable } from "@trpc/server/observable";
-import {
-  transformEvent,
-  type StreamEvent,
-} from "../../stream";
+import { Effect } from "effect";
+import { z } from "zod";
+
+import { OpencodeService } from "../../opencode";
+import { transformEvent, type StreamEvent } from "../../stream";
+import { runtime } from "../context";
+import { router, publicProcedure, runEffect } from "../index";
 import { getCurrentModel } from "./models";
 
 // =============================================================================
@@ -24,12 +22,8 @@ export const opencodeRouter = router({
         const opencode = yield* OpencodeService;
         yield* Effect.tryPromise(() => opencode.client.global.health());
         return { healthy: true };
-      }).pipe(
-        Effect.catchAll((e) =>
-          Effect.succeed({ healthy: false, error: String(e) })
-        )
-      )
-    )
+      }).pipe(Effect.catchAll((e) => Effect.succeed({ healthy: false, error: String(e) }))),
+    ),
   ),
 
   /**
@@ -43,7 +37,7 @@ export const opencodeRouter = router({
         repoOwner: z.string(),
         repoName: z.string(),
         files: z.array(z.string()),
-      })
+      }),
     )
     .mutation(({ input }) =>
       runEffect(
@@ -55,7 +49,7 @@ export const opencodeRouter = router({
           const session = yield* Effect.tryPromise(() =>
             opencode.client.session.create({
               title: `PR Review: ${input.repoOwner}/${input.repoName}#${input.prNumber}`,
-            })
+            }),
           );
 
           if (!session.data) {
@@ -65,8 +59,8 @@ export const opencodeRouter = router({
           yield* Effect.log("[OpenCode] Session created:", session.data.id);
 
           return { session: session.data };
-        })
-      )
+        }),
+      ),
     ),
 
   /**
@@ -78,7 +72,7 @@ export const opencodeRouter = router({
         sessionId: z.string(),
         message: z.string(),
         agent: z.string().optional(),
-      })
+      }),
     )
     .mutation(({ input }) =>
       runEffect(
@@ -107,12 +101,12 @@ export const opencodeRouter = router({
                 todowrite: true,
                 webfetch: true,
               },
-            })
+            }),
           );
 
           return { result: result.data };
-        })
-      )
+        }),
+      ),
     ),
 
   /**
@@ -124,7 +118,7 @@ export const opencodeRouter = router({
         sessionId: z.string(),
         message: z.string(),
         agent: z.string().optional(),
-      })
+      }),
     )
     .mutation(({ input }) =>
       runEffect(
@@ -134,179 +128,166 @@ export const opencodeRouter = router({
 
           // Use the async endpoint (prompt_async) - fire and forget
           const response = yield* Effect.tryPromise(() =>
-            fetch(
-              `${opencode.baseUrl}/session/${input.sessionId}/prompt_async`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  model: {
-                    providerID: currentModel.providerId,
-                    modelID: currentModel.modelId,
-                  },
-                  agent: input.agent,
-                  parts: [{ type: "text", text: input.message }],
-                  // Disable local file tools - they would search the wrong repo
-                  // The pr_diff custom tool is enabled by default
-                  tools: {
-                    bash: false,
-                    edit: false,
-                    write: false,
-                    glob: false,
-                    grep: false,
-                    read: false,
-                    todoread: true,
-                    todowrite: true,
-                    webfetch: true,
-                  },
-                }),
-              }
-            )
+            fetch(`${opencode.baseUrl}/session/${input.sessionId}/prompt_async`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: {
+                  providerID: currentModel.providerId,
+                  modelID: currentModel.modelId,
+                },
+                agent: input.agent,
+                parts: [{ type: "text", text: input.message }],
+                // Disable local file tools - they would search the wrong repo
+                // The pr_diff custom tool is enabled by default
+                tools: {
+                  bash: false,
+                  edit: false,
+                  write: false,
+                  glob: false,
+                  grep: false,
+                  read: false,
+                  todoread: true,
+                  todowrite: true,
+                  webfetch: true,
+                },
+              }),
+            }),
           );
 
           if (!response.ok) {
             const text = yield* Effect.tryPromise(() => response.text());
-            return yield* Effect.fail(
-              new Error(`OpenCode error: ${response.status} - ${text}`)
-            );
+            return yield* Effect.fail(new Error(`OpenCode error: ${response.status} - ${text}`));
           }
 
           // Returns 204 No Content on success
           return { success: true };
-        })
-      )
+        }),
+      ),
     ),
 
   /**
    * Get messages for a session
    */
-  messages: publicProcedure
-    .input(z.object({ sessionId: z.string() }))
-    .query(({ input }) =>
-      runEffect(
-        Effect.gen(function* () {
-          const opencode = yield* OpencodeService;
+  messages: publicProcedure.input(z.object({ sessionId: z.string() })).query(({ input }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const opencode = yield* OpencodeService;
 
-          const messages = yield* Effect.tryPromise(() =>
-            opencode.client.session.messages({ sessionID: input.sessionId })
-          );
+        const messages = yield* Effect.tryPromise(() =>
+          opencode.client.session.messages({ sessionID: input.sessionId }),
+        );
 
-          return { messages: messages.data };
-        })
-      )
+        return { messages: messages.data };
+      }),
     ),
+  ),
 
   /**
    * Abort an in-progress prompt
    */
-  abort: publicProcedure
-    .input(z.object({ sessionId: z.string() }))
-    .mutation(({ input }) =>
-      runEffect(
-        Effect.gen(function* () {
-          const opencode = yield* OpencodeService;
+  abort: publicProcedure.input(z.object({ sessionId: z.string() })).mutation(({ input }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const opencode = yield* OpencodeService;
 
-          yield* Effect.tryPromise(() =>
-            opencode.client.session.abort({ sessionID: input.sessionId })
-          );
+        yield* Effect.tryPromise(() =>
+          opencode.client.session.abort({ sessionID: input.sessionId }),
+        );
 
-          return { success: true };
-        })
-      )
+        return { success: true };
+      }),
     ),
+  ),
 
   /**
    * SSE subscription for streaming events from an OpenCode session
    */
-  events: publicProcedure
-    .input(z.object({ sessionId: z.string() }))
-    .subscription(({ input }) => {
-      return observable<StreamEvent>((emit) => {
-        let aborted = false;
-        let abortController: AbortController | null = null;
+  events: publicProcedure.input(z.object({ sessionId: z.string() })).subscription(({ input }) => {
+    return observable<StreamEvent>((emit) => {
+      let aborted = false;
+      let abortController: AbortController | null = null;
 
-        // Start async connection
-        (async () => {
-          try {
-            // Get OpenCode service URL from runtime
-            const opencode = await runtime.runPromise(
-              Effect.gen(function* () {
-                return yield* OpencodeService;
-              })
-            );
+      // Start async connection
+      (async () => {
+        try {
+          // Get OpenCode service URL from runtime
+          const opencode = await runtime.runPromise(
+            Effect.gen(function* () {
+              return yield* OpencodeService;
+            }),
+          );
 
-            const eventUrl = `${opencode.baseUrl}/event`;
-            console.log(`[tRPC SSE] Connecting to OpenCode: ${eventUrl}`);
+          const eventUrl = `${opencode.baseUrl}/event`;
+          console.log(`[tRPC SSE] Connecting to OpenCode: ${eventUrl}`);
 
-            abortController = new AbortController();
+          abortController = new AbortController();
 
-            const response = await fetch(eventUrl, {
-              headers: { Accept: "text/event-stream" },
-              signal: abortController.signal,
-            });
+          const response = await fetch(eventUrl, {
+            headers: { Accept: "text/event-stream" },
+            signal: abortController.signal,
+          });
 
-            if (!response.ok || !response.body) {
-              emit.error(
-                new Error(`Failed to connect to OpenCode: ${response.status}`)
-              );
-              return;
+          if (!response.ok || !response.body) {
+            emit.error(new Error(`Failed to connect to OpenCode: ${response.status}`));
+            return;
+          }
+
+          console.log(`[tRPC SSE] Connection established for session: ${input.sessionId}`);
+
+          // Emit connected event
+          emit.next({ type: "connected" });
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+
+          while (!aborted) {
+            const { done, value } = await reader.read();
+
+            if (done) {
+              console.log(`[tRPC SSE] Stream ended for session: ${input.sessionId}`);
+              break;
             }
 
-            console.log(`[tRPC SSE] Connection established for session: ${input.sessionId}`);
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
 
-            // Emit connected event
-            emit.next({ type: "connected" });
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
 
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
+              try {
+                const data = line.slice(6);
+                const event = JSON.parse(data);
+                const transformed = transformEvent(event, input.sessionId);
 
-            while (!aborted) {
-              const { done, value } = await reader.read();
-
-              if (done) {
-                console.log(`[tRPC SSE] Stream ended for session: ${input.sessionId}`);
-                break;
-              }
-
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split("\n");
-              buffer = lines.pop() || "";
-
-              for (const line of lines) {
-                if (!line.startsWith("data: ")) continue;
-
-                try {
-                  const data = line.slice(6);
-                  const event = JSON.parse(data);
-                  const transformed = transformEvent(event, input.sessionId);
-
-                  if (transformed) {
-                    emit.next(transformed);
-                  }
-                } catch (e) {
-                  console.error("[tRPC SSE] Parse error:", e);
+                if (transformed) {
+                  emit.next(transformed);
                 }
+              } catch (e) {
+                console.error("[tRPC SSE] Parse error:", e);
               }
             }
-
-            emit.complete();
-          } catch (error) {
-            if (!aborted) {
-              console.error("[tRPC SSE] Error:", error);
-              emit.error(error instanceof Error ? error : new Error(String(error)));
-            }
           }
-        })();
 
-        // Cleanup function
-        return () => {
-          console.log(`[tRPC SSE] Unsubscribing from session: ${input.sessionId}`);
-          aborted = true;
-          if (abortController) {
-            abortController.abort();
+          emit.complete();
+        } catch (error) {
+          if (!aborted) {
+            console.error("[tRPC SSE] Error:", error);
+            emit.error(error instanceof Error ? error : new Error(String(error)));
           }
-        };
-      });
-    }),
+        }
+      })();
+
+      // Cleanup function
+      return () => {
+        console.log(`[tRPC SSE] Unsubscribing from session: ${input.sessionId}`);
+        aborted = true;
+        if (abortController) {
+          abortController.abort();
+        }
+      };
+    });
+  }),
 });
