@@ -13,11 +13,13 @@
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist bun.lockb && bun install",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "fmt": "oxfmt",
-    "fmt:check": "oxfmt --check"
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "prepare": "lefthook install"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "lefthook": "^2.0.13",
     "oxfmt": "^0.23.0",
     "oxlint": "^1.38.0"
   },
