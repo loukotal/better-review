@@ -2,14 +2,7 @@
 // HTTP Response Helpers
 // =============================================================================
 
-import { Effect } from "effect";
 import { SYSTEM_CONTEXT_MARKER } from "@better-review/shared";
-
-/**
- * Create a 400 Bad Request response with an error message
- */
-export const validationError = (message: string): Response =>
-  Response.json({ error: message }, { status: 400 });
 
 /**
  * Extract a human-readable error message from various error types
@@ -43,42 +36,6 @@ export const getErrorMessage = (error: unknown): string => {
 
   return String(current);
 };
-
-/**
- * Run an effect and return a JSON response
- * Success: Response.json(data)
- * Failure: Response.json({ error: message }, { status: 500 })
- */
-export const runJson = <A>(
-  effect: Effect.Effect<A, unknown, never>,
-): Promise<Response> =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.map((data) => Response.json(data)),
-      Effect.catchAllCause((cause) =>
-        Effect.succeed(
-          Response.json({ error: getErrorMessage(cause) }, { status: 500 }),
-        ),
-      ),
-    ),
-  );
-
-/**
- * Run an effect that returns a Response directly
- * Catches failures and returns error JSON response
- */
-export const runResponse = (
-  effect: Effect.Effect<Response, unknown, never>,
-): Promise<Response> =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.catchAllCause((cause) =>
-        Effect.succeed(
-          Response.json({ error: getErrorMessage(cause) }, { status: 500 }),
-        ),
-      ),
-    ),
-  );
 
 // =============================================================================
 // Review Context Builder

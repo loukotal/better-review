@@ -6,6 +6,7 @@ import {
   onMount,
   onCleanup,
 } from "solid-js";
+import { trpc } from "../lib/trpc";
 
 interface ModelEntry {
   providerId: string;
@@ -29,11 +30,8 @@ export function ModelSelector(props: ModelSelectorProps) {
   // Load current model on mount
   onMount(async () => {
     try {
-      const res = await fetch("/api/models/current");
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentModel(data);
-      }
+      const data = await trpc.models.current.query();
+      setCurrentModel(data);
     } catch (err) {
       console.error("Failed to load current model:", err);
     }
@@ -47,13 +45,8 @@ export function ModelSelector(props: ModelSelectorProps) {
 
     setIsLoading(true);
     try {
-      const res = await fetch(
-        `/api/models/search?q=${encodeURIComponent(query)}`,
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setSearchResults(data.models || []);
-      }
+      const data = await trpc.models.search.query({ q: query });
+      setSearchResults(data.models || []);
     } catch (err) {
       console.error("Failed to search models:", err);
     } finally {
@@ -86,16 +79,9 @@ export function ModelSelector(props: ModelSelectorProps) {
 
   const handleSelect = async (model: ModelEntry) => {
     try {
-      const res = await fetch("/api/models/current", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(model),
-      });
-
-      if (res.ok) {
-        setCurrentModel(model);
-        setIsOpen(false);
-      }
+      await trpc.models.setCurrent.mutate(model);
+      setCurrentModel(model);
+      setIsOpen(false);
     } catch (err) {
       console.error("Failed to set model:", err);
     }

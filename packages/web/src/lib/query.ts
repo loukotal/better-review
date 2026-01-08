@@ -2,6 +2,7 @@ import { QueryClient } from "@tanstack/solid-query";
 import { persistQueryClient } from "@tanstack/query-persist-client-core";
 import { get, set, del, createStore } from "idb-keyval";
 import type { PrCommit, PRComment, PrStatus, CiStatus, SearchedPr } from "@better-review/shared";
+import { trpc } from "./trpc";
 
 // Create a dedicated IndexedDB store for query cache
 const queryStore = createStore("better-review-query", "cache");
@@ -66,7 +67,7 @@ export const queryKeys = {
     issueComments: (url: string) => ["pr", "issueComments", url] as const,
     status: (url: string) => ["pr", "status", url] as const,
     ciStatus: (url: string) => ["pr", "ci-status", url] as const,
-    ciStatusBatch: (urls: string[]) => ["pr", "ci-status-batch", urls.toSorted().join(",")] as const,
+  ciStatusBatch: (urls: string[]) => ["pr", "ci-status-batch", urls.toSorted().join(",")] as const,
   },
   prs: {
     list: ["prs", "list"] as const,
@@ -76,99 +77,74 @@ export const queryKeys = {
   },
 };
 
-// API fetch functions
+// API fetch functions using tRPC
 export const api = {
-  async fetchDiff(url: string, signal?: AbortSignal): Promise<string> {
-    const res = await fetch(`/api/pr/diff?url=${encodeURIComponent(url)}`, { signal });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.diff;
+  async fetchDiff(url: string, _signal?: AbortSignal): Promise<string> {
+    const result = await trpc.pr.diff.query({ url });
+    return result.diff;
   },
 
-  async fetchInfo(url: string, signal?: AbortSignal): Promise<{ owner: string; repo: string; number: string } | null> {
-    const res = await fetch(`/api/pr/info?url=${encodeURIComponent(url)}`, { signal });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    if (data.owner && data.repo && data.number) {
-      return { owner: data.owner, repo: data.repo, number: data.number };
+  async fetchInfo(url: string, _signal?: AbortSignal): Promise<{ owner: string; repo: string; number: string } | null> {
+    const result = await trpc.pr.info.query({ url });
+    if (result.owner && result.repo && result.number) {
+      return { owner: result.owner, repo: result.repo, number: result.number };
     }
     return null;
   },
 
-  async fetchCommits(url: string, signal?: AbortSignal): Promise<PrCommit[]> {
-    const res = await fetch(`/api/pr/commits?url=${encodeURIComponent(url)}`, { signal });
-    const data = await res.json();
-    return data.commits ?? [];
+  async fetchCommits(url: string, _signal?: AbortSignal): Promise<PrCommit[]> {
+    const result = await trpc.pr.commits.query({ url });
+    return [...(result.commits ?? [])];
   },
 
-  async fetchCommitDiff(url: string, sha: string, signal?: AbortSignal): Promise<string> {
-    const res = await fetch(`/api/pr/commit-diff?url=${encodeURIComponent(url)}&sha=${sha}`, { signal });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.diff;
+  async fetchCommitDiff(url: string, sha: string, _signal?: AbortSignal): Promise<string> {
+    const result = await trpc.pr.commitDiff.query({ url, sha });
+    return result.diff;
   },
 
-  async fetchComments(url: string, signal?: AbortSignal): Promise<PRComment[]> {
-    const res = await fetch(`/api/pr/comments?url=${encodeURIComponent(url)}`, { signal });
-    const data = await res.json();
-    return data.comments ?? [];
+  async fetchComments(url: string, _signal?: AbortSignal): Promise<PRComment[]> {
+    const result = await trpc.pr.comments.query({ url });
+    return [...(result.comments ?? [])];
   },
 
-  async fetchIssueComments(url: string, signal?: AbortSignal): Promise<IssueComment[]> {
-    const res = await fetch(`/api/pr/issue-comments?url=${encodeURIComponent(url)}`, { signal });
-    const data = await res.json();
-    return data.comments ?? [];
+  async fetchIssueComments(url: string, _signal?: AbortSignal): Promise<IssueComment[]> {
+    const result = await trpc.pr.issueComments.query({ url });
+    return [...(result.comments ?? [])] as IssueComment[];
   },
 
-  async fetchStatus(url: string, signal?: AbortSignal): Promise<PrStatus> {
-    const res = await fetch(`/api/pr/status?url=${encodeURIComponent(url)}`, { signal });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data;
+  async fetchStatus(url: string, _signal?: AbortSignal): Promise<PrStatus> {
+    const result = await trpc.pr.status.query({ url });
+    return result;
   },
 
-  async fetchPrList(signal?: AbortSignal): Promise<SearchedPr[]> {
-    const res = await fetch("/api/prs", { signal });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.prs ?? [];
+  async fetchPrList(_signal?: AbortSignal): Promise<SearchedPr[]> {
+    const result = await trpc.prs.list.query();
+    return [...(result.prs ?? [])];
   },
 
-  async fetchPrCiStatus(prUrl: string, signal?: AbortSignal): Promise<CiStatus | null> {
-    const res = await fetch(`/api/prs/ci-status?url=${encodeURIComponent(prUrl)}`, { signal });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.ciStatus ?? null;
+  async fetchPrCiStatus(prUrl: string, _signal?: AbortSignal): Promise<CiStatus | null> {
+    const result = await trpc.prs.ciStatus.query({ url: prUrl });
+    return result.ciStatus ?? null;
   },
 
-  async fetchCiStatusBatch(urls: string[], signal?: AbortSignal): Promise<Record<string, CiStatus | null>> {
-    const res = await fetch("/api/prs/ci-status/batch", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ urls }),
-      signal,
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.statuses ?? {};
+  async fetchCiStatusBatch(urls: string[], _signal?: AbortSignal): Promise<Record<string, CiStatus | null>> {
+    const result = await trpc.prs.ciStatusBatch.query({ urls });
+    return result.statuses ?? {};
   },
 
-  async fetchCommitDiffsBatch(url: string, signal?: AbortSignal): Promise<Record<string, string | null>> {
-    const res = await fetch(`/api/pr/commit-diffs/batch?url=${encodeURIComponent(url)}`, { signal });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.diffs ?? {};
+  async fetchCommitDiffsBatch(url: string, _signal?: AbortSignal): Promise<Record<string, string | null>> {
+    const result = await trpc.pr.commitDiffsBatch.query({ url });
+    return result.diffs ?? {};
   },
 
-  async fetchCurrentUser(signal?: AbortSignal): Promise<string | null> {
-    const res = await fetch("/api/user", { signal });
-    const data = await res.json();
-    return data.login ?? null;
+  async fetchCurrentUser(_signal?: AbortSignal): Promise<string | null> {
+    const result = await trpc.user.current.query();
+    return result.login ?? null;
   },
 
   async fetchPrBatch(
     url: string,
-    signal?: AbortSignal,
+    _signal?: AbortSignal,
   ): Promise<{
     diff: string;
     info: { owner: string; repo: string; number: string };
@@ -177,10 +153,15 @@ export const api = {
     issueComments: IssueComment[];
     status: PrStatus;
   }> {
-    const res = await fetch(`/api/pr/batch?url=${encodeURIComponent(url)}`, { signal });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data;
+    const result = await trpc.pr.batch.query({ url });
+    return {
+      diff: result.diff,
+      info: result.info,
+      commits: [...result.commits],
+      comments: [...result.comments],
+      issueComments: [...result.issueComments] as IssueComment[],
+      status: result.status,
+    };
   },
 };
 

@@ -24,6 +24,7 @@ import { ModelSelector } from "./components/ModelSelector";
 import { SessionSelector } from "./components/SessionSelector";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { SYSTEM_CONTEXT_MARKER, type StoredSession } from "@better-review/shared";
+import { trpc } from "./lib/trpc";
 
 // Configure marked for safe, minimal output
 marked.setOptions({
@@ -199,8 +200,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function loadMessages(sid: string) {
     try {
-      const res = await fetch(`/api/opencode/messages?sessionId=${sid}`);
-      const data = await res.json();
+      const data = await trpc.opencode.messages.query({ sessionId: sid });
 
       if (data.messages && Array.isArray(data.messages)) {
         const transformed = transformOpenCodeMessages(data.messages);
@@ -294,23 +294,13 @@ export function ChatPanel(props: ChatPanelProps) {
     if (!props.prUrl || newSessionId === sessionId()) return;
 
     try {
-      const res = await fetch("/api/pr/sessions/switch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prUrl: props.prUrl,
-          sessionId: newSessionId,
-        }),
+      await trpc.sessions.switch.mutate({
+        prUrl: props.prUrl,
+        sessionId: newSessionId,
       });
 
-      if (!res.ok) {
-        console.error("Failed to switch session:", await res.text());
-        return;
-      }
-
       // Load messages for the new session BEFORE switching
-      const messagesRes = await fetch(`/api/opencode/messages?sessionId=${newSessionId}`);
-      const messagesData = await messagesRes.json();
+      const messagesData = await trpc.opencode.messages.query({ sessionId: newSessionId });
 
       let newMessages: Parameters<typeof chat.loadExistingMessages>[0] = [];
       if (messagesData.messages && Array.isArray(messagesData.messages)) {
@@ -331,24 +321,13 @@ export function ChatPanel(props: ChatPanelProps) {
     if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return;
 
     try {
-      const res = await fetch("/api/pr/sessions/new", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prUrl: props.prUrl,
-          prNumber: props.prNumber,
-          repoOwner: props.repoOwner,
-          repoName: props.repoName,
-          files: props.files,
-        }),
+      const data = await trpc.sessions.create.mutate({
+        prUrl: props.prUrl,
+        prNumber: props.prNumber,
+        repoOwner: props.repoOwner,
+        repoName: props.repoName,
+        files: props.files,
       });
-
-      if (!res.ok) {
-        console.error("Failed to create new session:", await res.text());
-        return;
-      }
-
-      const data = await res.json();
 
       if (data.session?.id) {
         batch(() => {
@@ -368,21 +347,10 @@ export function ChatPanel(props: ChatPanelProps) {
     if (!props.prUrl) return;
 
     try {
-      const res = await fetch("/api/pr/sessions/hide", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prUrl: props.prUrl,
-          sessionId: hiddenSessionId,
-        }),
+      const data = await trpc.sessions.hide.mutate({
+        prUrl: props.prUrl,
+        sessionId: hiddenSessionId,
       });
-
-      if (!res.ok) {
-        console.error("Failed to hide session:", await res.text());
-        return;
-      }
-
-      const data = await res.json();
 
       // Update sessions list
       if (data.sessions) {

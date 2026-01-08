@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { usePrContext } from "../context/PrContext";
+import { trpc } from "../lib/trpc";
 
 function CheckIcon() {
   return (
@@ -25,23 +26,14 @@ export function ApproveButton() {
     setError(null);
 
     try {
-      const res = await fetch("/api/pr/approve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prUrl: url,
-          body: comment().trim() || undefined,
-        }),
+      await trpc.pr.approve.mutate({
+        prUrl: url,
+        body: comment().trim() || undefined,
       });
 
-      const data = await res.json();
-      if (data.error) {
-        setError(data.error);
-      } else {
-        setOpen(false);
-        setComment("");
-        setApproved(true);
-      }
+      setOpen(false);
+      setComment("");
+      setApproved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to approve");
     } finally {

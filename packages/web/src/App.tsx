@@ -17,6 +17,7 @@ import { ReviewModeToggle } from "./components/ReviewModeToggle";
 import { CommitNavigator } from "./components/CommitNavigator";
 import { useCurrentUser } from "./hooks/usePrData";
 import { queryKeys, api, queryClient, type IssueComment } from "./lib/query";
+import { trpc } from "./lib/trpc";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
@@ -337,8 +338,7 @@ const AppContent: Component = () => {
   // Fetch PR queue on mount
   onMount(async () => {
     try {
-      const res = await fetch("/api/prs");
-      const data = await res.json();
+      const data = await trpc.prs.list.query();
       if (data.prs) {
         setPrQueue(data.prs.map((pr: { url: string; title: string; repository: { nameWithOwner: string } }) => ({
           url: pr.url,
@@ -528,72 +528,81 @@ const AppContent: Component = () => {
   };
 
   const addComment = async (filePath: string, line: number, side: "LEFT" | "RIGHT", body: string) => {
-    const res = await fetch("/api/pr/comment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prUrl: prUrl(), filePath, line, side, body }),
-    });
-    const data = await res.json();
-    if (data.comment) {
-      const url = loadedPrUrl();
-      if (url) updateCommentsCache(url, [...comments(), data.comment]);
+    try {
+      const data = await trpc.pr.addComment.mutate({
+        prUrl: prUrl()!,
+        filePath,
+        line,
+        side,
+        body,
+      });
+      if (data.comment) {
+        const url = loadedPrUrl();
+        if (url) updateCommentsCache(url, [...comments(), data.comment]);
+      }
+      return data;
+    } catch (err) {
+      console.error("Failed to add comment:", err);
+      return { error: err instanceof Error ? err.message : "Failed to add comment" };
     }
-    return data;
   };
 
   const replyToComment = async (commentId: number, body: string) => {
-    const res = await fetch("/api/pr/comment/reply", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prUrl: prUrl(), commentId, body }),
-    });
-    const data = await res.json();
-    if (data.comment) {
-      const url = loadedPrUrl();
-      if (url) updateCommentsCache(url, [...comments(), data.comment]);
+    try {
+      const data = await trpc.pr.replyToComment.mutate({
+        prUrl: prUrl()!,
+        commentId,
+        body,
+      });
+      if (data.comment) {
+        const url = loadedPrUrl();
+        if (url) updateCommentsCache(url, [...comments(), data.comment]);
+      }
+      return data;
+    } catch (err) {
+      console.error("Failed to reply to comment:", err);
+      return { error: err instanceof Error ? err.message : "Failed to reply" };
     }
-    return data;
   };
 
   const editComment = async (commentId: number, body: string) => {
-    const res = await fetch("/api/pr/comment/edit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prUrl: loadedPrUrl(), commentId, body }),
-    });
-    const data = await res.json();
-    if (data.error) {
-      console.error("Failed to edit comment:", data.error);
-      return data;
-    }
-    if (data.comment) {
-      const url = loadedPrUrl();
-      if (url) {
-        const newComments = comments().map(c =>
-          c.id === commentId ? { ...c, body: data.comment.body } : c
-        );
-        updateCommentsCache(url, newComments);
+    try {
+      const data = await trpc.pr.editComment.mutate({
+        prUrl: loadedPrUrl()!,
+        commentId,
+        body,
+      });
+      if (data.comment) {
+        const url = loadedPrUrl();
+        if (url) {
+          const newComments = comments().map(c =>
+            c.id === commentId ? { ...c, body: data.comment.body } : c
+          );
+          updateCommentsCache(url, newComments);
+        }
       }
+      return data;
+    } catch (err) {
+      console.error("Failed to edit comment:", err);
+      return { error: err instanceof Error ? err.message : "Failed to edit comment" };
     }
-    return data;
   };
 
   const deleteComment = async (commentId: number) => {
-    const res = await fetch("/api/pr/comment/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prUrl: loadedPrUrl(), commentId }),
-    });
-    const data = await res.json();
-    if (data.error) {
-      console.error("Failed to delete comment:", data.error);
-      return data;
+    try {
+      await trpc.pr.deleteComment.mutate({
+        prUrl: loadedPrUrl()!,
+        commentId,
+      });
+      const url = loadedPrUrl();
+      if (url) {
+        updateCommentsCache(url, comments().filter(c => c.id !== commentId));
+      }
+      return { success: true };
+    } catch (err) {
+      console.error("Failed to delete comment:", err);
+      return { error: err instanceof Error ? err.message : "Failed to delete comment" };
     }
-    const url = loadedPrUrl();
-    if (url) {
-      updateCommentsCache(url, comments().filter(c => c.id !== commentId));
-    }
-    return data;
   };
 
   return (
