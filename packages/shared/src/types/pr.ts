@@ -51,6 +51,7 @@ export interface PrStatus {
   body: string;
   author: string;
   url: string;
+  headRef: string;
   checks: readonly CheckRun[];
 }
 

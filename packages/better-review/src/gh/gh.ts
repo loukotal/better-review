@@ -115,6 +115,7 @@ const PrStatusSchema = Schema.Struct({
   body: Schema.String,
   author: Schema.String,
   url: Schema.String,
+  headRef: Schema.String,
   checks: Schema.Array(CheckRunSchema),
 })
 
@@ -177,6 +178,7 @@ const PrDataResponseSchema = Schema.Struct({
   author: Schema.String,
   merged: Schema.Boolean,
   html_url: Schema.String,
+  head_ref: Schema.String,
 })
 
 // Schema for raw commit from listCommits API
@@ -313,7 +315,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "api",
         `repos/${owner}/${repo}/pulls/${number}`,
         "--jq",
-        "{ state, draft, mergeable, title, body, author: .user.login, merged: .merged, html_url }",
+        "{ state, draft, mergeable, title, body, author: .user.login, merged: .merged, html_url, head_ref: .head.ref }",
       );
       const prResult = (yield* Command.string(prCmd)).trim();
       if (!prResult) {
@@ -347,6 +349,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         body: prData.body ?? "",
         author: prData.author,
         url: prData.html_url,
+        headRef: prData.head_ref,
         checks,
       } satisfies PrStatus;
     }).pipe(
