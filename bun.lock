@@ -20,7 +20,7 @@
         "@better-review/shared": "workspace:*",
         "@effect/platform": "^0.94.0",
         "@effect/platform-bun": "^0.87.0",
-        "@opencode-ai/sdk": "^1.0.223",
+        "@opencode-ai/sdk": "^1.1.6",
         "@pierre/diffs": "^1.0.2",
         "@trpc/server": "^11.8.1",
         "effect": "^3.19.13",
@@ -199,7 +199,7 @@
 
     "@nothing-but/utils": ["@nothing-but/utils@0.17.0", "", {}, "sha512-TuCHcHLOqDL0SnaAxACfuRHBNRgNJcNn9X0GiH5H3YSDBVquCr3qEIG3FOQAuMyZCbu9w8nk2CHhOsn7IvhIwQ=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.0.223", "", {}, "sha512-oKJ6QjsviE+lt6cpGu0lL2kWuoj84ZkWvwieyqHEQ2pJunAJqUzhmIhzep0QyDax1/+UXhBWfrnciNt48ch66w=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.1.6", "", {}, "sha512-7Tiso9BExVgxz86VY6F807McCyOgu/SCaQJ87wwxxVSN8GpPpmUIYN5h6LH38EBNJWKXDjokasn/y9EkKxOisQ=="],
 
     "@oxfmt/darwin-arm64": ["@oxfmt/darwin-arm64@0.23.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-shGng2EjBspvuqtFtcjcKf0WoZ9QCdL8iLYgdOoKSiSQ9pPyLJ4jQf62yhm4b2PpZNVcV/20gV6d8SyKzg6SZQ=="],
 
