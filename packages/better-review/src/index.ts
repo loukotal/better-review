@@ -5,8 +5,9 @@ import { filterDiffByLineRange } from "./diff";
 import { GhService } from "./gh/gh";
 import { OpencodeService } from "./opencode";
 import { buildReviewContext, getErrorMessage } from "./response";
+import { runtime } from "./runtime";
 import { DiffCacheService, PrContextService } from "./state";
-import { createContext, runtime } from "./trpc/context";
+import { createContext } from "./trpc/context";
 import { appRouter } from "./trpc/routers";
 
 // =============================================================================
@@ -38,6 +39,7 @@ async function serveStatic(pathname: string): Promise<Response> {
 // =============================================================================
 
 const main = Effect.gen(function* () {
+  // Get services from the shared runtime - these instances are used everywhere
   const gh = yield* GhService;
   const opencode = yield* OpencodeService;
   const diffCache = yield* DiffCacheService;
@@ -49,7 +51,7 @@ const main = Effect.gen(function* () {
     fetch: async (req) => {
       const url = new URL(req.url);
 
-      // tRPC endpoint - handles all API requests
+      // tRPC endpoint - handlers access services via the shared runtime
       if (url.pathname.startsWith("/api/trpc")) {
         return fetchRequestHandler({
           endpoint: "/api/trpc",
@@ -71,54 +73,40 @@ const main = Effect.gen(function* () {
           return Response.json({ error: "Missing sessionId or file" }, { status: 400 });
         }
 
-        return runtime.runPromise(
-          Effect.gen(function* () {
-            // O(1) lookup of PR URL from session
-            const prUrl = yield* prContext.getPrUrlBySessionId(sessionId);
+        try {
+          const prUrl = await Effect.runPromise(prContext.getPrUrlBySessionId(sessionId));
 
-            if (!prUrl) {
-              return Response.json(
-                { error: "Session not found. Load a PR first." },
-                { status: 404 },
-              );
-            }
+          if (!prUrl) {
+            return Response.json({ error: "Session not found. Load a PR first." }, { status: 404 });
+          }
 
-            yield* Effect.log(`[file-diff] Session ${sessionId} -> PR ${prUrl}, file: ${file}`);
+          const prDiffs = await Effect.runPromise(diffCache.get(prUrl));
 
-            // Get from cache
-            const prDiffs = yield* diffCache.get(prUrl);
-            if (!prDiffs) {
-              return Response.json(
-                { error: "Diffs not cached. This shouldn't happen." },
-                { status: 500 },
-              );
-            }
-
-            const fileMeta = prDiffs.get(file);
-            if (!fileMeta) {
-              return Response.json({ error: `No diff found for file: ${file}` }, { status: 404 });
-            }
-
-            // Filter by line range if specified
-            let diffOutput = fileMeta.diff;
-            if (startLine !== null || endLine !== null) {
-              diffOutput = filterDiffByLineRange(
-                diffOutput,
-                startLine ? parseInt(startLine, 10) : undefined,
-                endLine ? parseInt(endLine, 10) : undefined,
-              );
-            }
-
-            yield* Effect.log(
-              `[file-diff] Returning diff for ${file} (${diffOutput.length} chars)`,
+          if (!prDiffs) {
+            return Response.json(
+              { error: "Diffs not cached. This shouldn't happen." },
+              { status: 500 },
             );
-            return Response.json({ diff: diffOutput });
-          }).pipe(
-            Effect.catchAll((error) =>
-              Effect.succeed(Response.json({ error: getErrorMessage(error) }, { status: 500 })),
-            ),
-          ),
-        );
+          }
+
+          const fileMeta = prDiffs.get(file);
+          if (!fileMeta) {
+            return Response.json({ error: `No diff found for file: ${file}` }, { status: 404 });
+          }
+
+          let diffOutput = fileMeta.diff;
+          if (startLine !== null || endLine !== null) {
+            diffOutput = filterDiffByLineRange(
+              diffOutput,
+              startLine ? parseInt(startLine, 10) : undefined,
+              endLine ? parseInt(endLine, 10) : undefined,
+            );
+          }
+
+          return Response.json({ diff: diffOutput });
+        } catch (error) {
+          return Response.json({ error: getErrorMessage(error) }, { status: 500 });
+        }
       }
 
       // REST endpoint: /api/pr/metadata
@@ -130,58 +118,46 @@ const main = Effect.gen(function* () {
           return Response.json({ error: "Missing sessionId" }, { status: 400 });
         }
 
-        return runtime.runPromise(
-          Effect.gen(function* () {
-            // O(1) lookup of PR URL from session
-            const prUrl = yield* prContext.getPrUrlBySessionId(sessionId);
+        try {
+          const prUrl = await Effect.runPromise(prContext.getPrUrlBySessionId(sessionId));
 
-            if (!prUrl) {
-              return Response.json(
-                { error: "Session not found. Load a PR first." },
-                { status: 404 },
-              );
-            }
+          if (!prUrl) {
+            return Response.json({ error: "Session not found. Load a PR first." }, { status: 404 });
+          }
 
-            yield* Effect.log(`[metadata] Session ${sessionId} -> PR ${prUrl}`);
+          const prStatus = await Effect.runPromise(gh.getPrStatus(prUrl));
+          const prDiffs = await Effect.runPromise(diffCache.get(prUrl));
 
-            // Get PR status (includes description)
-            const prStatus = yield* gh.getPrStatus(prUrl);
+          const fileStats: string[] = [];
+          const files: string[] = [];
 
-            // Get cached diffs and compute line counts
-            const prDiffs = yield* diffCache.get(prUrl);
-            const fileStats: string[] = [];
-            const files: string[] = [];
-
-            if (prDiffs) {
-              for (const [file, fileMeta] of prDiffs) {
-                files.push(file);
-                const { totalAdded, totalRemoved, hunks } = fileMeta;
-                // Show hunk ranges for large files (>1k lines changed)
-                if (totalAdded + totalRemoved > 1000 && hunks.length > 0) {
-                  const ranges = hunks
-                    .map((h) => `${h.newStart}-${h.newStart + h.newCount - 1}`)
-                    .join(", ");
-                  fileStats.push(`${file} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`);
-                } else {
-                  fileStats.push(`${file} +${totalAdded} -${totalRemoved}`);
-                }
+          if (prDiffs) {
+            for (const [f, fileMeta] of prDiffs) {
+              files.push(f);
+              const { totalAdded, totalRemoved, hunks } = fileMeta;
+              if (totalAdded + totalRemoved > 1000 && hunks.length > 0) {
+                const ranges = hunks
+                  .map((h) => `${h.newStart}-${h.newStart + h.newCount - 1}`)
+                  .join(", ");
+                fileStats.push(`${f} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`);
+              } else {
+                fileStats.push(`${f} +${totalAdded} -${totalRemoved}`);
               }
             }
+          }
 
-            // Parse owner/repo/number from PR URL
-            const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-            const owner = match?.[1] ?? "unknown";
-            const repo = match?.[2] ?? "unknown";
-            const number = match?.[3] ?? "?";
+          const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+          const owner = match?.[1] ?? "unknown";
+          const repo = match?.[2] ?? "unknown";
+          const number = match?.[3] ?? "?";
 
-            // Build compact text output
-            const description = prStatus.body
-              ? prStatus.body.length > 500
-                ? prStatus.body.slice(0, 500) + "..."
-                : prStatus.body
-              : "(no description)";
+          const description = prStatus.body
+            ? prStatus.body.length > 500
+              ? prStatus.body.slice(0, 500) + "..."
+              : prStatus.body
+            : "(no description)";
 
-            const metadata = `PR: ${owner}/${repo}#${number}
+          const metadata = `PR: ${owner}/${repo}#${number}
 Title: ${prStatus.title}
 Author: ${prStatus.author}
 State: ${prStatus.state}${prStatus.draft ? " (draft)" : ""}
@@ -192,18 +168,14 @@ ${description}
 Files (${files.length} changed):
 ${fileStats.join("\n")}`;
 
-            return Response.json({ metadata });
-          }).pipe(
-            Effect.catchAll((error) =>
-              Effect.succeed(Response.json({ error: getErrorMessage(error) }, { status: 500 })),
-            ),
-          ),
-        );
+          return Response.json({ metadata });
+        } catch (error) {
+          return Response.json({ error: getErrorMessage(error) }, { status: 500 });
+        }
       }
 
       // Legacy endpoint: /api/opencode/session
       // This is a complex endpoint that combines session management with context injection
-      // Keeping it as REST for now due to its complexity
       if (url.pathname === "/api/opencode/session" && req.method === "POST") {
         const body = (await req.json()) as {
           prUrl: string;
@@ -217,133 +189,82 @@ ${fileStats.join("\n")}`;
           return Response.json({ error: "Missing prUrl" }, { status: 400 });
         }
 
-        return runtime.runPromise(
-          Effect.gen(function* () {
-            yield* Effect.log("[API] Request body:", {
-              ...body,
-              files: `[${body.files?.length || 0} files]`,
-            });
+        try {
+          const currentHeadSha = await Effect.runPromise(gh.getHeadSha(body.prUrl));
 
-            // Fetch current head SHA from GitHub
-            const currentHeadSha = yield* gh.getHeadSha(body.prUrl);
-            yield* Effect.log("[API] Current head SHA:", currentHeadSha);
-
-            // Set current PR context
-            yield* prContext.setCurrent(body.prUrl, body.files, {
+          await Effect.runPromise(
+            prContext.setCurrent(body.prUrl, body.files, {
               owner: body.repoOwner,
               repo: body.repoName,
               number: String(body.prNumber),
-            });
+            }),
+          );
 
-            // Pre-cache all diffs for this PR
-            yield* Effect.log("[API] Pre-caching diffs...");
-            yield* diffCache.getOrFetch(body.prUrl);
+          await Effect.runPromise(diffCache.getOrFetch(body.prUrl));
 
-            // Write PR context file for custom tools
-            yield* Effect.log("[API] Writing PR context file...");
-            yield* Effect.tryPromise(() =>
-              Bun.write(
-                ".opencode/.current-pr.json",
-                JSON.stringify({
-                  url: body.prUrl,
-                  owner: body.repoOwner,
-                  repo: body.repoName,
-                  number: body.prNumber,
-                  files: body.files,
-                }),
-              ),
-            );
+          const { sessions, activeSessionId } = await Effect.runPromise(
+            prContext.listSessions(body.prUrl),
+          );
 
-            // Check persistent storage for existing sessions
-            const { sessions, activeSessionId } = yield* prContext.listSessions(body.prUrl);
-            yield* Effect.log(
-              `[API] Found ${sessions.length} existing sessions, active: ${activeSessionId}`,
-            );
+          if (activeSessionId) {
+            const activeSession = sessions.find((s) => s.id === activeSessionId);
+            if (activeSession) {
+              if (activeSession.headSha !== currentHeadSha) {
+                await Effect.runPromise(diffCache.clear(body.prUrl));
+              }
 
-            // If we have an active session, try to reuse it
-            if (activeSessionId) {
-              const activeSession = sessions.find((s) => s.id === activeSessionId);
-              if (activeSession) {
-                // Check for force-push (HEAD SHA changed since session was created)
-                if (activeSession.headSha !== currentHeadSha) {
-                  yield* Effect.log(
-                    `[API] Force-push detected! Session SHA: ${activeSession.headSha}, Current: ${currentHeadSha}`,
-                  );
-                  yield* Effect.log("[API] Clearing cached diff...");
-                  yield* diffCache.clear(body.prUrl);
-                }
+              const existingSessionData = await opencode.client.session.get({
+                sessionID: activeSessionId,
+              });
 
-                yield* Effect.log("[API] Fetching existing session...");
-                const existingSessionData = yield* Effect.tryPromise(() =>
-                  opencode.client.session.get({
-                    sessionID: activeSessionId,
-                  }),
-                );
+              if (existingSessionData.data) {
+                await Effect.runPromise(prContext.registerSession(activeSessionId, body.prUrl));
 
-                if (existingSessionData.data) {
-                  // Register session → PR mapping for O(1) lookup by tools
-                  yield* prContext.registerSession(activeSessionId, body.prUrl);
-
-                  yield* Effect.log("[API] Reusing session:", activeSessionId);
-                  return Response.json({
-                    session: existingSessionData.data,
-                    sessions,
-                    activeSessionId,
-                    existing: true,
-                    headSha: currentHeadSha,
-                    sessionHeadSha: activeSession.headSha,
-                  });
-                }
+                return Response.json({
+                  session: existingSessionData.data,
+                  sessions,
+                  activeSessionId,
+                  existing: true,
+                  headSha: currentHeadSha,
+                  sessionHeadSha: activeSession.headSha,
+                });
               }
             }
+          }
 
-            // No active session or it doesn't exist in OpenCode - create new one
-            yield* Effect.log("[API] Creating new session...");
-            const session = yield* Effect.tryPromise(() =>
-              opencode.client.session.create({
-                title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
-              }),
-            );
-            yield* Effect.log("[API] Session created:", session.data?.id);
+          const session = await opencode.client.session.create({
+            title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
+          });
 
-            if (!session.data) {
-              return yield* Effect.fail(new Error("Failed to create session"));
-            }
+          if (!session.data) {
+            throw new Error("Failed to create session");
+          }
 
-            // Persist to storage
-            const prData = yield* prContext.addSession(body.prUrl, session.data.id, currentHeadSha);
+          const prData = await Effect.runPromise(
+            prContext.addSession(body.prUrl, session.data.id, currentHeadSha),
+          );
 
-            // Inject initial context (without expecting a reply)
-            yield* Effect.log("[API] Injecting context...");
-            const contextMessage = buildReviewContext(body);
-            yield* Effect.tryPromise(() =>
-              opencode.client.session.prompt({
-                sessionID: session.data.id,
-                parts: [{ type: "text", text: contextMessage }],
-                noReply: true,
-              }),
-            );
-            yield* Effect.log("[API] Context injected successfully");
+          const contextMessage = buildReviewContext(body);
+          await opencode.client.session.prompt({
+            sessionID: session.data.id,
+            parts: [{ type: "text", text: contextMessage }],
+            noReply: true,
+          });
 
-            return Response.json({
-              session: session.data,
-              sessions: prData.sessions,
-              activeSessionId: prData.activeSessionId,
-              existing: false,
-              headSha: currentHeadSha,
-              sessionHeadSha: currentHeadSha,
-            });
-          }).pipe(
-            Effect.catchAll((error) =>
-              Effect.succeed(
-                Response.json(
-                  { error: error instanceof Error ? error.message : String(error) },
-                  { status: 500 },
-                ),
-              ),
-            ),
-          ),
-        );
+          return Response.json({
+            session: session.data,
+            sessions: prData.sessions,
+            activeSessionId: prData.activeSessionId,
+            existing: false,
+            headSha: currentHeadSha,
+            sessionHeadSha: currentHeadSha,
+          });
+        } catch (error) {
+          return Response.json(
+            { error: error instanceof Error ? error.message : String(error) },
+            { status: 500 },
+          );
+        }
       }
 
       // Static file serving for production mode
@@ -357,7 +278,6 @@ ${fileStats.join("\n")}`;
 
   yield* Effect.log(`API server running at http://localhost:${server.port}`);
 
-  // Add finalizer to stop server on cleanup
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       console.log("[Shutdown] Stopping server...");
@@ -365,51 +285,31 @@ ${fileStats.join("\n")}`;
     }),
   );
 
-  // Keep the effect alive until interrupted
   yield* Effect.never;
 });
 
 // =============================================================================
-// Run the application
+// Run the application using the shared runtime
 // =============================================================================
 
-// Import layers from context (reuses the same runtime)
-import { Layer } from "effect";
-
-import { GhServiceLive } from "./gh/gh";
-
-const layers = Layer.mergeAll(
-  GhServiceLive,
-  OpencodeService.Default,
-  DiffCacheService.Default,
-  PrContextService.Default,
-);
-
-const runnable = main.pipe(Effect.scoped, Effect.provide(layers));
-
-// Store fiber and shutdown handler globally for HMR
 declare global {
   var __appFiber: Fiber.RuntimeFiber<void, unknown> | undefined;
   var __shutdownHandler: (() => void) | undefined;
 }
 
-// If there's an existing fiber from a previous HMR cycle, interrupt it first
 if (globalThis.__appFiber) {
   console.log("[HMR] Stopping previous instance...");
   await Effect.runPromise(Fiber.interrupt(globalThis.__appFiber)).catch(() => {});
 }
 
-// Remove old signal handlers to avoid duplicates
 if (globalThis.__shutdownHandler) {
   process.off("SIGINT", globalThis.__shutdownHandler);
   process.off("SIGTERM", globalThis.__shutdownHandler);
 }
 
-// Run in a fiber so we can interrupt it
-const fiber = Effect.runFork(runnable);
+const fiber = runtime.runFork(Effect.scoped(main));
 globalThis.__appFiber = fiber;
 
-// Handle shutdown signals by interrupting the fiber
 const shutdown = () => {
   console.log("\n[Shutdown] Received signal, stopping...");
   Effect.runPromise(Fiber.interrupt(fiber)).then(() => {
@@ -422,7 +322,6 @@ globalThis.__shutdownHandler = shutdown;
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-// HMR cleanup
 if (import.meta.hot) {
   import.meta.hot.dispose(async () => {
     console.log("[HMR] Disposing...");

@@ -4,14 +4,7 @@ import {
   type AnnotationSide,
   type SelectedLineRange,
 } from "@pierre/diffs";
-import {
-  createSignal,
-  Show,
-  createEffect,
-  on,
-  onCleanup,
-  createMemo,
-} from "solid-js";
+import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "solid-js";
 
 import { GITHUB_ICON } from "../icons";
 import { parseMarkdown } from "../lib/markdown";
@@ -40,11 +33,7 @@ const GENERATED_FILE_PATTERNS = [
 interface FileDiffViewProps {
   file: FileDiffMetadata;
   comments: PRComment[];
-  onAddComment: (
-    line: number,
-    side: "LEFT" | "RIGHT",
-    body: string,
-  ) => Promise<unknown>;
+  onAddComment: (line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
@@ -93,8 +82,7 @@ function groupCommentsIntoThreads(comments: PRComment[]) {
   // Sort replies by created_at
   Array.from(threads.values()).forEach((thread) => {
     thread.replies.sort(
-      (a, b) =>
-        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     );
   });
 
@@ -121,15 +109,11 @@ export function FileDiffView(props: FileDiffViewProps) {
         0,
       ) ?? 0,
   );
-  const isLargeFile = createMemo(
-    () => totalLines() > LARGE_FILE_LINE_THRESHOLD,
-  );
+  const isLargeFile = createMemo(() => totalLines() > LARGE_FILE_LINE_THRESHOLD);
   const isGeneratedFile = createMemo(() =>
     GENERATED_FILE_PATTERNS.some((p) => p.test(props.file.name)),
   );
-  const shouldAutoCollapse = createMemo(
-    () => isLargeFile() || isGeneratedFile(),
-  );
+  const shouldAutoCollapse = createMemo(() => isLargeFile() || isGeneratedFile());
 
   const [collapsed, setCollapsed] = createSignal(shouldAutoCollapse());
   const [pendingComment, setPendingComment] = createSignal<{
@@ -179,9 +163,7 @@ export function FileDiffView(props: FileDiffViewProps) {
       if (lineNumber === null) return;
 
       result.push({
-        side: (root.side === "LEFT"
-          ? "deletions"
-          : "additions") as AnnotationSide,
+        side: (root.side === "LEFT" ? "deletions" : "additions") as AnnotationSide,
         lineNumber,
         metadata: { type: "thread", rootComment: root, replies },
       });
@@ -191,9 +173,7 @@ export function FileDiffView(props: FileDiffViewProps) {
     const pending = pendingComment();
     if (pending) {
       result.push({
-        side: (pending.side === "LEFT"
-          ? "deletions"
-          : "additions") as AnnotationSide,
+        side: (pending.side === "LEFT" ? "deletions" : "additions") as AnnotationSide,
         lineNumber: pending.endLine, // Attach annotation to the last line of selection
         metadata: {
           type: "pending",
@@ -260,9 +240,7 @@ export function FileDiffView(props: FileDiffViewProps) {
 
         // Try to scroll the line into view within the shadow DOM
         setTimeout(() => {
-          const container = instance.getFileContainer?.() as
-            | HTMLElement
-            | undefined;
+          const container = instance.getFileContainer?.() as HTMLElement | undefined;
           const shadowRoot = container?.shadowRoot;
           if (shadowRoot) {
             // Try multiple selectors to find the line element
@@ -343,8 +321,7 @@ export function FileDiffView(props: FileDiffViewProps) {
       `;
     }
 
-    const isOwnComment =
-      props.currentUser && comment.user.login === props.currentUser;
+    const isOwnComment = props.currentUser && comment.user.login === props.currentUser;
     const actionsHtml = isOwnComment
       ? `
       <div class="flex items-center gap-2 ml-auto text-xs">
@@ -419,15 +396,9 @@ export function FileDiffView(props: FileDiffViewProps) {
 
   // Helper to attach reply form event handlers
   const attachReplyFormHandlers = (div: HTMLElement, commentId: number) => {
-    const textarea = div.querySelector(
-      `[data-reply-input="${commentId}"]`,
-    ) as HTMLTextAreaElement;
-    const submitBtn = div.querySelector(
-      `[data-submit-reply="${commentId}"]`,
-    ) as HTMLButtonElement;
-    const cancelBtn = div.querySelector(
-      `[data-cancel-reply="${commentId}"]`,
-    ) as HTMLButtonElement;
+    const textarea = div.querySelector(`[data-reply-input="${commentId}"]`) as HTMLTextAreaElement;
+    const submitBtn = div.querySelector(`[data-submit-reply="${commentId}"]`) as HTMLButtonElement;
+    const cancelBtn = div.querySelector(`[data-cancel-reply="${commentId}"]`) as HTMLButtonElement;
 
     textarea?.focus();
 
@@ -467,15 +438,9 @@ export function FileDiffView(props: FileDiffViewProps) {
 
   // Helper to attach edit form event handlers
   const attachEditFormHandlers = (div: HTMLElement, commentId: number) => {
-    const textarea = div.querySelector(
-      `[data-edit-input="${commentId}"]`,
-    ) as HTMLTextAreaElement;
-    const submitBtn = div.querySelector(
-      `[data-submit-edit="${commentId}"]`,
-    ) as HTMLButtonElement;
-    const cancelBtn = div.querySelector(
-      `[data-cancel-edit="${commentId}"]`,
-    ) as HTMLButtonElement;
+    const textarea = div.querySelector(`[data-edit-input="${commentId}"]`) as HTMLTextAreaElement;
+    const submitBtn = div.querySelector(`[data-submit-edit="${commentId}"]`) as HTMLButtonElement;
+    const cancelBtn = div.querySelector(`[data-cancel-edit="${commentId}"]`) as HTMLButtonElement;
 
     textarea?.focus();
     // Move cursor to end
@@ -565,11 +530,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           let html = `<div class="space-y-2">`;
 
           // Render root comment
-          html += renderSingleComment(
-            rootComment,
-            false,
-            editingCommentId === rootComment.id,
-          );
+          html += renderSingleComment(rootComment, false, editingCommentId === rootComment.id);
 
           // Render replies (with collapse logic for 3+ replies)
           if (shouldCollapse) {
@@ -627,9 +588,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           // Attach event listeners
           setTimeout(() => {
             // Reply button
-            const replyBtn = div.querySelector(
-              `[data-reply-to="${rootComment.id}"]`,
-            );
+            const replyBtn = div.querySelector(`[data-reply-to="${rootComment.id}"]`);
             replyBtn?.addEventListener("click", () => {
               setPendingReply({
                 commentId: rootComment.id,
@@ -643,9 +602,7 @@ export function FileDiffView(props: FileDiffViewProps) {
 
             // Edit buttons for all comments in thread
             for (const comment of allComments) {
-              const editBtn = div.querySelector(
-                `[data-edit-comment="${comment.id}"]`,
-              );
+              const editBtn = div.querySelector(`[data-edit-comment="${comment.id}"]`);
               editBtn?.addEventListener("click", () => {
                 setPendingEdit({ commentId: comment.id, body: comment.body });
                 setPendingReply(null);
@@ -654,9 +611,7 @@ export function FileDiffView(props: FileDiffViewProps) {
                 setTimeout(rerender, 0);
               });
 
-              const deleteBtn = div.querySelector(
-                `[data-delete-comment="${comment.id}"]`,
-              );
+              const deleteBtn = div.querySelector(`[data-delete-comment="${comment.id}"]`);
               deleteBtn?.addEventListener("click", async () => {
                 if (!confirm("Delete this comment?")) return;
                 try {
@@ -667,9 +622,7 @@ export function FileDiffView(props: FileDiffViewProps) {
                     alert(result.error);
                   }
                 } catch (err) {
-                  alert(
-                    err instanceof Error ? err.message : "Failed to delete",
-                  );
+                  alert(err instanceof Error ? err.message : "Failed to delete");
                 }
               });
 
@@ -680,12 +633,8 @@ export function FileDiffView(props: FileDiffViewProps) {
             }
 
             // Expand thread button
-            const expandBtn = div.querySelector(
-              `[data-expand-thread="${rootComment.id}"]`,
-            );
-            const hiddenReplies = div.querySelector(
-              `[data-hidden-replies="${rootComment.id}"]`,
-            );
+            const expandBtn = div.querySelector(`[data-expand-thread="${rootComment.id}"]`);
+            const hiddenReplies = div.querySelector(`[data-hidden-replies="${rootComment.id}"]`);
             expandBtn?.addEventListener("click", () => {
               hiddenReplies?.classList.remove("hidden");
               expandBtn.classList.add("hidden");
@@ -732,15 +681,9 @@ export function FileDiffView(props: FileDiffViewProps) {
 
           // Add event listeners after a tick
           setTimeout(() => {
-            const textarea = div.querySelector(
-              "[data-comment-input]",
-            ) as HTMLTextAreaElement;
-            const submitBtn = div.querySelector(
-              "[data-submit-comment]",
-            ) as HTMLButtonElement;
-            const cancelBtn = div.querySelector(
-              "[data-cancel-comment]",
-            ) as HTMLButtonElement;
+            const textarea = div.querySelector("[data-comment-input]") as HTMLTextAreaElement;
+            const submitBtn = div.querySelector("[data-submit-comment]") as HTMLButtonElement;
+            const cancelBtn = div.querySelector("[data-cancel-comment]") as HTMLButtonElement;
 
             textarea?.focus();
 
@@ -830,16 +773,12 @@ export function FileDiffView(props: FileDiffViewProps) {
         </span>
 
         {/* Status indicator */}
-        <span class={`text-sm w-3 ${fileType().class}`}>
-          {fileType().label}
-        </span>
+        <span class={`text-sm w-3 ${fileType().class}`}>{fileType().label}</span>
 
         {/* File path - preserve exact casing */}
         <span class="text-sm text-text-muted group-hover:text-text flex-1 truncate">
           {props.file.name}
-          {props.file.prevName && (
-            <span class="text-text-faint ml-2">← {props.file.prevName}</span>
-          )}
+          {props.file.prevName && <span class="text-text-faint ml-2">← {props.file.prevName}</span>}
         </span>
 
         {/* Large/generated file indicator */}

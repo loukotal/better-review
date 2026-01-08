@@ -173,9 +173,8 @@ const AppContent: Component = () => {
   } | null>(null);
 
   // Panel visibility
-  const [panelVisibility, setPanelVisibility] = createSignal<PanelVisibility>(
-    loadPanelVisibility(),
-  );
+  const [panelVisibility, setPanelVisibility] =
+    createSignal<PanelVisibility>(loadPanelVisibility());
   const togglePanel = (panel: keyof PanelVisibility) => {
     const newVisibility = {
       ...panelVisibility(),
@@ -367,11 +366,7 @@ const AppContent: Component = () => {
       if (data.prs) {
         setPrQueue(
           data.prs.map(
-            (pr: {
-              url: string;
-              title: string;
-              repository: { nameWithOwner: string };
-            }) => ({
+            (pr: { url: string; title: string; repository: { nameWithOwner: string } }) => ({
               url: pr.url,
               title: pr.title,
               repository: pr.repository,
@@ -479,26 +474,20 @@ const AppContent: Component = () => {
     setCommitDiff(null);
 
     // Show cached data immediately if available
-    const cachedDiff = queryClient.getQueryData<string>(
-      queryKeys.pr.diff(currentPrUrl),
-    );
+    const cachedDiff = queryClient.getQueryData<string>(queryKeys.pr.diff(currentPrUrl));
     const cachedInfo = queryClient.getQueryData<{
       owner: string;
       repo: string;
       number: string;
     } | null>(queryKeys.pr.info(currentPrUrl));
-    const cachedCommits = queryClient.getQueryData<PrCommit[]>(
-      queryKeys.pr.commits(currentPrUrl),
-    );
+    const cachedCommits = queryClient.getQueryData<PrCommit[]>(queryKeys.pr.commits(currentPrUrl));
     const cachedComments = queryClient.getQueryData<PRComment[]>(
       queryKeys.pr.comments(currentPrUrl),
     );
     const cachedIssueComments = queryClient.getQueryData<IssueComment[]>(
       queryKeys.pr.issueComments(currentPrUrl),
     );
-    const cachedStatus = queryClient.getQueryData<PrStatus>(
-      queryKeys.pr.status(currentPrUrl),
-    );
+    const cachedStatus = queryClient.getQueryData<PrStatus>(queryKeys.pr.status(currentPrUrl));
 
     if (cachedDiff) {
       setDiff(cachedDiff);
@@ -532,18 +521,9 @@ const AppContent: Component = () => {
       // Populate individual query caches for components that use them
       queryClient.setQueryData(queryKeys.pr.diff(currentPrUrl), data.diff);
       queryClient.setQueryData(queryKeys.pr.info(currentPrUrl), data.info);
-      queryClient.setQueryData(
-        queryKeys.pr.commits(currentPrUrl),
-        data.commits,
-      );
-      queryClient.setQueryData(
-        queryKeys.pr.comments(currentPrUrl),
-        data.comments,
-      );
-      queryClient.setQueryData(
-        queryKeys.pr.issueComments(currentPrUrl),
-        data.issueComments,
-      );
+      queryClient.setQueryData(queryKeys.pr.commits(currentPrUrl), data.commits);
+      queryClient.setQueryData(queryKeys.pr.comments(currentPrUrl), data.comments);
+      queryClient.setQueryData(queryKeys.pr.issueComments(currentPrUrl), data.issueComments);
       queryClient.setQueryData(queryKeys.pr.status(currentPrUrl), data.status);
 
       setDiff(data.diff);
@@ -559,9 +539,7 @@ const AppContent: Component = () => {
       const urlCommitSha = searchParams.commit as string | undefined;
       if (urlMode === "commit" && data.commits.length > 0) {
         let idx = urlCommitSha
-          ? data.commits.findIndex((c: PrCommit) =>
-              c.sha.startsWith(urlCommitSha),
-            )
+          ? data.commits.findIndex((c: PrCommit) => c.sha.startsWith(urlCommitSha))
           : 0;
         if (idx === -1) idx = 0;
         setCurrentCommitIndex(idx);
@@ -694,10 +672,7 @@ const AppContent: Component = () => {
         {/* Main Header */}
         <div class="px-4 py-3">
           <div class="flex items-center justify-between mb-3">
-            <A
-              href="/"
-              class="flex items-center gap-2 hover:opacity-80 transition-opacity"
-            >
+            <A href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
               <span class="text-accent text-base">●</span>
               <h1 class="text-base text-text">better-review</h1>
             </A>
@@ -726,10 +701,7 @@ const AppContent: Component = () => {
                   Files
                 </button>
               </div>
-              <A
-                href="/"
-                class="text-base text-text-faint hover:text-text transition-colors"
-              >
+              <A href="/" class="text-base text-text-faint hover:text-text transition-colors">
                 Browse PRs
               </A>
               <SettingsPanel settings={settings()} onChange={setSettings} />
@@ -825,9 +797,7 @@ const AppContent: Component = () => {
             <Show when={!loading()}>
               <div class="flex-1 flex items-center justify-center">
                 <div class="text-center">
-                  <div class="text-text-faint text-base">
-                    Enter a GitHub PR URL to start
-                  </div>
+                  <div class="text-text-faint text-base">Enter a GitHub PR URL to start</div>
                 </div>
               </div>
             </Show>
@@ -853,9 +823,7 @@ const AppContent: Component = () => {
                 when={activeDiff()}
                 fallback={
                   <Show when={reviewMode() === "commit" && loadingCommits()}>
-                    <div class="text-text-faint text-base">
-                      Loading commit diff...
-                    </div>
+                    <div class="text-text-faint text-base">Loading commit diff...</div>
                   </Show>
                 }
               >
