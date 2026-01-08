@@ -1,12 +1,13 @@
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { appRouter } from "./trpc/routers";
-import { createContext, runtime } from "./trpc/context";
 import { Effect, Fiber } from "effect";
+
+import { filterDiffByLineRange } from "./diff";
 import { GhService } from "./gh/gh";
 import { OpencodeService } from "./opencode";
-import { DiffCacheService, PrContextService } from "./state";
 import { buildReviewContext, getErrorMessage } from "./response";
-import { filterDiffByLineRange } from "./diff";
+import { DiffCacheService, PrContextService } from "./state";
+import { createContext, runtime } from "./trpc/context";
+import { appRouter } from "./trpc/routers";
 
 // =============================================================================
 // Static File Serving (Production)
@@ -67,10 +68,7 @@ const main = Effect.gen(function* () {
         const endLine = url.searchParams.get("endLine");
 
         if (!sessionId || !file) {
-          return Response.json(
-            { error: "Missing sessionId or file" },
-            { status: 400 }
-          );
+          return Response.json({ error: "Missing sessionId or file" }, { status: 400 });
         }
 
         return runtime.runPromise(
@@ -81,29 +79,24 @@ const main = Effect.gen(function* () {
             if (!prUrl) {
               return Response.json(
                 { error: "Session not found. Load a PR first." },
-                { status: 404 }
+                { status: 404 },
               );
             }
 
-            yield* Effect.log(
-              `[file-diff] Session ${sessionId} -> PR ${prUrl}, file: ${file}`
-            );
+            yield* Effect.log(`[file-diff] Session ${sessionId} -> PR ${prUrl}, file: ${file}`);
 
             // Get from cache
             const prDiffs = yield* diffCache.get(prUrl);
             if (!prDiffs) {
               return Response.json(
                 { error: "Diffs not cached. This shouldn't happen." },
-                { status: 500 }
+                { status: 500 },
               );
             }
 
             const fileMeta = prDiffs.get(file);
             if (!fileMeta) {
-              return Response.json(
-                { error: `No diff found for file: ${file}` },
-                { status: 404 }
-              );
+              return Response.json({ error: `No diff found for file: ${file}` }, { status: 404 });
             }
 
             // Filter by line range if specified
@@ -112,24 +105,19 @@ const main = Effect.gen(function* () {
               diffOutput = filterDiffByLineRange(
                 diffOutput,
                 startLine ? parseInt(startLine, 10) : undefined,
-                endLine ? parseInt(endLine, 10) : undefined
+                endLine ? parseInt(endLine, 10) : undefined,
               );
             }
 
             yield* Effect.log(
-              `[file-diff] Returning diff for ${file} (${diffOutput.length} chars)`
+              `[file-diff] Returning diff for ${file} (${diffOutput.length} chars)`,
             );
             return Response.json({ diff: diffOutput });
           }).pipe(
             Effect.catchAll((error) =>
-              Effect.succeed(
-                Response.json(
-                  { error: getErrorMessage(error) },
-                  { status: 500 }
-                )
-              )
-            )
-          )
+              Effect.succeed(Response.json({ error: getErrorMessage(error) }, { status: 500 })),
+            ),
+          ),
         );
       }
 
@@ -150,7 +138,7 @@ const main = Effect.gen(function* () {
             if (!prUrl) {
               return Response.json(
                 { error: "Session not found. Load a PR first." },
-                { status: 404 }
+                { status: 404 },
               );
             }
 
@@ -173,9 +161,7 @@ const main = Effect.gen(function* () {
                   const ranges = hunks
                     .map((h) => `${h.newStart}-${h.newStart + h.newCount - 1}`)
                     .join(", ");
-                  fileStats.push(
-                    `${file} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`
-                  );
+                  fileStats.push(`${file} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`);
                 } else {
                   fileStats.push(`${file} +${totalAdded} -${totalRemoved}`);
                 }
@@ -183,9 +169,7 @@ const main = Effect.gen(function* () {
             }
 
             // Parse owner/repo/number from PR URL
-            const match = prUrl.match(
-              /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/
-            );
+            const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
             const owner = match?.[1] ?? "unknown";
             const repo = match?.[2] ?? "unknown";
             const number = match?.[3] ?? "?";
@@ -211,14 +195,9 @@ ${fileStats.join("\n")}`;
             return Response.json({ metadata });
           }).pipe(
             Effect.catchAll((error) =>
-              Effect.succeed(
-                Response.json(
-                  { error: getErrorMessage(error) },
-                  { status: 500 }
-                )
-              )
-            )
-          )
+              Effect.succeed(Response.json({ error: getErrorMessage(error) }, { status: 500 })),
+            ),
+          ),
         );
       }
 
@@ -276,17 +255,14 @@ ${fileStats.join("\n")}`;
             );
 
             // Check persistent storage for existing sessions
-            const { sessions, activeSessionId } =
-              yield* prContext.listSessions(body.prUrl);
+            const { sessions, activeSessionId } = yield* prContext.listSessions(body.prUrl);
             yield* Effect.log(
               `[API] Found ${sessions.length} existing sessions, active: ${activeSessionId}`,
             );
 
             // If we have an active session, try to reuse it
             if (activeSessionId) {
-              const activeSession = sessions.find(
-                (s) => s.id === activeSessionId,
-              );
+              const activeSession = sessions.find((s) => s.id === activeSessionId);
               if (activeSession) {
                 // Check for force-push (HEAD SHA changed since session was created)
                 if (activeSession.headSha !== currentHeadSha) {
@@ -308,10 +284,7 @@ ${fileStats.join("\n")}`;
                   // Register session → PR mapping for O(1) lookup by tools
                   yield* prContext.registerSession(activeSessionId, body.prUrl);
 
-                  yield* Effect.log(
-                    "[API] Reusing session:",
-                    activeSessionId,
-                  );
+                  yield* Effect.log("[API] Reusing session:", activeSessionId);
                   return Response.json({
                     session: existingSessionData.data,
                     sessions,
@@ -334,17 +307,11 @@ ${fileStats.join("\n")}`;
             yield* Effect.log("[API] Session created:", session.data?.id);
 
             if (!session.data) {
-              return yield* Effect.fail(
-                new Error("Failed to create session"),
-              );
+              return yield* Effect.fail(new Error("Failed to create session"));
             }
 
             // Persist to storage
-            const prData = yield* prContext.addSession(
-              body.prUrl,
-              session.data.id,
-              currentHeadSha,
-            );
+            const prData = yield* prContext.addSession(body.prUrl, session.data.id, currentHeadSha);
 
             // Inject initial context (without expecting a reply)
             yield* Effect.log("[API] Injecting context...");
@@ -408,6 +375,7 @@ ${fileStats.join("\n")}`;
 
 // Import layers from context (reuses the same runtime)
 import { Layer } from "effect";
+
 import { GhServiceLive } from "./gh/gh";
 
 const layers = Layer.mergeAll(
@@ -428,9 +396,7 @@ declare global {
 // If there's an existing fiber from a previous HMR cycle, interrupt it first
 if (globalThis.__appFiber) {
   console.log("[HMR] Stopping previous instance...");
-  await Effect.runPromise(Fiber.interrupt(globalThis.__appFiber)).catch(
-    () => {},
-  );
+  await Effect.runPromise(Fiber.interrupt(globalThis.__appFiber)).catch(() => {});
 }
 
 // Remove old signal handlers to avoid duplicates

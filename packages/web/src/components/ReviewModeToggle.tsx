@@ -1,4 +1,5 @@
 import type { Component } from "solid-js";
+
 import type { ReviewMode } from "../diff/types";
 
 interface ReviewModeToggleProps {

@@ -1,9 +1,10 @@
 import { initTRPC, TRPCError } from "@trpc/server";
-import superjson from "superjson";
 import { Effect } from "effect";
+import superjson from "superjson";
+
+import { getErrorMessage } from "../response";
 import type { TRPCContext, RuntimeContext } from "./context";
 import { runtime } from "./context";
-import { getErrorMessage } from "../response";
 
 // Initialize tRPC with superjson transformer for proper serialization
 const t = initTRPC.context<TRPCContext>().create({
@@ -29,9 +30,7 @@ export const middleware = t.middleware;
  * Converts Effect errors to TRPCError with appropriate codes.
  * Accepts effects that require RuntimeContext (the services provided by our layers).
  */
-export async function runEffect<A>(
-  effect: Effect.Effect<A, unknown, RuntimeContext>,
-): Promise<A> {
+export async function runEffect<A>(effect: Effect.Effect<A, unknown, RuntimeContext>): Promise<A> {
   return runtime.runPromise(
     effect.pipe(
       Effect.catchAll((error) =>

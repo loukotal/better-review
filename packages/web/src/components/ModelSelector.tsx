@@ -1,11 +1,5 @@
-import {
-  createSignal,
-  createEffect,
-  For,
-  Show,
-  onMount,
-  onCleanup,
-} from "solid-js";
+import { createSignal, createEffect, For, Show, onMount, onCleanup } from "solid-js";
+
 import { trpc } from "../lib/trpc";
 
 interface ModelEntry {
@@ -91,9 +85,7 @@ export function ModelSelector(props: ModelSelectorProps) {
     const model = currentModel();
     if (!model) return "Loading...";
     // Show shortened model name
-    return model.modelId.length > 20
-      ? model.modelId.slice(0, 18) + "..."
-      : model.modelId;
+    return model.modelId.length > 20 ? model.modelId.slice(0, 18) + "..." : model.modelId;
   };
 
   return (
@@ -105,17 +97,11 @@ export function ModelSelector(props: ModelSelectorProps) {
         disabled={props.disabled}
         class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-border text-text-muted hover:border-accent hover:text-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-w-35"
         title={
-          currentModel()
-            ? `${currentModel()!.providerId}/${currentModel()!.modelId}`
-            : undefined
+          currentModel() ? `${currentModel()!.providerId}/${currentModel()!.modelId}` : undefined
         }
       >
         <span class="truncate">{displayText()}</span>
-        <svg
-          class="w-2.5 h-2.5 shrink-0"
-          viewBox="0 0 20 20"
-          fill="currentColor"
-        >
+        <svg class="w-2.5 h-2.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
           <path
             fill-rule="evenodd"
             d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
@@ -146,9 +132,7 @@ export function ModelSelector(props: ModelSelectorProps) {
             </Show>
 
             <Show when={!isLoading() && searchResults().length === 0}>
-              <div class="px-3 py-2 text-sm text-text-faint">
-                No models found
-              </div>
+              <div class="px-3 py-2 text-sm text-text-faint">No models found</div>
             </Show>
 
             <For each={searchResults()}>
@@ -164,12 +148,8 @@ export function ModelSelector(props: ModelSelectorProps) {
                     class="w-full px-3 py-1.5 text-left text-sm hover:bg-bg-elevated transition-colors flex flex-col gap-0.5"
                     classList={{ "bg-accent/10": isSelected() }}
                   >
-                    <span class="text-text font-medium truncate">
-                      {model.modelId}
-                    </span>
-                    <span class="text-text-faint text-sm">
-                      {model.providerId}
-                    </span>
+                    <span class="text-text font-medium truncate">{model.modelId}</span>
+                    <span class="text-text-faint text-sm">{model.providerId}</span>
                   </button>
                 );
               }}

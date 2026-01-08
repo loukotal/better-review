@@ -1,23 +1,39 @@
-import { type Component, createSignal, createEffect, createMemo, Show, onMount, on } from "solid-js";
-import { useSearchParams, A } from "@solidjs/router";
 import type { FileDiffMetadata } from "@pierre/diffs";
+import { useSearchParams, A } from "@solidjs/router";
+import {
+  type Component,
+  createSignal,
+  createEffect,
+  createMemo,
+  Show,
+  onMount,
+  on,
+} from "solid-js";
+
 import type { PrStatus, PrInfo } from "@better-review/shared";
-import { DiffViewer, getFileElementId, type PRComment, type DiffSettings, DEFAULT_DIFF_SETTINGS } from "./DiffViewer";
-import { FONT_FAMILY_MAP } from "./diff/types";
-import { FileTreePanel } from "./FileTreePanel";
+
 import { ChatPanel } from "./ChatPanel";
-import { SettingsPanel } from "./diff/SettingsPanel";
-import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
-import type { Annotation } from "./utils/parseReviewTokens";
-import { PrProvider, usePrContext } from "./context/PrContext";
-import { PrStatusBar } from "./components/PrStatusBar";
-import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { ApproveButton } from "./components/ApproveButton";
-import { ReviewModeToggle } from "./components/ReviewModeToggle";
 import { CommitNavigator } from "./components/CommitNavigator";
+import { PrCommentsPanel } from "./components/PrCommentsPanel";
+import { PrStatusBar } from "./components/PrStatusBar";
+import { ReviewModeToggle } from "./components/ReviewModeToggle";
+import { PrProvider, usePrContext } from "./context/PrContext";
+import { SettingsPanel } from "./diff/SettingsPanel";
+import { FONT_FAMILY_MAP } from "./diff/types";
+import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
+import {
+  DiffViewer,
+  getFileElementId,
+  type PRComment,
+  type DiffSettings,
+  DEFAULT_DIFF_SETTINGS,
+} from "./DiffViewer";
+import { FileTreePanel } from "./FileTreePanel";
 import { useCurrentUser } from "./hooks/usePrData";
 import { queryKeys, api, queryClient, type IssueComment } from "./lib/query";
 import { trpc } from "./lib/trpc";
+import type { Annotation } from "./utils/parseReviewTokens";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const REVIEW_ORDER_STORAGE_KEY = "review-order";
@@ -91,7 +107,7 @@ function loadAnnotations(prUrl: string): Annotation[] {
   return [];
 }
 
-function saveAnnotations(prUrl: string, annotations: Annotation[]): void {
+function _saveAnnotations(prUrl: string, annotations: Annotation[]): void {
   try {
     const stored = localStorage.getItem(ANNOTATIONS_STORAGE_KEY);
     const data = stored ? JSON.parse(stored) : {};
@@ -150,13 +166,21 @@ const AppContent: Component = () => {
 
   // Review state
   const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
-  const [annotations, setAnnotations] = createSignal<Annotation[]>([]);
-  const [highlightedLine, setHighlightedLine] = createSignal<{ file: string; line: number } | null>(null);
+  const [_annotations, setAnnotations] = createSignal<Annotation[]>([]);
+  const [highlightedLine, setHighlightedLine] = createSignal<{
+    file: string;
+    line: number;
+  } | null>(null);
 
   // Panel visibility
-  const [panelVisibility, setPanelVisibility] = createSignal<PanelVisibility>(loadPanelVisibility());
+  const [panelVisibility, setPanelVisibility] = createSignal<PanelVisibility>(
+    loadPanelVisibility(),
+  );
   const togglePanel = (panel: keyof PanelVisibility) => {
-    const newVisibility = { ...panelVisibility(), [panel]: !panelVisibility()[panel] };
+    const newVisibility = {
+      ...panelVisibility(),
+      [panel]: !panelVisibility()[panel],
+    };
     setPanelVisibility(newVisibility);
     savePanelVisibility(newVisibility);
   };
@@ -242,11 +266,12 @@ const AppContent: Component = () => {
     scrollToFile(annotation.file, annotation.line);
 
     // Format the comment body with severity prefix
-    const severityPrefix = annotation.severity === "critical"
-      ? "[CRITICAL] "
-      : annotation.severity === "warning"
-        ? "[WARNING] "
-        : "";
+    const severityPrefix =
+      annotation.severity === "critical"
+        ? "[CRITICAL] "
+        : annotation.severity === "warning"
+          ? "[WARNING] "
+          : "";
     const body = `${severityPrefix}${annotation.message}`;
 
     // Add the comment via the existing addComment function
@@ -340,11 +365,19 @@ const AppContent: Component = () => {
     try {
       const data = await trpc.prs.list.query();
       if (data.prs) {
-        setPrQueue(data.prs.map((pr: { url: string; title: string; repository: { nameWithOwner: string } }) => ({
-          url: pr.url,
-          title: pr.title,
-          repository: pr.repository,
-        })));
+        setPrQueue(
+          data.prs.map(
+            (pr: {
+              url: string;
+              title: string;
+              repository: { nameWithOwner: string };
+            }) => ({
+              url: pr.url,
+              title: pr.title,
+              repository: pr.repository,
+            }),
+          ),
+        );
       }
     } catch {
       // Silently fail - queue is optional
@@ -396,19 +429,29 @@ const AppContent: Component = () => {
   });
 
   // Sync commit mode to URL params (using commit SHA for stable/shareable URLs)
-  createEffect(on(
-    () => [reviewMode(), currentCommitIndex(), commits()] as const,
-    ([mode, idx, c]) => {
-      if (loadedPrUrl()) {
-        if (mode === "commit" && c[idx]) {
-          setSearchParams({ prUrl: loadedPrUrl()!, mode: "commit", commit: c[idx].sha.slice(0, 7) });
-        } else {
-          setSearchParams({ prUrl: loadedPrUrl()!, mode: undefined, commit: undefined });
+  createEffect(
+    on(
+      () => [reviewMode(), currentCommitIndex(), commits()] as const,
+      ([mode, idx, c]) => {
+        if (loadedPrUrl()) {
+          if (mode === "commit" && c[idx]) {
+            setSearchParams({
+              prUrl: loadedPrUrl()!,
+              mode: "commit",
+              commit: c[idx].sha.slice(0, 7),
+            });
+          } else {
+            setSearchParams({
+              prUrl: loadedPrUrl()!,
+              mode: undefined,
+              commit: undefined,
+            });
+          }
         }
-      }
-    },
-    { defer: true }
-  ));
+      },
+      { defer: true },
+    ),
+  );
 
   // Persist settings to localStorage when they change
   createEffect(() => {
@@ -418,7 +461,7 @@ const AppContent: Component = () => {
   // Sync font-mono CSS variable with settings
   createEffect(() => {
     const fontFamily = FONT_FAMILY_MAP[settings().fontFamily];
-    document.documentElement.style.setProperty('--font-mono', fontFamily);
+    document.documentElement.style.setProperty("--font-mono", fontFamily);
   });
 
   const loadPr = async (e: Event) => {
@@ -436,12 +479,26 @@ const AppContent: Component = () => {
     setCommitDiff(null);
 
     // Show cached data immediately if available
-    const cachedDiff = queryClient.getQueryData<string>(queryKeys.pr.diff(currentPrUrl));
-    const cachedInfo = queryClient.getQueryData<{ owner: string; repo: string; number: string } | null>(queryKeys.pr.info(currentPrUrl));
-    const cachedCommits = queryClient.getQueryData<PrCommit[]>(queryKeys.pr.commits(currentPrUrl));
-    const cachedComments = queryClient.getQueryData<PRComment[]>(queryKeys.pr.comments(currentPrUrl));
-    const cachedIssueComments = queryClient.getQueryData<IssueComment[]>(queryKeys.pr.issueComments(currentPrUrl));
-    const cachedStatus = queryClient.getQueryData<PrStatus>(queryKeys.pr.status(currentPrUrl));
+    const cachedDiff = queryClient.getQueryData<string>(
+      queryKeys.pr.diff(currentPrUrl),
+    );
+    const cachedInfo = queryClient.getQueryData<{
+      owner: string;
+      repo: string;
+      number: string;
+    } | null>(queryKeys.pr.info(currentPrUrl));
+    const cachedCommits = queryClient.getQueryData<PrCommit[]>(
+      queryKeys.pr.commits(currentPrUrl),
+    );
+    const cachedComments = queryClient.getQueryData<PRComment[]>(
+      queryKeys.pr.comments(currentPrUrl),
+    );
+    const cachedIssueComments = queryClient.getQueryData<IssueComment[]>(
+      queryKeys.pr.issueComments(currentPrUrl),
+    );
+    const cachedStatus = queryClient.getQueryData<PrStatus>(
+      queryKeys.pr.status(currentPrUrl),
+    );
 
     if (cachedDiff) {
       setDiff(cachedDiff);
@@ -475,9 +532,18 @@ const AppContent: Component = () => {
       // Populate individual query caches for components that use them
       queryClient.setQueryData(queryKeys.pr.diff(currentPrUrl), data.diff);
       queryClient.setQueryData(queryKeys.pr.info(currentPrUrl), data.info);
-      queryClient.setQueryData(queryKeys.pr.commits(currentPrUrl), data.commits);
-      queryClient.setQueryData(queryKeys.pr.comments(currentPrUrl), data.comments);
-      queryClient.setQueryData(queryKeys.pr.issueComments(currentPrUrl), data.issueComments);
+      queryClient.setQueryData(
+        queryKeys.pr.commits(currentPrUrl),
+        data.commits,
+      );
+      queryClient.setQueryData(
+        queryKeys.pr.comments(currentPrUrl),
+        data.comments,
+      );
+      queryClient.setQueryData(
+        queryKeys.pr.issueComments(currentPrUrl),
+        data.issueComments,
+      );
       queryClient.setQueryData(queryKeys.pr.status(currentPrUrl), data.status);
 
       setDiff(data.diff);
@@ -493,7 +559,9 @@ const AppContent: Component = () => {
       const urlCommitSha = searchParams.commit as string | undefined;
       if (urlMode === "commit" && data.commits.length > 0) {
         let idx = urlCommitSha
-          ? data.commits.findIndex((c: PrCommit) => c.sha.startsWith(urlCommitSha))
+          ? data.commits.findIndex((c: PrCommit) =>
+              c.sha.startsWith(urlCommitSha),
+            )
           : 0;
         if (idx === -1) idx = 0;
         setCurrentCommitIndex(idx);
@@ -527,7 +595,12 @@ const AppContent: Component = () => {
     queryClient.setQueryData(queryKeys.pr.comments(url), newComments);
   };
 
-  const addComment = async (filePath: string, line: number, side: "LEFT" | "RIGHT", body: string) => {
+  const addComment = async (
+    filePath: string,
+    line: number,
+    side: "LEFT" | "RIGHT",
+    body: string,
+  ) => {
     try {
       const data = await trpc.pr.addComment.mutate({
         prUrl: prUrl()!,
@@ -543,7 +616,9 @@ const AppContent: Component = () => {
       return data;
     } catch (err) {
       console.error("Failed to add comment:", err);
-      return { error: err instanceof Error ? err.message : "Failed to add comment" };
+      return {
+        error: err instanceof Error ? err.message : "Failed to add comment",
+      };
     }
   };
 
@@ -575,8 +650,8 @@ const AppContent: Component = () => {
       if (data.comment) {
         const url = loadedPrUrl();
         if (url) {
-          const newComments = comments().map(c =>
-            c.id === commentId ? { ...c, body: data.comment.body } : c
+          const newComments = comments().map((c) =>
+            c.id === commentId ? { ...c, body: data.comment.body } : c,
           );
           updateCommentsCache(url, newComments);
         }
@@ -584,7 +659,9 @@ const AppContent: Component = () => {
       return data;
     } catch (err) {
       console.error("Failed to edit comment:", err);
-      return { error: err instanceof Error ? err.message : "Failed to edit comment" };
+      return {
+        error: err instanceof Error ? err.message : "Failed to edit comment",
+      };
     }
   };
 
@@ -596,12 +673,17 @@ const AppContent: Component = () => {
       });
       const url = loadedPrUrl();
       if (url) {
-        updateCommentsCache(url, comments().filter(c => c.id !== commentId));
+        updateCommentsCache(
+          url,
+          comments().filter((c) => c.id !== commentId),
+        );
       }
       return { success: true };
     } catch (err) {
       console.error("Failed to delete comment:", err);
-      return { error: err instanceof Error ? err.message : "Failed to delete comment" };
+      return {
+        error: err instanceof Error ? err.message : "Failed to delete comment",
+      };
     }
   };
 
@@ -612,7 +694,10 @@ const AppContent: Component = () => {
         {/* Main Header */}
         <div class="px-4 py-3">
           <div class="flex items-center justify-between mb-3">
-            <A href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
+            <A
+              href="/"
+              class="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            >
               <span class="text-accent text-base">●</span>
               <h1 class="text-base text-text">better-review</h1>
             </A>
@@ -768,7 +853,9 @@ const AppContent: Component = () => {
                 when={activeDiff()}
                 fallback={
                   <Show when={reviewMode() === "commit" && loadingCommits()}>
-                    <div class="text-text-faint text-base">Loading commit diff...</div>
+                    <div class="text-text-faint text-base">
+                      Loading commit diff...
+                    </div>
                   </Show>
                 }
               >

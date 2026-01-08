@@ -1,43 +1,43 @@
 /* JetBrains Mono - clean monospace for code */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap");
 
-@import 'tailwindcss';
+@import "tailwindcss";
 
 @theme {
   /* === FONT CONFIGURATION === */
   /* Monospace font - controlled by settings */
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-mono: "JetBrains Mono", monospace;
 
   /* === MONOCHROME + ORANGE PALETTE === */
   /* Soft blacks - easier on the eyes than pure black */
   --color-bg: #0a0a0a;
   --color-bg-surface: #111111;
   --color-bg-elevated: #181818;
-  
+
   /* Orange accent - used sparingly for interactive elements */
   --color-accent: #ff6b00;
   --color-accent-dim: #662b00;
   --color-accent-bright: #ff8533;
-  
+
   /* Text hierarchy - white/gray spectrum */
   --color-text: #e5e5e5;
   --color-text-muted: #a3a3a3;
   --color-text-faint: #a3a3a3;
-  
+
   /* Borders - subtle grays */
   --color-border: #222222;
   --color-border-focus: #ff6b00;
-  
+
   /* Primary action - orange */
   --color-primary: #ff6b00;
   --color-primary-hover: #ff8533;
-  
+
   /* Diff colors - muted for readability */
   --color-diff-add-bg: rgba(34, 197, 94, 0.1);
   --color-diff-add-text: #4ade80;
   --color-diff-remove-bg: rgba(239, 68, 68, 0.1);
   --color-diff-remove-text: #f87171;
-  
+
   /* Status colors */
   --color-error: #ef4444;
   --color-warning: #ff6b00;
@@ -92,24 +92,29 @@ body {
 }
 
 /* === INPUT STYLING === */
-input, textarea, select {
-  font-family: 'JetBrains Mono', monospace;
+input,
+textarea,
+select {
+  font-family: "JetBrains Mono", monospace;
 }
 
-input::placeholder, textarea::placeholder {
+input::placeholder,
+textarea::placeholder {
   color: var(--color-text-faint);
   opacity: 1;
 }
 
 /* Focus states - orange accent */
-input:focus, textarea:focus, select:focus {
+input:focus,
+textarea:focus,
+select:focus {
   outline: none;
   border-color: var(--color-accent) !important;
 }
 
 /* === BUTTON BASE === */
 button {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   cursor: pointer;
 }
 
@@ -141,7 +146,9 @@ button:focus-visible {
 }
 
 /* Disable transitions for elements that shouldn't animate */
-input, textarea, select {
+input,
+textarea,
+select {
   transition: border-color 100ms ease-out;
 }
 
@@ -160,22 +167,33 @@ body {
   & > *:last-child {
     margin-bottom: 0;
   }
-  
+
   /* Paragraphs */
   & p {
     margin: 0.5em 0;
   }
-  
+
   /* Headers - smaller sizes for chat context */
-  & h1, & h2, & h3, & h4, & h5, & h6 {
+  & h1,
+  & h2,
+  & h3,
+  & h4,
+  & h5,
+  & h6 {
     font-weight: 600;
     margin: 0.75em 0 0.25em 0;
     color: var(--color-text);
   }
-  & h1 { font-size: 1.1em; }
-  & h2 { font-size: 1.05em; }
-  & h3 { font-size: 1em; }
-  
+  & h1 {
+    font-size: 1.1em;
+  }
+  & h2 {
+    font-size: 1.05em;
+  }
+  & h3 {
+    font-size: 1em;
+  }
+
   /* Code - inline */
   & code {
     background: var(--color-bg-elevated);
@@ -183,7 +201,7 @@ body {
     border-radius: 2px;
     font-size: 0.9em;
   }
-  
+
   /* Code blocks */
   & pre {
     background: var(--color-bg-elevated);
@@ -196,9 +214,10 @@ body {
     background: none;
     padding: 0;
   }
-  
+
   /* Lists */
-  & ul, & ol {
+  & ul,
+  & ol {
     margin: 0.5em 0;
     padding-left: 1.5em;
   }
@@ -211,7 +230,7 @@ body {
   & ol {
     list-style-type: decimal;
   }
-  
+
   /* Blockquotes */
   & blockquote {
     border-left: 2px solid var(--color-accent);
@@ -219,7 +238,7 @@ body {
     padding-left: 0.75em;
     color: var(--color-text-muted);
   }
-  
+
   /* Links */
   & a {
     color: var(--color-accent);
@@ -229,7 +248,7 @@ body {
   & a:hover {
     text-decoration: underline;
   }
-  
+
   /* Emphasis */
   & strong {
     font-weight: 600;
@@ -238,7 +257,7 @@ body {
   & em {
     font-style: italic;
   }
-  
+
   /* Horizontal rules */
   & hr {
     border: none;

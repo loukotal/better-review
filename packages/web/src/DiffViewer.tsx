@@ -1,5 +1,5 @@
-import { For, Show, createMemo } from "solid-js";
 import { parsePatchFiles, SVGSpriteSheet, type FileDiffMetadata } from "@pierre/diffs";
+import { For, Show, createMemo } from "solid-js";
 
 import { FileDiffView } from "./diff/FileDiffView";
 import type { DiffSettings, PRComment } from "./diff/types";
@@ -17,7 +17,12 @@ interface Props {
   rawDiff: string;
   comments: PRComment[];
   loadingComments?: boolean;
-  onAddComment: (filePath: string, line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
+  onAddComment: (
+    filePath: string,
+    line: number,
+    side: "LEFT" | "RIGHT",
+    body: string,
+  ) => Promise<unknown>;
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
@@ -40,13 +45,13 @@ export function DiffViewer(props: Props) {
     props.onFilesLoaded?.(allFiles);
     return allFiles;
   });
-  
+
   // Order files according to fileOrder if provided
   const files = createMemo(() => {
     const order = props.fileOrder;
     const allFiles = parsedFiles();
     if (!order || order.length === 0) return allFiles;
-    
+
     // Sort files by review order (files not in order go at the end)
     return [...allFiles].sort((a, b) => {
       const aIdx = order.indexOf(a.name);
@@ -65,7 +70,7 @@ export function DiffViewer(props: Props) {
   return (
     <div>
       <div innerHTML={SVGSpriteSheet} style="display:none" />
-      
+
       <Show when={props.loadingComments}>
         <div class="mb-3 px-2 py-1.5 border-l-2 border-accent bg-bg-surface">
           <div class="flex items-center gap-2 text-accent text-sm">
@@ -74,12 +79,12 @@ export function DiffViewer(props: Props) {
           </div>
         </div>
       </Show>
-      
+
       {/* File count header */}
       <div class="mb-3 text-sm text-text-muted">
-        {files().length} file{files().length !== 1 ? 's' : ''} changed
+        {files().length} file{files().length !== 1 ? "s" : ""} changed
       </div>
-      
+
       <div class="flex flex-col gap-3">
         <For each={files()}>
           {(file) => {
@@ -90,13 +95,15 @@ export function DiffViewer(props: Props) {
               }
               return undefined;
             };
-            
+
             return (
               <div id={getFileElementId(file.name)}>
                 <FileDiffView
                   file={file}
                   comments={commentsForFile(file.name)}
-                  onAddComment={(line, side, body) => props.onAddComment(file.name, line, side, body)}
+                  onAddComment={(line, side, body) =>
+                    props.onAddComment(file.name, line, side, body)
+                  }
                   onReplyToComment={props.onReplyToComment}
                   onEditComment={props.onEditComment}
                   onDeleteComment={props.onDeleteComment}

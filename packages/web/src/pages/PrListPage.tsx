@@ -1,6 +1,7 @@
-import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
+import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+
 import {
   queryKeys,
   api,
@@ -35,30 +36,23 @@ const CiStatusBadgeInner: Component<{ status: CiStatus }> = (props) => {
   };
 
   return (
-    <span
-      class={statusColor()}
-      title={`CI: ${props.status.passed}/${props.status.total} passed`}
-    >
+    <span class={statusColor()} title={`CI: ${props.status.passed}/${props.status.total} passed`}>
       {statusIcon()} {props.status.passed}/{props.status.total}
     </span>
   );
 };
 
 // CI status badge - reads from cache (populated by batch fetch)
-const CiStatusBadge: Component<{ prUrl: string; ciStatuses: Record<string, CiStatus | null> }> = (props) => {
+const CiStatusBadge: Component<{ prUrl: string; ciStatuses: Record<string, CiStatus | null> }> = (
+  props,
+) => {
   const status = () => props.ciStatuses[props.prUrl];
 
-  return (
-    <Show when={status()}>
-      {(s) => <CiStatusBadgeInner status={s()} />}
-    </Show>
-  );
+  return <Show when={status()}>{(s) => <CiStatusBadgeInner status={s()} />}</Show>;
 };
 
 // Lines changed indicator
-const LinesChanged: Component<{ additions: number; deletions: number }> = (
-  props,
-) => {
+const LinesChanged: Component<{ additions: number; deletions: number }> = (props) => {
   const format = (n: number) => {
     if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
     return n.toString();
@@ -123,9 +117,7 @@ const PrListPage: Component = () => {
 
   // Get unique repos from PR list
   const uniqueRepos = () => {
-    const repos = (prsQuery.data ?? []).map(
-      (pr: SearchedPr) => pr.repository.nameWithOwner,
-    );
+    const repos = (prsQuery.data ?? []).map((pr: SearchedPr) => pr.repository.nameWithOwner);
     return [...new Set(repos)].sort();
   };
 
@@ -151,9 +143,7 @@ const PrListPage: Component = () => {
     }
 
     if (repoFilter()) {
-      result = result.filter(
-        (pr: SearchedPr) => pr.repository.nameWithOwner === repoFilter(),
-      );
+      result = result.filter((pr: SearchedPr) => pr.repository.nameWithOwner === repoFilter());
     }
 
     return result;
@@ -207,10 +197,7 @@ const PrListPage: Component = () => {
               <span class="text-accent text-base">●</span>
               <h1 class="text-base text-text">better-review</h1>
             </A>
-            <A
-              href="/review"
-              class="text-base text-text-faint hover:text-text transition-colors"
-            >
+            <A href="/review" class="text-base text-text-faint hover:text-text transition-colors">
               Enter PR URL manually
             </A>
           </div>
@@ -224,8 +211,7 @@ const PrListPage: Component = () => {
             <div>
               <h2 class="text-lg font-medium text-text">Review Requests</h2>
               <p class="text-base text-text-faint mt-1">
-                PRs where you're requested as a reviewer or have already
-                reviewed
+                PRs where you're requested as a reviewer or have already reviewed
               </p>
             </div>
             <button
@@ -241,9 +227,7 @@ const PrListPage: Component = () => {
           <div class="flex items-center gap-2 mb-6 text-sm">
             <span class="text-text-faint mr-1">Filters:</span>
             <button
-              onClick={() =>
-                setSearchParams({ mine: showMyPrs() ? undefined : "1" })
-              }
+              onClick={() => setSearchParams({ mine: showMyPrs() ? undefined : "1" })}
               class={`px-3 py-1 border transition-colors ${
                 showMyPrs()
                   ? "border-accent bg-accent/10 text-accent"
@@ -253,9 +237,7 @@ const PrListPage: Component = () => {
               My PRs
             </button>
             <button
-              onClick={() =>
-                setSearchParams({ drafts: showDrafts() ? undefined : "1" })
-              }
+              onClick={() => setSearchParams({ drafts: showDrafts() ? undefined : "1" })}
               class={`px-3 py-1 border transition-colors ${
                 showDrafts()
                   ? "border-accent bg-accent/10 text-accent"
@@ -281,9 +263,7 @@ const PrListPage: Component = () => {
             <select
               id="repo-filter"
               value={repoFilter()}
-              onChange={(e) =>
-                setSearchParams({ repo: e.currentTarget.value || undefined })
-              }
+              onChange={(e) => setSearchParams({ repo: e.currentTarget.value || undefined })}
               class={`px-3 py-1 border bg-bg transition-colors cursor-pointer ${
                 repoFilter()
                   ? "border-accent bg-accent/10 text-accent"
@@ -291,9 +271,7 @@ const PrListPage: Component = () => {
               }`}
             >
               <option value="">All repos</option>
-              <For each={uniqueRepos()}>
-                {(repo) => <option value={repo}>{repo}</option>}
-              </For>
+              <For each={uniqueRepos()}>{(repo) => <option value={repo}>{repo}</option>}</For>
             </select>
           </div>
 
@@ -314,12 +292,8 @@ const PrListPage: Component = () => {
           {/* Empty state */}
           <Show when={prsQuery.isSuccess && filteredPrs().length === 0}>
             <div class="text-center py-12 border border-border">
-              <div class="text-text-faint text-base">
-                No PRs match your filters
-              </div>
-              <p class="text-base text-text-faint mt-2">
-                Try adjusting your filter settings
-              </p>
+              <div class="text-text-faint text-base">No PRs match your filters</div>
+              <p class="text-base text-text-faint mt-2">Try adjusting your filter settings</p>
             </div>
           </Show>
 
@@ -340,9 +314,7 @@ const PrListPage: Component = () => {
                             {pr.repository.nameWithOwner}
                           </div>
                           <div class="flex items-center gap-2">
-                            <span class="text-sm text-text truncate">
-                              {pr.title}
-                            </span>
+                            <span class="text-sm text-text truncate">{pr.title}</span>
                             <Show when={pr.isDraft}>
                               <span class="px-1.5 py-0.5 text-sm border border-text-faint/50 bg-text-faint/10 text-text-muted">
                                 DRAFT
@@ -353,9 +325,7 @@ const PrListPage: Component = () => {
                                 APPROVED
                               </span>
                             </Show>
-                            <Show
-                              when={pr.myReviewState === "CHANGES_REQUESTED"}
-                            >
+                            <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
                               <span class="px-1.5 py-0.5 text-sm border border-error/50 text-error">
                                 CHANGES REQUESTED
                               </span>
@@ -363,15 +333,11 @@ const PrListPage: Component = () => {
                           </div>
                           <div class="text-sm text-text-faint mt-1.5 flex items-center justify-between">
                             <span>
-                              #{pr.number} opened{" "}
-                              {formatRelativeTime(pr.createdAt)} by{" "}
+                              #{pr.number} opened {formatRelativeTime(pr.createdAt)} by{" "}
                               {pr.author.login}
                             </span>
                             <span class="flex items-center gap-3 text-sm">
-                              <LinesChanged
-                                additions={pr.additions}
-                                deletions={pr.deletions}
-                              />
+                              <LinesChanged additions={pr.additions} deletions={pr.deletions} />
                               <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
                             </span>
                           </div>

@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, createEffect, batch } from "solid-js";
+
 import { trpc } from "../lib/trpc";
 
 // =============================================================================
@@ -85,9 +86,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   const [streamingContent, setStreamingContent] = createSignal("");
   const [streamingReasoning, setStreamingReasoning] = createSignal("");
   const [activeTools, setActiveTools] = createSignal<ToolCall[]>([]);
-  const [currentMessageId, setCurrentMessageId] = createSignal<string | null>(
-    null,
-  );
+  const [currentMessageId, setCurrentMessageId] = createSignal<string | null>(null);
 
   let unsubscribe: (() => void) | null = null;
 
@@ -204,9 +203,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       case "tool-error":
         setActiveTools((prev) =>
           prev.map((t) =>
-            t.callId === event.callId
-              ? { ...t, status: "error" as const, error: event.error }
-              : t,
+            t.callId === event.callId ? { ...t, status: "error" as const, error: event.error } : t,
           ),
         );
         break;
@@ -267,10 +264,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     });
   }
 
-  async function sendMessage(
-    message: string,
-    agent?: string,
-  ): Promise<boolean> {
+  async function sendMessage(message: string, agent?: string): Promise<boolean> {
     const sessionId = options.getSessionId();
     if (!sessionId) {
       setError("No session");
@@ -301,8 +295,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       // Success - streaming will happen via subscription
       return true;
     } catch (err) {
-      const errorMsg =
-        err instanceof Error ? err.message : "Failed to send message";
+      const errorMsg = err instanceof Error ? err.message : "Failed to send message";
       setError(errorMsg);
       setIsStreaming(false);
       options.onError?.(errorMsg);

@@ -8,9 +8,7 @@ export default tool({
   args: {
     file: tool.schema
       .string()
-      .describe(
-        "The file path to get the diff for (must be from the list of changed files)",
-      ),
+      .describe("The file path to get the diff for (must be from the list of changed files)"),
     startLine: tool.schema
       .number()
       .optional()
@@ -52,9 +50,7 @@ export default tool({
         return `Error: ${data.error}`;
       }
 
-      console.log(
-        `[pr-diff] Successfully got diff for ${args.file} (${data.diff.length} chars)`,
-      );
+      console.log(`[pr-diff] Successfully got diff for ${args.file} (${data.diff.length} chars)`);
       return data.diff;
     } catch (error) {
       console.log(`[pr-diff] Fetch error:`, error);

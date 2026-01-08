@@ -1,0 +1,15 @@
+{
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": false,
+  "trailingComma": "all",
+  "bracketSpacing": true,
+  "experimentalSortImports": {
+    "groups": [["builtin"], ["external"], ["internal"], ["parent", "sibling", "index"]],
+    "internalPattern": ["@better-review"],
+    "newlinesBetween": true
+  },
+  "experimentalSortPackageJson": true
+}

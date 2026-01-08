@@ -1,10 +1,11 @@
+import { Effect } from "effect";
 import { z } from "zod";
-import { router, publicProcedure, runEffect } from "../index";
-import { PrContextService } from "../../state";
+
 import { GhService } from "../../gh/gh";
 import { OpencodeService } from "../../opencode";
 import { buildReviewContext } from "../../response";
-import { Effect } from "effect";
+import { PrContextService } from "../../state";
+import { router, publicProcedure, runEffect } from "../index";
 
 export const sessionsRouter = router({
   /**
@@ -15,15 +16,15 @@ export const sessionsRouter = router({
       z.object({
         prUrl: z.string(),
         includeHidden: z.boolean().optional(),
-      })
+      }),
     )
     .query(({ input }) =>
       runEffect(
         Effect.gen(function* () {
           const prContext = yield* PrContextService;
           return yield* prContext.listSessions(input.prUrl, input.includeHidden);
-        })
-      )
+        }),
+      ),
     ),
 
   /**
@@ -34,7 +35,7 @@ export const sessionsRouter = router({
       z.object({
         prUrl: z.string(),
         sessionId: z.string(),
-      })
+      }),
     )
     .mutation(({ input }) =>
       runEffect(
@@ -44,8 +45,8 @@ export const sessionsRouter = router({
           // Register session -> PR mapping for O(1) lookup by tools
           yield* prContext.registerSession(input.sessionId, input.prUrl);
           return { success: true, activeSessionId: input.sessionId };
-        })
-      )
+        }),
+      ),
     ),
 
   /**
@@ -59,7 +60,7 @@ export const sessionsRouter = router({
         repoOwner: z.string(),
         repoName: z.string(),
         files: z.array(z.string()),
-      })
+      }),
     )
     .mutation(({ input }) =>
       runEffect(
@@ -77,7 +78,7 @@ export const sessionsRouter = router({
           const session = yield* Effect.tryPromise(() =>
             opencode.client.session.create({
               title: `PR Review: ${input.repoOwner}/${input.repoName}#${input.prNumber}`,
-            })
+            }),
           );
 
           if (!session.data) {
@@ -85,11 +86,7 @@ export const sessionsRouter = router({
           }
 
           // Persist to storage
-          const prData = yield* prContext.addSession(
-            input.prUrl,
-            session.data.id,
-            currentHeadSha
-          );
+          const prData = yield* prContext.addSession(input.prUrl, session.data.id, currentHeadSha);
 
           // Inject initial context
           const contextMessage = buildReviewContext(input);
@@ -98,7 +95,7 @@ export const sessionsRouter = router({
               sessionID: session.data.id,
               parts: [{ type: "text", text: contextMessage }],
               noReply: true,
-            })
+            }),
           );
 
           yield* Effect.log("[API] New session created:", session.data.id);
@@ -108,8 +105,8 @@ export const sessionsRouter = router({
             sessions: prData.sessions,
             activeSessionId: prData.activeSessionId,
           };
-        })
-      )
+        }),
+      ),
     ),
 
   /**
@@ -120,22 +117,19 @@ export const sessionsRouter = router({
       z.object({
         prUrl: z.string(),
         sessionId: z.string(),
-      })
+      }),
     )
     .mutation(({ input }) =>
       runEffect(
         Effect.gen(function* () {
           const prContext = yield* PrContextService;
-          const prData = yield* prContext.hideSession(
-            input.prUrl,
-            input.sessionId
-          );
+          const prData = yield* prContext.hideSession(input.prUrl, input.sessionId);
           return {
             success: true,
             sessions: prData.sessions.filter((s) => !s.hidden),
             activeSessionId: prData.activeSessionId,
           };
-        })
-      )
+        }),
+      ),
     ),
 });

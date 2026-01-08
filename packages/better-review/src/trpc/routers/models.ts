@@ -1,6 +1,7 @@
-import { z } from "zod";
-import { router, publicProcedure } from "../index";
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
+
+import { router, publicProcedure } from "../index";
 
 // =============================================================================
 // Model/Provider Types and State
@@ -30,29 +31,26 @@ export const modelsRouter = router({
    * Search for models by provider or model ID
    * Returns first 50 models matching the query, or first 50 if no query
    */
-  search: publicProcedure
-    .input(z.object({ q: z.string().optional() }))
-    .query(({ input }) => {
-      const query = (input.q || "").toLowerCase().trim();
+  search: publicProcedure.input(z.object({ q: z.string().optional() })).query(({ input }) => {
+    const query = (input.q || "").toLowerCase().trim();
 
-      let results: ModelEntry[];
+    let results: ModelEntry[];
 
-      if (!query) {
-        // Return first 50 models if no query
-        results = providerData.slice(0, 50);
-      } else {
-        // Case-insensitive substring search on both providerId and modelId
-        results = providerData
-          .filter(
-            (m) =>
-              m.providerId.toLowerCase().includes(query) ||
-              m.modelId.toLowerCase().includes(query),
-          )
-          .slice(0, 50);
-      }
+    if (!query) {
+      // Return first 50 models if no query
+      results = providerData.slice(0, 50);
+    } else {
+      // Case-insensitive substring search on both providerId and modelId
+      results = providerData
+        .filter(
+          (m) =>
+            m.providerId.toLowerCase().includes(query) || m.modelId.toLowerCase().includes(query),
+        )
+        .slice(0, 50);
+    }
 
-      return { models: results };
-    }),
+    return { models: results };
+  }),
 
   /**
    * Get the currently selected model
@@ -75,8 +73,7 @@ export const modelsRouter = router({
     .mutation(({ input }) => {
       // Validate that this model exists in our data
       const exists = providerData.some(
-        (m) =>
-          m.providerId === input.providerId && m.modelId === input.modelId,
+        (m) => m.providerId === input.providerId && m.modelId === input.modelId,
       );
 
       if (!exists) {
@@ -91,9 +88,7 @@ export const modelsRouter = router({
         modelId: input.modelId,
       };
 
-      console.log(
-        `[models] Model changed to: ${currentModel.providerId}/${currentModel.modelId}`,
-      );
+      console.log(`[models] Model changed to: ${currentModel.providerId}/${currentModel.modelId}`);
 
       return { success: true, model: currentModel };
     }),

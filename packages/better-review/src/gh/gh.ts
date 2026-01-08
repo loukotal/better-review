@@ -1,6 +1,7 @@
-import { Context, Data, Effect, Layer, Schema } from "effect";
 import { Command } from "@effect/platform";
 import { BunContext } from "@effect/platform-bun";
+import { Context, Data, Effect, Layer, Schema } from "effect";
+
 import type {
   PrInfo,
   PrState,
@@ -16,7 +17,7 @@ import type {
 class GhError extends Data.TaggedError("GhError")<{
   readonly command: string;
   readonly cause: unknown;
-}> { }
+}> {}
 
 // Re-export shared types for convenience
 export type {
@@ -36,12 +37,14 @@ export type {
 // ============================================================================
 
 const parseJsonPreserve = <A, I, R>(schema: Schema.Schema<A, I, R>) =>
-  Schema.decodeUnknown(Schema.parseJson(schema), { onExcessProperty: "preserve" })
+  Schema.decodeUnknown(Schema.parseJson(schema), {
+    onExcessProperty: "preserve",
+  });
 
 const UserSchema = Schema.Struct({
   login: Schema.String,
   avatar_url: Schema.String,
-})
+});
 
 const PRCommentSchema = Schema.Struct({
   id: Schema.Number,
@@ -54,7 +57,7 @@ const PRCommentSchema = Schema.Struct({
   user: UserSchema,
   created_at: Schema.String,
   in_reply_to_id: Schema.optional(Schema.Number),
-})
+});
 
 // Issue comments (top-level PR conversation comments)
 const IssueCommentSchema = Schema.Struct({
@@ -64,8 +67,8 @@ const IssueCommentSchema = Schema.Struct({
   user: UserSchema,
   created_at: Schema.String,
   updated_at: Schema.String,
-})
-export type IssueComment = typeof IssueCommentSchema.Type
+});
+export type IssueComment = typeof IssueCommentSchema.Type;
 
 export interface AddCommentParams {
   prUrl: string;
@@ -97,15 +100,23 @@ export interface ApprovePrParams {
   body?: string;
 }
 
-const PrStateSchema = Schema.Literal("open", "closed", "merged")
+const PrStateSchema = Schema.Literal("open", "closed", "merged");
 
 const CheckRunSchema = Schema.Struct({
   name: Schema.String,
   status: Schema.Literal("queued", "in_progress", "completed"),
   conclusion: Schema.NullOr(
-    Schema.Literal("success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required")
+    Schema.Literal(
+      "success",
+      "failure",
+      "neutral",
+      "cancelled",
+      "skipped",
+      "timed_out",
+      "action_required",
+    ),
   ),
-})
+});
 
 const PrStatusSchema = Schema.Struct({
   state: PrStateSchema,
@@ -117,26 +128,26 @@ const PrStatusSchema = Schema.Struct({
   url: Schema.String,
   headRef: Schema.String,
   checks: Schema.Array(CheckRunSchema),
-})
+});
 
 const ReviewStateSchema = Schema.NullOr(
-  Schema.Literal("PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED")
-)
+  Schema.Literal("PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"),
+);
 
 const RepositorySchema = Schema.Struct({
   name: Schema.String,
   nameWithOwner: Schema.String,
-})
+});
 
 const AuthorSchema = Schema.Struct({
   login: Schema.String,
-})
+});
 
 const CiStatusSchema = Schema.Struct({
   passed: Schema.Number,
   total: Schema.Number,
   state: Schema.Literal("SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"),
-})
+});
 
 const SearchedPrSchema = Schema.Struct({
   number: Schema.Number,
@@ -152,17 +163,7 @@ const SearchedPrSchema = Schema.Struct({
   additions: Schema.Number,
   deletions: Schema.Number,
   ciStatus: Schema.NullOr(CiStatusSchema),
-})
-
-const PrCommitSchema = Schema.Struct({
-  sha: Schema.String,
-  message: Schema.String,
-  author: Schema.Struct({
-    login: Schema.String,
-    avatar_url: Schema.String,
-  }),
-  date: Schema.String,
-})
+});
 
 // ============================================================================
 // Internal API Response Schemas
@@ -179,7 +180,7 @@ const PrDataResponseSchema = Schema.Struct({
   merged: Schema.Boolean,
   html_url: Schema.String,
   head_ref: Schema.String,
-})
+});
 
 // Schema for raw commit from listCommits API
 const RawCommitSchema = Schema.Struct({
@@ -188,17 +189,19 @@ const RawCommitSchema = Schema.Struct({
     message: Schema.String,
     author: Schema.Struct({ date: Schema.String }),
   }),
-  author: Schema.NullOr(Schema.Struct({
-    login: Schema.String,
-    avatar_url: Schema.String,
-  })),
-})
+  author: Schema.NullOr(
+    Schema.Struct({
+      login: Schema.String,
+      avatar_url: Schema.String,
+    }),
+  ),
+});
 
 // Schema for GraphQL PR in searchReviewRequested
 const GraphQLReviewSchema = Schema.Struct({
   author: Schema.Struct({ login: Schema.String }),
   state: Schema.String,
-})
+});
 
 const GraphQLPrSchema = Schema.Struct({
   number: Schema.Number,
@@ -208,18 +211,27 @@ const GraphQLPrSchema = Schema.Struct({
   createdAt: Schema.String,
   additions: Schema.Number,
   deletions: Schema.Number,
-  repository: Schema.Struct({ name: Schema.String, nameWithOwner: Schema.String }),
+  repository: Schema.Struct({
+    name: Schema.String,
+    nameWithOwner: Schema.String,
+  }),
   author: Schema.Struct({ login: Schema.String }),
   reviews: Schema.Struct({ nodes: Schema.Array(GraphQLReviewSchema) }),
-})
+});
 
 const GraphQLSearchResponseSchema = Schema.Struct({
   data: Schema.Struct({
-    requested: Schema.Struct({ nodes: Schema.Array(Schema.NullOr(GraphQLPrSchema)) }),
-    reviewed: Schema.Struct({ nodes: Schema.Array(Schema.NullOr(GraphQLPrSchema)) }),
-    authored: Schema.Struct({ nodes: Schema.Array(Schema.NullOr(GraphQLPrSchema)) }),
+    requested: Schema.Struct({
+      nodes: Schema.Array(Schema.NullOr(GraphQLPrSchema)),
+    }),
+    reviewed: Schema.Struct({
+      nodes: Schema.Array(Schema.NullOr(GraphQLPrSchema)),
+    }),
+    authored: Schema.Struct({
+      nodes: Schema.Array(Schema.NullOr(GraphQLPrSchema)),
+    }),
   }),
-})
+});
 
 /** GhCli methods return Effect<A, GhError, never> - no requirements after construction */
 interface GhCli {
@@ -236,12 +248,16 @@ interface GhCli {
   approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError, never>;
   searchReviewRequested: () => Effect.Effect<readonly SearchedPr[], GhError, never>;
   listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError, never>;
-  getCommitDiff: (params: { owner: string; repo: string; sha: string }) => Effect.Effect<string, GhError, never>;
+  getCommitDiff: (params: {
+    owner: string;
+    repo: string;
+    sha: string;
+  }) => Effect.Effect<string, GhError, never>;
   getPrCiStatus: (prUrl: string) => Effect.Effect<CiStatus | null, GhError, never>;
   getHeadSha: (prUrl: string) => Effect.Effect<string, GhError, never>;
 }
 
-export class GhService extends Context.Tag("GHService")<GhService, GhCli>() { }
+export class GhService extends Context.Tag("GHService")<GhService, GhCli>() {}
 
 // Validate it's a PR number or valid PR URL (not an issue URL)
 const validatePrUrl = (url: string): Effect.Effect<void, GhError> => {
@@ -250,12 +266,14 @@ const validatePrUrl = (url: string): Effect.Effect<void, GhError> => {
     return Effect.void;
   }
   if (/^.+\/pull\/\d+/.test(url)) {
-    return Effect.void;;
+    return Effect.void;
   }
-  return Effect.fail(new GhError({
-    command: "validateUrl",
-    cause: "Invalid pull request URL/number. E.g. github.com/john/demo/pull/12582",
-  }));
+  return Effect.fail(
+    new GhError({
+      command: "validateUrl",
+      cause: "Invalid pull request URL/number. E.g. github.com/john/demo/pull/12582",
+    }),
+  );
 };
 
 // Parse PR URL or get repo info from gh CLI
@@ -264,9 +282,7 @@ const getPrInfo = (urlOrNumber: string) =>
     yield* validatePrUrl(urlOrNumber);
 
     // If it's a full URL, parse it
-    const urlMatch = urlOrNumber.match(
-      /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/,
-    );
+    const urlMatch = urlOrNumber.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
     if (urlMatch) {
       return { owner: urlMatch[1], repo: urlMatch[2], number: urlMatch[3] };
     }
@@ -328,7 +344,9 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "gh",
         "api",
         `repos/${owner}/${repo}/commits/${yield* Effect.tryPromise(() =>
-          Bun.$`gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha'`.text().then(s => s.trim())
+          Bun.$`gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha'`
+            .text()
+            .then((s) => s.trim()),
         )}/check-runs`,
         "--jq",
         ".check_runs | map({ name, status, conclusion })",
@@ -339,9 +357,9 @@ export const GhServiceLive = Layer.succeed(GhService, {
       const checks = yield* parseJsonPreserve(Schema.Array(CheckRunSchema))(checksResult);
 
       // Determine actual state (open/closed/merged)
-      const state: PrState = prData.merged ? "merged" : prData.state as PrState;
+      const state = prData.merged ? "merged" : prData.state;
 
-      return {
+      return yield* Schema.decodeUnknown(PrStatusSchema)({
         state,
         draft: prData.draft,
         mergeable: prData.mergeable,
@@ -351,7 +369,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         url: prData.html_url,
         headRef: prData.head_ref,
         checks,
-      } satisfies PrStatus;
+      });
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getPrStatus", cause })),
       Effect.withSpan("GhService.getPrStatus", { attributes: { urlOrNumber } }),
@@ -372,9 +390,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
       if (!result) return [];
       return yield* parseJsonPreserve(Schema.Array(PRCommentSchema))(result);
     }).pipe(
-      Effect.mapError(
-        (cause) => new GhError({ command: "getComments", cause }),
-      ),
+      Effect.mapError((cause) => new GhError({ command: "getComments", cause })),
       Effect.withSpan("GhService.getComments", { attributes: { urlOrNumber } }),
       Effect.provide(BunContext.layer),
     ),
@@ -394,10 +410,10 @@ export const GhServiceLive = Layer.succeed(GhService, {
       if (!result) return [];
       return yield* parseJsonPreserve(Schema.Array(IssueCommentSchema))(result);
     }).pipe(
-      Effect.mapError(
-        (cause) => new GhError({ command: "getIssueComments", cause }),
-      ),
-      Effect.withSpan("GhService.getIssueComments", { attributes: { urlOrNumber } }),
+      Effect.mapError((cause) => new GhError({ command: "getIssueComments", cause })),
+      Effect.withSpan("GhService.getIssueComments", {
+        attributes: { urlOrNumber },
+      }),
       Effect.provide(BunContext.layer),
     ),
 
@@ -453,9 +469,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
       );
       return yield* parseJsonPreserve(PRCommentSchema)(result);
     }).pipe(
-      Effect.mapError(
-        (cause) => new GhError({ command: "replyToComment", cause }),
-      ),
+      Effect.mapError((cause) => new GhError({ command: "replyToComment", cause })),
       Effect.withSpan("GhService.replyToComment", {
         attributes: {
           prUrl: params.prUrl,
@@ -475,9 +489,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
       );
       return yield* parseJsonPreserve(PRCommentSchema)(result);
     }).pipe(
-      Effect.mapError(
-        (cause) => new GhError({ command: "editComment", cause }),
-      ),
+      Effect.mapError((cause) => new GhError({ command: "editComment", cause })),
       Effect.withSpan("GhService.editComment", {
         attributes: {
           prUrl: params.prUrl,
@@ -495,9 +507,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         Bun.$`gh api repos/${owner}/${repo}/pulls/comments/${params.commentId} -X DELETE`.text(),
       );
     }).pipe(
-      Effect.mapError(
-        (cause) => new GhError({ command: "deleteComment", cause }),
-      ),
+      Effect.mapError((cause) => new GhError({ command: "deleteComment", cause })),
       Effect.withSpan("GhService.deleteComment", {
         attributes: {
           prUrl: params.prUrl,
@@ -579,7 +589,9 @@ export const GhServiceLive = Layer.succeed(GhService, {
       return yield* Command.string(cmd);
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getCommitDiff", cause })),
-      Effect.withSpan("GhService.getCommitDiff", { attributes: { sha: params.sha } }),
+      Effect.withSpan("GhService.getCommitDiff", {
+        attributes: { sha: params.sha },
+      }),
       Effect.provide(BunContext.layer),
     ),
 
@@ -646,9 +658,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
 
       // Helper to get user's latest review state
       const getMyReviewState = (pr: GraphQLPr): ReviewState => {
-        const myReviews = pr.reviews.nodes.filter(
-          (r) => r.author.login === currentUser
-        );
+        const myReviews = pr.reviews.nodes.filter((r) => r.author.login === currentUser);
         if (myReviews.length === 0) return null;
         // Return the last review state
         return myReviews[myReviews.length - 1].state as ReviewState;
@@ -656,25 +666,26 @@ export const GhServiceLive = Layer.succeed(GhService, {
 
       // Track which PRs came from which query
       const requestedUrls = new Set(
-        data.data.requested.nodes.filter((pr): pr is GraphQLPr => pr !== null).map(pr => pr.url)
+        data.data.requested.nodes.filter((pr): pr is GraphQLPr => pr !== null).map((pr) => pr.url),
       );
 
       // Helper to convert GraphQL PR to SearchedPr (ciStatus loaded lazily)
-      const toSearchedPr = (pr: GraphQLPr): SearchedPr => ({
-        number: pr.number,
-        title: pr.title,
-        url: pr.url,
-        isDraft: pr.isDraft,
-        createdAt: pr.createdAt,
-        additions: pr.additions,
-        deletions: pr.deletions,
-        repository: pr.repository,
-        author: pr.author,
-        myReviewState: getMyReviewState(pr),
-        isAuthor: pr.author.login === currentUser,
-        reviewRequested: requestedUrls.has(pr.url),
-        ciStatus: null, // Loaded lazily via /api/prs/ci-status
-      });
+      const toSearchedPr = (pr: GraphQLPr) =>
+        Schema.decodeUnknownSync(SearchedPrSchema)({
+          number: pr.number,
+          title: pr.title,
+          url: pr.url,
+          isDraft: pr.isDraft,
+          createdAt: pr.createdAt,
+          additions: pr.additions,
+          deletions: pr.deletions,
+          repository: pr.repository,
+          author: pr.author,
+          myReviewState: getMyReviewState(pr),
+          isAuthor: pr.author.login === currentUser,
+          reviewRequested: requestedUrls.has(pr.url),
+          ciStatus: null, // Loaded lazily via /api/prs/ci-status
+        });
 
       // Merge and deduplicate by URL
       const seen = new Set<string>();
@@ -757,7 +768,8 @@ export const GhServiceLive = Layer.succeed(GhService, {
       const result = yield* Command.string(graphqlCmd);
       const data = yield* Effect.try(() => JSON.parse(result));
 
-      const rollup = data?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup;
+      const rollup =
+        data?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup;
       if (!rollup) return null;
 
       const contexts = rollup.contexts?.nodes ?? [];
@@ -768,7 +780,11 @@ export const GhServiceLive = Layer.succeed(GhService, {
         if (ctx.__typename === "StatusContext") {
           if (ctx.state === "SUCCESS") passed++;
         } else if (ctx.__typename === "CheckRun") {
-          if (ctx.conclusion === "SUCCESS" || ctx.conclusion === "NEUTRAL" || ctx.conclusion === "SKIPPED") {
+          if (
+            ctx.conclusion === "SUCCESS" ||
+            ctx.conclusion === "NEUTRAL" ||
+            ctx.conclusion === "SKIPPED"
+          ) {
             passed++;
           }
         }

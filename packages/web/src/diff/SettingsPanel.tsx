@@ -1,4 +1,5 @@
 import { createSignal, Show, For } from "solid-js";
+
 import {
   type DiffSettings,
   type DiffTheme,
@@ -29,10 +30,7 @@ function GearIcon() {
 export function SettingsPanel(props: SettingsPanelProps) {
   const [open, setOpen] = createSignal(false);
 
-  const update = <K extends keyof DiffSettings>(
-    key: K,
-    value: DiffSettings[K],
-  ) => {
+  const update = <K extends keyof DiffSettings>(key: K, value: DiffSettings[K]) => {
     props.onChange({ ...props.settings, [key]: value });
   };
 
@@ -74,10 +72,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   onClick={() => update("diffStyle", "split")}
                   class="flex-1 px-2 py-1.5 text-base border-y border-l border-border transition-colors"
                   classList={{
-                    "bg-accent text-black border-accent":
-                      props.settings.diffStyle === "split",
-                    "bg-bg text-text-muted hover:text-text":
-                      props.settings.diffStyle !== "split",
+                    "bg-accent text-black border-accent": props.settings.diffStyle === "split",
+                    "bg-bg text-text-muted hover:text-text": props.settings.diffStyle !== "split",
                   }}
                 >
                   Split
@@ -87,10 +83,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   onClick={() => update("diffStyle", "unified")}
                   class="flex-1 px-2 py-1.5 text-base border border-border transition-colors"
                   classList={{
-                    "bg-accent text-black border-accent":
-                      props.settings.diffStyle === "unified",
-                    "bg-bg text-text-muted hover:text-text":
-                      props.settings.diffStyle !== "unified",
+                    "bg-accent text-black border-accent": props.settings.diffStyle === "unified",
+                    "bg-bg text-text-muted hover:text-text": props.settings.diffStyle !== "unified",
                   }}
                 >
                   Unified
@@ -103,9 +97,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
               <label class="text-base text-text-faint">Theme</label>
               <select
                 value={props.settings.theme}
-                onChange={(e) =>
-                  update("theme", e.currentTarget.value as DiffTheme)
-                }
+                onChange={(e) => update("theme", e.currentTarget.value as DiffTheme)}
                 class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
               >
                 <For each={Object.entries(THEME_LABELS)}>
@@ -119,9 +111,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
               <label class="text-base text-text-faint">Highlighting</label>
               <select
                 value={props.settings.lineDiffType}
-                onChange={(e) =>
-                  update("lineDiffType", e.currentTarget.value as LineDiffType)
-                }
+                onChange={(e) => update("lineDiffType", e.currentTarget.value as LineDiffType)}
                 class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
               >
                 <For each={Object.entries(LINE_DIFF_LABELS)}>
@@ -135,9 +125,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
               <label class="text-base text-text-faint">Font</label>
               <select
                 value={props.settings.fontFamily}
-                onChange={(e) =>
-                  update("fontFamily", e.currentTarget.value as FontFamily)
-                }
+                onChange={(e) => update("fontFamily", e.currentTarget.value as FontFamily)}
                 class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
                 style={{
                   "font-family": FONT_FAMILY_MAP[props.settings.fontFamily],

@@ -1,4 +1,5 @@
 import { type Component, For, Show, createSignal, createMemo } from "solid-js";
+
 import { parseMarkdown } from "../lib/markdown";
 import type { IssueComment } from "../lib/query";
 
@@ -12,7 +13,14 @@ interface PrCommentsPanelProps {
 function ChevronDownIcon() {
   return (
     <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M4.5 5.5L8 9l3.5-3.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <path
+        d="M4.5 5.5L8 9l3.5-3.5"
+        stroke="currentColor"
+        stroke-width="1.5"
+        fill="none"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
     </svg>
   );
 }
@@ -20,7 +28,7 @@ function ChevronDownIcon() {
 function CommentIcon() {
   return (
     <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5L2.5 14.5V12H1.75a.75.75 0 0 1-.75-.75v-8.5z"/>
+      <path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5L2.5 14.5V12H1.75a.75.75 0 0 1-.75-.75v-8.5z" />
     </svg>
   );
 }
@@ -67,7 +75,9 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
           onClick={() => setExpanded(!expanded())}
           class="w-full flex items-center gap-2 px-4 py-2 hover:bg-bg-surface transition-colors text-left"
         >
-          <span class={`transform transition-transform text-text-faint ${expanded() ? "" : "-rotate-90"}`}>
+          <span
+            class={`transform transition-transform text-text-faint ${expanded() ? "" : "-rotate-90"}`}
+          >
             <ChevronDownIcon />
           </span>
           <span class="text-text-muted">
@@ -84,9 +94,12 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
         {/* Comments list */}
         <Show when={expanded()}>
           <div class="px-4 pb-3 space-y-3 max-h-[400px] overflow-y-auto">
-            <Show when={hasComments()} fallback={
-              <div class="text-sm text-text-faint py-2">No conversation comments yet</div>
-            }>
+            <Show
+              when={hasComments()}
+              fallback={
+                <div class="text-sm text-text-faint py-2">No conversation comments yet</div>
+              }
+            >
               <For each={props.comments}>
                 {(comment) => (
                   <div class="bg-bg-elevated border border-border p-3">
@@ -105,13 +118,9 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                       >
                         {comment.user.login}
                       </a>
-                      <span class="text-sm text-text-faint">
-                        {formatDate(comment.created_at)}
-                      </span>
+                      <span class="text-sm text-text-faint">{formatDate(comment.created_at)}</span>
                       <Show when={comment.updated_at !== comment.created_at}>
-                        <span class="text-sm text-text-faint italic">
-                          (edited)
-                        </span>
+                        <span class="text-sm text-text-faint italic">(edited)</span>
                       </Show>
                     </div>
 

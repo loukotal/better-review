@@ -6,12 +6,7 @@ export type { PRComment, PrCommit };
 // ============ Settings Types ============
 
 export type DiffStyle = "unified" | "split";
-export type DiffTheme =
-  | "vesper"
-  | "github-dark"
-  | "github-light"
-  | "pierre-dark"
-  | "pierre-light";
+export type DiffTheme = "vesper" | "github-dark" | "github-light" | "pierre-dark" | "pierre-light";
 export type LineDiffType = "word-alt" | "word" | "char" | "none";
 export type FontFamily =
   | "berkeley-mono"

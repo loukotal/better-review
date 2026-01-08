@@ -1,7 +1,9 @@
-import { QueryClient } from "@tanstack/solid-query";
 import { persistQueryClient } from "@tanstack/query-persist-client-core";
+import { QueryClient } from "@tanstack/solid-query";
 import { get, set, del, createStore } from "idb-keyval";
+
 import type { PrCommit, PRComment, PrStatus, CiStatus, SearchedPr } from "@better-review/shared";
+
 import { trpc } from "./trpc";
 
 // Create a dedicated IndexedDB store for query cache
@@ -67,7 +69,8 @@ export const queryKeys = {
     issueComments: (url: string) => ["pr", "issueComments", url] as const,
     status: (url: string) => ["pr", "status", url] as const,
     ciStatus: (url: string) => ["pr", "ci-status", url] as const,
-  ciStatusBatch: (urls: string[]) => ["pr", "ci-status-batch", urls.toSorted().join(",")] as const,
+    ciStatusBatch: (urls: string[]) =>
+      ["pr", "ci-status-batch", urls.toSorted().join(",")] as const,
   },
   prs: {
     list: ["prs", "list"] as const,
@@ -84,7 +87,10 @@ export const api = {
     return result.diff;
   },
 
-  async fetchInfo(url: string, _signal?: AbortSignal): Promise<{ owner: string; repo: string; number: string } | null> {
+  async fetchInfo(
+    url: string,
+    _signal?: AbortSignal,
+  ): Promise<{ owner: string; repo: string; number: string } | null> {
     const result = await trpc.pr.info.query({ url });
     if (result.owner && result.repo && result.number) {
       return { owner: result.owner, repo: result.repo, number: result.number };
@@ -127,12 +133,18 @@ export const api = {
     return result.ciStatus ?? null;
   },
 
-  async fetchCiStatusBatch(urls: string[], _signal?: AbortSignal): Promise<Record<string, CiStatus | null>> {
+  async fetchCiStatusBatch(
+    urls: string[],
+    _signal?: AbortSignal,
+  ): Promise<Record<string, CiStatus | null>> {
     const result = await trpc.prs.ciStatusBatch.query({ urls });
     return result.statuses ?? {};
   },
 
-  async fetchCommitDiffsBatch(url: string, _signal?: AbortSignal): Promise<Record<string, string | null>> {
+  async fetchCommitDiffsBatch(
+    url: string,
+    _signal?: AbortSignal,
+  ): Promise<Record<string, string | null>> {
     const result = await trpc.pr.commitDiffsBatch.query({ url });
     return result.diffs ?? {};
   },
@@ -180,7 +192,9 @@ export async function prefetchPr(url: string): Promise<void> {
     });
 
     // Get the fetched data and populate individual caches
-    const data = queryClient.getQueryData<Awaited<ReturnType<typeof api.fetchPrBatch>>>(queryKeys.pr.batch(url));
+    const data = queryClient.getQueryData<Awaited<ReturnType<typeof api.fetchPrBatch>>>(
+      queryKeys.pr.batch(url),
+    );
     if (data) {
       queryClient.setQueryData(queryKeys.pr.diff(url), data.diff);
       queryClient.setQueryData(queryKeys.pr.info(url), data.info);
@@ -229,9 +243,7 @@ export async function prefetchCiStatuses(urls: string[]): Promise<void> {
   if (urls.length === 0) return;
 
   // Filter out already cached URLs
-  const uncachedUrls = urls.filter(
-    (url) => !queryClient.getQueryData(queryKeys.pr.ciStatus(url))
-  );
+  const uncachedUrls = urls.filter((url) => !queryClient.getQueryData(queryKeys.pr.ciStatus(url)));
 
   if (uncachedUrls.length === 0) return;
 

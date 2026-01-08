@@ -2,6 +2,7 @@
   "name": "better-review",
   "version": "1.0.50",
   "license": "MIT",
+  "module": "src/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "bun --hot src/index.ts",
@@ -20,6 +21,5 @@
   },
   "devDependencies": {
     "bun-types": "latest"
-  },
-  "module": "src/index.js"
+  }
 }
