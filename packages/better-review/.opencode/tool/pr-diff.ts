@@ -23,12 +23,7 @@ export default tool({
       ),
   },
   async execute(args, context) {
-    console.log(
-      `[pr-diff] Called with file: ${args.file}, startLine: ${args.startLine}, endLine: ${args.endLine}, session: ${context.sessionID}`,
-    );
-
     try {
-      // Include sessionId to support multiple tabs with different PRs
       let url = `${API_BASE}/api/pr/file-diff?file=${encodeURIComponent(args.file)}&sessionId=${encodeURIComponent(context.sessionID)}`;
       if (args.startLine !== undefined) {
         url += `&startLine=${args.startLine}`;
@@ -41,19 +36,14 @@ export default tool({
       const data = await response.json();
 
       if (!response.ok) {
-        console.log(`[pr-diff] Error response:`, data);
-
         if (data.availableFiles) {
           return `Error: ${data.error}\n\nAvailable files:\n${data.availableFiles.map((f: string) => `- ${f}`).join("\n")}`;
         }
-
         return `Error: ${data.error}`;
       }
 
-      console.log(`[pr-diff] Successfully got diff for ${args.file} (${data.diff.length} chars)`);
       return data.diff;
     } catch (error) {
-      console.log(`[pr-diff] Fetch error:`, error);
       return `Error fetching diff: ${error}`;
     }
   },

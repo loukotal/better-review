@@ -1,22 +1,14 @@
-import { Effect, Layer, ManagedRuntime } from "effect";
+import type { Effect } from "effect";
 
-import { GhService, GhServiceLive } from "../gh/gh";
-import { OpencodeService } from "../opencode";
-import { DiffCacheService, PrContextService } from "../state";
+import type { GhService } from "../gh/gh";
+import type { OpencodeService } from "../opencode";
+import type { DiffCacheService, PrContextService } from "../state";
 
-// Layer with all services
-const layers = Layer.mergeAll(
-  GhServiceLive,
-  OpencodeService.Default,
-  DiffCacheService.Default,
-  PrContextService.Default,
-);
+// Re-export the shared runtime for use in tRPC procedures
+export { runtime } from "../runtime";
 
 // Type representing all services provided by the runtime
 export type RuntimeContext = GhService | OpencodeService | DiffCacheService | PrContextService;
-
-// Create a managed runtime that can be reused across requests
-export const runtime = ManagedRuntime.make(layers);
 
 // Context type for tRPC procedures
 export interface TRPCContext {
