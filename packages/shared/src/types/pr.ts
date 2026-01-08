@@ -28,7 +28,7 @@ export type ReviewState =
  */
 export interface CheckRun {
   name: string;
-  status: "queued" | "in_progress" | "completed";
+  status: "queued" | "in_progress" | "completed" | "waiting" | "requested" | "pending";
   conclusion:
     | "success"
     | "failure"
@@ -37,6 +37,7 @@ export interface CheckRun {
     | "skipped"
     | "timed_out"
     | "action_required"
+    | "stale"
     | null;
 }
 

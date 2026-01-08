@@ -101,9 +101,9 @@ const PrStateSchema = Schema.Literal("open", "closed", "merged")
 
 const CheckRunSchema = Schema.Struct({
   name: Schema.String,
-  status: Schema.Literal("queued", "in_progress", "completed"),
+  status: Schema.Literal("queued", "in_progress", "completed", "waiting", "requested", "pending"),
   conclusion: Schema.NullOr(
-    Schema.Literal("success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required")
+    Schema.Literal("success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required", "stale")
   ),
 })
 
