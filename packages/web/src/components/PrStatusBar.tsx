@@ -1,4 +1,4 @@
-import { type Component, Show, createMemo, createSignal } from "solid-js";
+import { type Component, Show, createMemo, createSignal, createEffect, onCleanup } from "solid-js";
 
 import type { PrState, PrStatus, CheckRun } from "@better-review/shared";
 
@@ -137,6 +137,19 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
     return null;
   });
 
+  // Close description panel on Escape key
+  createEffect(() => {
+    if (showDescription()) {
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+          setShowDescription(false);
+        }
+      };
+      document.addEventListener("keydown", handleKeyDown);
+      onCleanup(() => document.removeEventListener("keydown", handleKeyDown));
+    }
+  });
+
   return (
     <Show
       when={!props.loading && props.status}
@@ -152,43 +165,56 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
         const style = () => stateStyles[status().state];
         const hasDescription = () => status().body.trim().length > 0;
 
+        const prNumber = () => {
+          const match = status().url.match(/\/pull\/(\d+)/);
+          return match ? match[1] : null;
+        };
+
         return (
-          <div class="space-y-2">
-            <div class="flex items-center gap-3">
+          <div class="relative">
+            {/* Line 1: PR Number + Full Title */}
+            <div class="flex items-baseline gap-2 mb-1">
+              <Show when={prNumber()}>
+                <span class="text-text-faint text-sm font-mono flex-shrink-0">#{prNumber()}</span>
+              </Show>
+              <a
+                href={status().url}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-sm font-medium text-text hover:text-accent inline-flex items-baseline gap-1.5 group leading-snug"
+                title="Open in GitHub"
+              >
+                <span class="break-words">{status().title}</span>
+                <span class="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                  <ExternalLinkIcon />
+                </span>
+              </a>
+            </div>
+
+            {/* Line 2: State badge, author, branch, CI checks, mergeable, description toggle */}
+            <div class="flex items-center gap-3 flex-wrap">
               {/* State badge */}
               <div class={`flex items-center gap-1.5 px-1.5 py-0.5 ${style().bg}`}>
-                <span class={`text-sm font-medium ${style().text}`}>
+                <span class={`text-xs font-medium ${style().text}`}>
                   {status().draft ? "Draft" : style().label}
                 </span>
               </div>
 
-              {/* Title (clickable) & Author */}
-              <div class="flex items-center gap-2 min-w-0 flex-1">
-                <a
-                  href={status().url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="text-sm text-text hover:text-accent truncate inline-flex items-center gap-1 group"
-                  title={`${status().title} - Open in GitHub`}
-                >
-                  <span class="truncate">{status().title}</span>
-                  <span class="opacity-0 group-hover:opacity-100 transition-opacity">
-                    <ExternalLinkIcon />
-                  </span>
-                </a>
-                <span class="text-sm text-text-faint">by {status().author}</span>
-              </div>
+              {/* Author */}
+              <span class="text-xs text-text-faint">by {status().author}</span>
+
+              {/* Separator */}
+              <span class="text-text-faint/30">•</span>
 
               {/* Branch name with copy button */}
-              <div class="flex items-center gap-1.5 text-sm">
-                <span class="text-text-faint">develop from</span>
-                <code class="px-1.5 py-0.5 bg-bg-elevated text-text-muted font-mono text-xs">
+              <div class="flex items-center gap-1 text-xs">
+                <code class="px-1.5 py-0.5 bg-bg-elevated text-text-muted font-mono">
                   {status().headRef}
                 </code>
                 <button
                   type="button"
                   onClick={() => copy(status().headRef)}
-                  class="p-1 text-text-faint hover:text-text transition-colors"
+                  class="p-0.5 text-text-faint hover:text-text transition-colors"
                   title={copied() ? "Copied!" : "Copy branch name"}
                 >
                   <Show when={copied()} fallback={<CopyIcon />}>
@@ -207,9 +233,9 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 <div class="flex items-center gap-1">
                   <Show
                     when={status().mergeable}
-                    fallback={<span class="text-sm text-error">Conflicts</span>}
+                    fallback={<span class="text-xs text-error">Conflicts</span>}
                   >
-                    <span class="text-sm text-success">Mergeable</span>
+                    <span class="text-xs text-success">Mergeable</span>
                   </Show>
                 </div>
               </Show>
@@ -219,11 +245,15 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 <button
                   type="button"
                   onClick={() => setShowDescription(!showDescription())}
-                  class="flex items-center gap-1 text-text-faint hover:text-text transition-colors"
+                  class={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${
+                    showDescription()
+                      ? "text-text bg-bg-elevated"
+                      : "text-text-faint hover:text-text hover:bg-bg-elevated/50"
+                  }`}
                   title={showDescription() ? "Hide description" : "Show description"}
                 >
                   <span
-                    class={`transform transition-transform ${showDescription() ? "rotate-180" : ""}`}
+                    class={`transform transition-transform duration-150 ${showDescription() ? "rotate-180" : ""}`}
                   >
                     <ChevronDownIcon />
                   </span>
@@ -232,12 +262,45 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
               </Show>
             </div>
 
-            {/* Description panel */}
+            {/* Description panel - positioned absolutely to overlay without pushing controls */}
             <Show when={showDescription() && hasDescription()}>
+              {/* Backdrop for click-outside-to-close */}
+              <div class="fixed inset-0 z-40" onClick={() => setShowDescription(false)} />
+              {/* Panel */}
               <div
-                class="text-sm text-text-muted bg-bg-elevated border border-border p-3 leading-relaxed max-h-[200px] overflow-y-auto markdown-content"
-                innerHTML={parseMarkdown(status().body, githubContext())}
-              />
+                class="absolute left-0 top-full mt-2 z-50 bg-bg-elevated border border-border shadow-xl rounded overflow-hidden"
+                style={{
+                  width: "min(600px, calc(100vw - 32px))",
+                  "max-height": "min(400px, 50vh)",
+                }}
+              >
+                <div class="flex items-center justify-between px-4 py-2 border-b border-border bg-bg sticky top-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-text-faint font-medium uppercase tracking-wide">
+                      PR Description
+                    </span>
+                    <Show when={prNumber()}>
+                      <span class="text-xs text-text-faint/60">#{prNumber()}</span>
+                    </Show>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowDescription(false)}
+                    class="flex items-center gap-1.5 px-2 py-1 text-xs text-text-faint hover:text-text hover:bg-bg-elevated rounded transition-colors"
+                    title="Close (Esc)"
+                  >
+                    <span class="hidden sm:inline">Close</span>
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z" />
+                    </svg>
+                  </button>
+                </div>
+                <div
+                  class="text-sm text-text-muted p-4 leading-relaxed overflow-y-auto markdown-content"
+                  style={{ "max-height": "calc(min(400px, 50vh) - 48px)" }}
+                  innerHTML={parseMarkdown(status().body, githubContext())}
+                />
+              </div>
             </Show>
           </div>
         );
