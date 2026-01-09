@@ -168,7 +168,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                   href={status().url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  class="text-sm text-text hover:text-accent truncate max-w-[300px] inline-flex items-center gap-1 group"
+                  class="text-sm text-text hover:text-accent truncate inline-flex items-center gap-1 group"
                   title={`${status().title} - Open in GitHub`}
                 >
                   <span class="truncate">{status().title}</span>
@@ -219,7 +219,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 <button
                   type="button"
                   onClick={() => setShowDescription(!showDescription())}
-                  class="flex items-center gap-1 text-sm text-text-faint hover:text-text transition-colors"
+                  class="flex items-center gap-1 text-text-faint hover:text-text transition-colors"
                   title={showDescription() ? "Hide description" : "Show description"}
                 >
                   <span
