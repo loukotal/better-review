@@ -105,20 +105,63 @@ export const prRouter = router({
   batch: publicProcedure.input(z.object({ url: z.string() })).query(({ input }) =>
     runEffect(
       Effect.gen(function* () {
+        yield* Effect.log(`[pr.batch] START url=${input.url}`);
+        const startTime = Date.now();
+
         const gh = yield* GhService;
 
-        // Fetch all data in parallel
+        // Fetch all data in parallel with individual timing
         const [diff, info, commits, comments, issueComments, status] = yield* Effect.all(
           [
-            gh.getDiff(input.url),
-            gh.getPrInfo(input.url),
-            gh.listCommits(input.url),
-            gh.listComments(input.url),
-            gh.listIssueComments(input.url),
-            gh.getPrStatus(input.url),
+            gh
+              .getDiff(input.url)
+              .pipe(
+                Effect.tap(() =>
+                  Effect.log(`[pr.batch] getDiff completed in ${Date.now() - startTime}ms`),
+                ),
+              ),
+            gh
+              .getPrInfo(input.url)
+              .pipe(
+                Effect.tap(() =>
+                  Effect.log(`[pr.batch] getPrInfo completed in ${Date.now() - startTime}ms`),
+                ),
+              ),
+            gh
+              .listCommits(input.url)
+              .pipe(
+                Effect.tap(() =>
+                  Effect.log(`[pr.batch] listCommits completed in ${Date.now() - startTime}ms`),
+                ),
+              ),
+            gh
+              .listComments(input.url)
+              .pipe(
+                Effect.tap(() =>
+                  Effect.log(`[pr.batch] listComments completed in ${Date.now() - startTime}ms`),
+                ),
+              ),
+            gh
+              .listIssueComments(input.url)
+              .pipe(
+                Effect.tap(() =>
+                  Effect.log(
+                    `[pr.batch] listIssueComments completed in ${Date.now() - startTime}ms`,
+                  ),
+                ),
+              ),
+            gh
+              .getPrStatus(input.url)
+              .pipe(
+                Effect.tap(() =>
+                  Effect.log(`[pr.batch] getPrStatus completed in ${Date.now() - startTime}ms`),
+                ),
+              ),
           ],
           { concurrency: "unbounded" },
         );
+
+        yield* Effect.log(`[pr.batch] DONE total=${Date.now() - startTime}ms`);
 
         return {
           diff,

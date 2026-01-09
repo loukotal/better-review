@@ -8,8 +8,14 @@ export const prsRouter = router({
   list: publicProcedure.query(() =>
     runEffect(
       Effect.gen(function* () {
+        yield* Effect.log("[prs.list] START");
+        const startTime = Date.now();
+
         const gh = yield* GhService;
-        return { prs: yield* gh.searchReviewRequested() };
+        const prs = yield* gh.searchReviewRequested();
+
+        yield* Effect.log(`[prs.list] DONE total=${Date.now() - startTime}ms, count=${prs.length}`);
+        return { prs };
       }),
     ),
   ),
