@@ -747,14 +747,16 @@ const AppContent: Component = () => {
 
         {/* PR Status Bar */}
         <Show when={loadedPrUrl()}>
-          <div class="px-4 py-2 border-t border-border bg-bg flex items-center justify-between">
-            <PrStatusBar
-              status={prStatus()}
-              loading={loadingStatus()}
-              repoOwner={prInfo()?.owner}
-              repoName={prInfo()?.repo}
-            />
-            <div class="flex items-center gap-2">
+          <div class="px-4 py-2 border-t border-border bg-bg flex items-start justify-between gap-4 relative">
+            <div class="flex-1 min-w-0">
+              <PrStatusBar
+                status={prStatus()}
+                loading={loadingStatus()}
+                repoOwner={prInfo()?.owner}
+                repoName={prInfo()?.repo}
+              />
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
               <ReviewModeToggle
                 mode={reviewMode()}
                 onModeChange={handleModeChange}
