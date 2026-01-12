@@ -88,7 +88,16 @@ export const prRouter = router({
     runEffect(
       Effect.gen(function* () {
         const gh = yield* GhService;
-        return { comments: yield* gh.listComments(input.url) };
+        const [comments, currentUser] = yield* Effect.all([
+          gh.listComments(input.url),
+          gh.getCurrentUser(),
+        ]);
+        return {
+          comments: comments.map((c) => ({
+            ...c,
+            canEdit: c.user.login === currentUser,
+          })),
+        };
       }),
     ),
   ),
@@ -97,7 +106,16 @@ export const prRouter = router({
     runEffect(
       Effect.gen(function* () {
         const gh = yield* GhService;
-        return { comments: yield* gh.listIssueComments(input.url) };
+        const [comments, currentUser] = yield* Effect.all([
+          gh.listIssueComments(input.url),
+          gh.getCurrentUser(),
+        ]);
+        return {
+          comments: comments.map((c) => ({
+            ...c,
+            canEdit: c.user.login === currentUser,
+          })),
+        };
       }),
     ),
   ),
@@ -111,55 +129,57 @@ export const prRouter = router({
         const gh = yield* GhService;
 
         // Fetch all data in parallel with individual timing
-        const [diff, info, commits, comments, issueComments, status] = yield* Effect.all(
-          [
-            gh
-              .getDiff(input.url)
-              .pipe(
-                Effect.tap(() =>
-                  Effect.log(`[pr.batch] getDiff completed in ${Date.now() - startTime}ms`),
-                ),
-              ),
-            gh
-              .getPrInfo(input.url)
-              .pipe(
-                Effect.tap(() =>
-                  Effect.log(`[pr.batch] getPrInfo completed in ${Date.now() - startTime}ms`),
-                ),
-              ),
-            gh
-              .listCommits(input.url)
-              .pipe(
-                Effect.tap(() =>
-                  Effect.log(`[pr.batch] listCommits completed in ${Date.now() - startTime}ms`),
-                ),
-              ),
-            gh
-              .listComments(input.url)
-              .pipe(
-                Effect.tap(() =>
-                  Effect.log(`[pr.batch] listComments completed in ${Date.now() - startTime}ms`),
-                ),
-              ),
-            gh
-              .listIssueComments(input.url)
-              .pipe(
-                Effect.tap(() =>
-                  Effect.log(
-                    `[pr.batch] listIssueComments completed in ${Date.now() - startTime}ms`,
+        const [diff, info, commits, comments, issueComments, status, currentUser] =
+          yield* Effect.all(
+            [
+              gh
+                .getDiff(input.url)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.log(`[pr.batch] getDiff completed in ${Date.now() - startTime}ms`),
                   ),
                 ),
-              ),
-            gh
-              .getPrStatus(input.url)
-              .pipe(
-                Effect.tap(() =>
-                  Effect.log(`[pr.batch] getPrStatus completed in ${Date.now() - startTime}ms`),
+              gh
+                .getPrInfo(input.url)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.log(`[pr.batch] getPrInfo completed in ${Date.now() - startTime}ms`),
+                  ),
                 ),
-              ),
-          ],
-          { concurrency: "unbounded" },
-        );
+              gh
+                .listCommits(input.url)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.log(`[pr.batch] listCommits completed in ${Date.now() - startTime}ms`),
+                  ),
+                ),
+              gh
+                .listComments(input.url)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.log(`[pr.batch] listComments completed in ${Date.now() - startTime}ms`),
+                  ),
+                ),
+              gh
+                .listIssueComments(input.url)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.log(
+                      `[pr.batch] listIssueComments completed in ${Date.now() - startTime}ms`,
+                    ),
+                  ),
+                ),
+              gh
+                .getPrStatus(input.url)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.log(`[pr.batch] getPrStatus completed in ${Date.now() - startTime}ms`),
+                  ),
+                ),
+              gh.getCurrentUser(),
+            ],
+            { concurrency: "unbounded" },
+          );
 
         yield* Effect.log(`[pr.batch] DONE total=${Date.now() - startTime}ms`);
 
@@ -167,8 +187,11 @@ export const prRouter = router({
           diff,
           info,
           commits,
-          comments,
-          issueComments,
+          comments: comments.map((c) => ({ ...c, canEdit: c.user.login === currentUser })),
+          issueComments: issueComments.map((c) => ({
+            ...c,
+            canEdit: c.user.login === currentUser,
+          })),
           status,
         };
       }),
@@ -322,7 +345,29 @@ ${fileStats.join("\n")}`;
             body: input.body,
             side: input.side,
           });
-          return { comment };
+          // User just created this comment, so they can edit it
+          return { comment: { ...comment, canEdit: true } };
+        }),
+      ),
+    ),
+
+  addIssueComment: publicProcedure
+    .input(
+      z.object({
+        prUrl: z.string(),
+        body: z.string(),
+      }),
+    )
+    .mutation(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const gh = yield* GhService;
+          const comment = yield* gh.addIssueComment({
+            prUrl: input.prUrl,
+            body: input.body,
+          });
+          // User just created this comment, so they can edit it
+          return { comment: { ...comment, canEdit: true } };
         }),
       ),
     ),
@@ -344,7 +389,8 @@ ${fileStats.join("\n")}`;
             commentId: input.commentId,
             body: input.body,
           });
-          return { comment };
+          // User just created this comment, so they can edit it
+          return { comment: { ...comment, canEdit: true } };
         }),
       ),
     ),
@@ -366,7 +412,8 @@ ${fileStats.join("\n")}`;
             commentId: input.commentId,
             body: input.body,
           });
-          return { comment };
+          // User just edited this comment, so they can still edit it
+          return { comment: { ...comment, canEdit: true } };
         }),
       ),
     ),
@@ -383,6 +430,49 @@ ${fileStats.join("\n")}`;
         Effect.gen(function* () {
           const gh = yield* GhService;
           yield* gh.deleteComment({
+            prUrl: input.prUrl,
+            commentId: input.commentId,
+          });
+          return { success: true };
+        }),
+      ),
+    ),
+
+  editIssueComment: publicProcedure
+    .input(
+      z.object({
+        prUrl: z.string(),
+        commentId: z.number(),
+        body: z.string(),
+      }),
+    )
+    .mutation(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const gh = yield* GhService;
+          const comment = yield* gh.editIssueComment({
+            prUrl: input.prUrl,
+            commentId: input.commentId,
+            body: input.body,
+          });
+          // User just edited this comment, so they can still edit it
+          return { comment: { ...comment, canEdit: true } };
+        }),
+      ),
+    ),
+
+  deleteIssueComment: publicProcedure
+    .input(
+      z.object({
+        prUrl: z.string(),
+        commentId: z.number(),
+      }),
+    )
+    .mutation(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const gh = yield* GhService;
+          yield* gh.deleteIssueComment({
             prUrl: input.prUrl,
             commentId: input.commentId,
           });

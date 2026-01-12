@@ -30,7 +30,6 @@ import {
   DEFAULT_DIFF_SETTINGS,
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
-import { useCurrentUser } from "./hooks/usePrData";
 import { queryKeys, api, queryClient, type IssueComment } from "./lib/query";
 import { trpc } from "./lib/trpc";
 import type { Annotation } from "./utils/parseReviewTokens";
@@ -183,9 +182,6 @@ const AppContent: Component = () => {
     setPanelVisibility(newVisibility);
     savePanelVisibility(newVisibility);
   };
-
-  // Current user (for showing edit/delete on own comments) - using TanStack Query
-  const { user: currentUser } = useCurrentUser();
 
   // Commit mode state
   const [reviewMode, setReviewMode] = createSignal<ReviewMode>("full");
@@ -665,6 +661,73 @@ const AppContent: Component = () => {
     }
   };
 
+  // Helper to update issue comments in both local state and TanStack Query cache
+  const updateIssueCommentsCache = (
+    url: string,
+    newComments: typeof issueComments extends () => infer T ? T : never,
+  ) => {
+    setIssueComments(newComments);
+    queryClient.setQueryData(queryKeys.pr.issueComments(url), newComments);
+  };
+
+  const addIssueComment = async (body: string) => {
+    const url = loadedPrUrl();
+    if (!url) return;
+    try {
+      const data = await trpc.pr.addIssueComment.mutate({
+        prUrl: url,
+        body,
+      });
+      if (data.comment) {
+        updateIssueCommentsCache(url, [...issueComments(), data.comment]);
+      }
+    } catch (err) {
+      console.error("Failed to add issue comment:", err);
+      throw err;
+    }
+  };
+
+  const editIssueComment = async (commentId: number, body: string) => {
+    const url = loadedPrUrl();
+    if (!url) return;
+    try {
+      const data = await trpc.pr.editIssueComment.mutate({
+        prUrl: url,
+        commentId,
+        body,
+      });
+      if (data.comment) {
+        const newComments = issueComments().map((c) =>
+          c.id === commentId
+            ? { ...c, body: data.comment.body, updated_at: data.comment.updated_at }
+            : c,
+        );
+        updateIssueCommentsCache(url, newComments);
+      }
+    } catch (err) {
+      console.error("Failed to edit issue comment:", err);
+      throw err;
+    }
+  };
+
+  const deleteIssueComment = async (commentId: number) => {
+    const url = loadedPrUrl();
+    if (!url) return;
+    try {
+      await trpc.pr.deleteIssueComment.mutate({
+        prUrl: url,
+        commentId,
+      });
+      updateIssueCommentsCache(
+        url,
+        issueComments().filter((c) => c.id !== commentId),
+      );
+    } catch (err) {
+      console.error("Failed to delete issue comment:", err);
+      throw err;
+    }
+  };
+
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header Bar */}
@@ -772,6 +835,9 @@ const AppContent: Component = () => {
             loading={loadingComments()}
             repoOwner={prInfo()?.owner}
             repoName={prInfo()?.repo}
+            onAddComment={addIssueComment}
+            onEditComment={editIssueComment}
+            onDeleteComment={deleteIssueComment}
           />
         </Show>
       </header>
@@ -837,7 +903,6 @@ const AppContent: Component = () => {
                   onReplyToComment={replyToComment}
                   onEditComment={editComment}
                   onDeleteComment={deleteComment}
-                  currentUser={currentUser()}
                   settings={settings()}
                   onFilesLoaded={setFiles}
                   repoOwner={prInfo()?.owner}

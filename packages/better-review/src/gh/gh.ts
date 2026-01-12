@@ -46,6 +46,7 @@ const UserSchema = Schema.Struct({
   avatar_url: Schema.String,
 });
 
+// Raw comment from GitHub API (without canEdit which is added by the router)
 const PRCommentSchema = Schema.Struct({
   id: Schema.Number,
   path: Schema.String,
@@ -58,6 +59,8 @@ const PRCommentSchema = Schema.Struct({
   created_at: Schema.String,
   in_reply_to_id: Schema.optional(Schema.Number),
 });
+/** Raw PR comment from GitHub API (without canEdit) */
+export type RawPRComment = typeof PRCommentSchema.Type;
 
 // Issue comments (top-level PR conversation comments)
 const IssueCommentSchema = Schema.Struct({
@@ -68,7 +71,8 @@ const IssueCommentSchema = Schema.Struct({
   created_at: Schema.String,
   updated_at: Schema.String,
 });
-export type IssueComment = typeof IssueCommentSchema.Type;
+/** Raw issue comment from GitHub API (without canEdit) */
+export type RawIssueComment = typeof IssueCommentSchema.Type;
 
 export interface AddCommentParams {
   prUrl: string;
@@ -233,17 +237,27 @@ const GraphQLSearchResponseSchema = Schema.Struct({
   }),
 });
 
+export interface AddIssueCommentParams {
+  prUrl: string;
+  body: string;
+}
+
 /** GhCli methods return Effect<A, GhError, never> - no requirements after construction */
 interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError, never>;
   getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError, never>;
   getPrStatus: (urlOrNumber: string) => Effect.Effect<PrStatus, GhError, never>;
-  listComments: (prUrl: string) => Effect.Effect<readonly PRComment[], GhError, never>;
-  listIssueComments: (prUrl: string) => Effect.Effect<readonly IssueComment[], GhError, never>;
-  addComment: (params: AddCommentParams) => Effect.Effect<PRComment, GhError, never>;
-  replyToComment: (params: AddReplyParams) => Effect.Effect<PRComment, GhError, never>;
-  editComment: (params: EditCommentParams) => Effect.Effect<PRComment, GhError, never>;
+  listComments: (prUrl: string) => Effect.Effect<readonly RawPRComment[], GhError, never>;
+  listIssueComments: (prUrl: string) => Effect.Effect<readonly RawIssueComment[], GhError, never>;
+  addComment: (params: AddCommentParams) => Effect.Effect<RawPRComment, GhError, never>;
+  addIssueComment: (
+    params: AddIssueCommentParams,
+  ) => Effect.Effect<RawIssueComment, GhError, never>;
+  replyToComment: (params: AddReplyParams) => Effect.Effect<RawPRComment, GhError, never>;
+  editComment: (params: EditCommentParams) => Effect.Effect<RawPRComment, GhError, never>;
+  editIssueComment: (params: EditCommentParams) => Effect.Effect<RawIssueComment, GhError, never>;
   deleteComment: (params: DeleteCommentParams) => Effect.Effect<void, GhError, never>;
+  deleteIssueComment: (params: DeleteCommentParams) => Effect.Effect<void, GhError, never>;
   getCurrentUser: () => Effect.Effect<string, GhError, never>;
   approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError, never>;
   searchReviewRequested: () => Effect.Effect<readonly SearchedPr[], GhError, never>;
@@ -417,6 +431,27 @@ export const GhServiceLive = Layer.succeed(GhService, {
       Effect.provide(BunContext.layer),
     ),
 
+  addIssueComment: (params: AddIssueCommentParams) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(params.prUrl);
+
+      const payload = JSON.stringify({ body: params.body });
+
+      // Use the issues endpoint for top-level PR comments
+      const result = yield* Effect.tryPromise(() =>
+        Bun.$`echo ${payload} | gh api repos/${owner}/${repo}/issues/${number}/comments -X POST -H "Accept: application/vnd.github+json" --input -`.text(),
+      );
+      return yield* parseJsonPreserve(IssueCommentSchema)(result);
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "addIssueComment", cause })),
+      Effect.withSpan("GhService.addIssueComment", {
+        attributes: {
+          prUrl: params.prUrl,
+        },
+      }),
+      Effect.provide(BunContext.layer),
+    ),
+
   addComment: (params: AddCommentParams) =>
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(params.prUrl);
@@ -509,6 +544,44 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "deleteComment", cause })),
       Effect.withSpan("GhService.deleteComment", {
+        attributes: {
+          prUrl: params.prUrl,
+          commentId: params.commentId,
+        },
+      }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  editIssueComment: (params: EditCommentParams) =>
+    Effect.gen(function* () {
+      const { owner, repo } = yield* getPrInfo(params.prUrl);
+
+      // Issue comments use a different endpoint than PR review comments
+      const result = yield* Effect.tryPromise(() =>
+        Bun.$`gh api repos/${owner}/${repo}/issues/comments/${params.commentId} -X PATCH -f body=${params.body}`.text(),
+      );
+      return yield* parseJsonPreserve(IssueCommentSchema)(result);
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "editIssueComment", cause })),
+      Effect.withSpan("GhService.editIssueComment", {
+        attributes: {
+          prUrl: params.prUrl,
+          commentId: params.commentId,
+        },
+      }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  deleteIssueComment: (params: DeleteCommentParams) =>
+    Effect.gen(function* () {
+      const { owner, repo } = yield* getPrInfo(params.prUrl);
+
+      yield* Effect.tryPromise(() =>
+        Bun.$`gh api repos/${owner}/${repo}/issues/comments/${params.commentId} -X DELETE`.text(),
+      );
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "deleteIssueComment", cause })),
+      Effect.withSpan("GhService.deleteIssueComment", {
         attributes: {
           prUrl: params.prUrl,
           commentId: params.commentId,

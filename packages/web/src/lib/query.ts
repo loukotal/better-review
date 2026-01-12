@@ -2,7 +2,14 @@ import { persistQueryClient } from "@tanstack/query-persist-client-core";
 import { QueryClient } from "@tanstack/solid-query";
 import { get, set, del, createStore } from "idb-keyval";
 
-import type { PrCommit, PRComment, PrStatus, CiStatus, SearchedPr } from "@better-review/shared";
+import type {
+  PrCommit,
+  PRComment,
+  PrStatus,
+  CiStatus,
+  SearchedPr,
+  IssueComment,
+} from "@better-review/shared";
 
 import { trpc } from "./trpc";
 
@@ -45,15 +52,8 @@ export function restoreCache(): void {
   });
 }
 
-// Issue comment type (top-level PR conversation comments)
-export interface IssueComment {
-  id: number;
-  body: string;
-  html_url: string;
-  user: { login: string; avatar_url: string };
-  created_at: string;
-  updated_at: string;
-}
+// Re-export types from shared
+export type { IssueComment };
 
 // Query key factories for type-safe keys
 export const queryKeys = {
@@ -116,6 +116,11 @@ export const api = {
   async fetchIssueComments(url: string, _signal?: AbortSignal): Promise<IssueComment[]> {
     const result = await trpc.pr.issueComments.query({ url });
     return [...(result.comments ?? [])] as IssueComment[];
+  },
+
+  async addIssueComment(prUrl: string, body: string): Promise<IssueComment> {
+    const result = await trpc.pr.addIssueComment.mutate({ prUrl, body });
+    return result.comment as IssueComment;
   },
 
   async fetchStatus(url: string, _signal?: AbortSignal): Promise<PrStatus> {

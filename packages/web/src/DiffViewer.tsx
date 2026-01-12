@@ -26,7 +26,6 @@ interface Props {
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
-  currentUser: string | null;
   settings: DiffSettings;
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
   fileOrder?: string[] | null;
@@ -107,7 +106,6 @@ export function DiffViewer(props: Props) {
                   onReplyToComment={props.onReplyToComment}
                   onEditComment={props.onEditComment}
                   onDeleteComment={props.onDeleteComment}
-                  currentUser={props.currentUser}
                   settings={props.settings}
                   highlightedLine={highlightLine()}
                   repoOwner={props.repoOwner}
