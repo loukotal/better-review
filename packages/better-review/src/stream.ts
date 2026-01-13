@@ -1,4 +1,4 @@
-import type { Event as OpenCodeEvent, ToolState, ToolPart } from "@opencode-ai/sdk";
+import type { Event as OpenCodeEvent, ToolState, ToolPart } from "@opencode-ai/sdk/v2";
 
 // Type alias for error data with optional message
 type ErrorData = { message?: string } | { [key: string]: unknown };
