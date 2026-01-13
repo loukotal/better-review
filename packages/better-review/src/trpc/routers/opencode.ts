@@ -126,41 +126,32 @@ export const opencodeRouter = router({
           const opencode = yield* OpencodeService;
           const currentModel = getCurrentModel();
 
-          // Use the async endpoint (prompt_async) - fire and forget
-          const response = yield* Effect.tryPromise(() =>
-            fetch(`${opencode.baseUrl}/session/${input.sessionId}/prompt_async`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: {
-                  providerID: currentModel.providerId,
-                  modelID: currentModel.modelId,
-                },
-                agent: input.agent,
-                parts: [{ type: "text", text: input.message }],
-                // Disable local file tools - they would search the wrong repo
-                // The pr_diff custom tool is enabled by default
-                tools: {
-                  bash: false,
-                  edit: false,
-                  write: false,
-                  glob: false,
-                  grep: false,
-                  read: false,
-                  todoread: true,
-                  todowrite: true,
-                  webfetch: true,
-                },
-              }),
+          // Use the SDK's promptAsync method
+          yield* Effect.tryPromise(() =>
+            opencode.client.session.promptAsync({
+              sessionID: input.sessionId,
+              model: {
+                providerID: currentModel.providerId,
+                modelID: currentModel.modelId,
+              },
+              agent: input.agent,
+              parts: [{ type: "text", text: input.message }],
+              // Disable local file tools - they would search the wrong repo
+              // The pr_diff custom tool is enabled by default
+              tools: {
+                bash: false,
+                edit: false,
+                write: false,
+                glob: false,
+                grep: false,
+                read: false,
+                todoread: true,
+                todowrite: true,
+                webfetch: true,
+              },
             }),
           );
 
-          if (!response.ok) {
-            const text = yield* Effect.tryPromise(() => response.text());
-            return yield* Effect.fail(new Error(`OpenCode error: ${response.status} - ${text}`));
-          }
-
-          // Returns 204 No Content on success
           return { success: true };
         }),
       ),
@@ -205,75 +196,43 @@ export const opencodeRouter = router({
    */
   events: publicProcedure.input(z.object({ sessionId: z.string() })).subscription(({ input }) => {
     return observable<StreamEvent>((emit) => {
-      let aborted = false;
-      let abortController: AbortController | null = null;
+      const abortController = new AbortController();
 
       // Start async connection
       (async () => {
         try {
-          // Get OpenCode service URL from runtime
+          // Get OpenCode service from runtime
           const opencode = await runtime.runPromise(
             Effect.gen(function* () {
               return yield* OpencodeService;
             }),
           );
 
-          const eventUrl = `${opencode.baseUrl}/event`;
-          console.log(`[tRPC SSE] Connecting to OpenCode: ${eventUrl}`);
+          console.log(`[tRPC SSE] Connecting to OpenCode events for session: ${input.sessionId}`);
 
-          abortController = new AbortController();
-
-          const response = await fetch(eventUrl, {
-            headers: { Accept: "text/event-stream" },
-            signal: abortController.signal,
-          });
-
-          if (!response.ok || !response.body) {
-            emit.error(new Error(`Failed to connect to OpenCode: ${response.status}`));
-            return;
-          }
+          // Use the SDK's event.subscribe() which handles auth via configured headers
+          const { stream } = await opencode.client.event.subscribe(
+            {},
+            { signal: abortController.signal },
+          );
 
           console.log(`[tRPC SSE] Connection established for session: ${input.sessionId}`);
 
           // Emit connected event
           emit.next({ type: "connected" });
 
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-
-          while (!aborted) {
-            const { done, value } = await reader.read();
-
-            if (done) {
-              console.log(`[tRPC SSE] Stream ended for session: ${input.sessionId}`);
-              break;
-            }
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-
-              try {
-                const data = line.slice(6);
-                const event = JSON.parse(data);
-                const transformed = transformEvent(event, input.sessionId);
-
-                if (transformed) {
-                  emit.next(transformed);
-                }
-              } catch (e) {
-                console.error("[tRPC SSE] Parse error:", e);
-              }
+          // Consume the async generator
+          for await (const event of stream) {
+            const transformed = transformEvent(event, input.sessionId);
+            if (transformed) {
+              emit.next(transformed);
             }
           }
 
+          console.log(`[tRPC SSE] Stream ended for session: ${input.sessionId}`);
           emit.complete();
         } catch (error) {
-          if (!aborted) {
+          if (!abortController.signal.aborted) {
             console.error("[tRPC SSE] Error:", error);
             emit.error(error instanceof Error ? error : new Error(String(error)));
           }
@@ -283,10 +242,7 @@ export const opencodeRouter = router({
       // Cleanup function
       return () => {
         console.log(`[tRPC SSE] Unsubscribing from session: ${input.sessionId}`);
-        aborted = true;
-        if (abortController) {
-          abortController.abort();
-        }
+        abortController.abort();
       };
     });
   }),
