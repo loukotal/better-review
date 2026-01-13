@@ -449,6 +449,16 @@ const AppContent: Component = () => {
     saveSettings(settings());
   });
 
+  // Update document title when PR is loaded
+  createEffect(() => {
+    const status = prStatus();
+    if (status?.title) {
+      document.title = `${status.title} - better-review`;
+    } else {
+      document.title = "better-review";
+    }
+  });
+
   // Sync font-mono CSS variable with settings
   createEffect(() => {
     const fontFamily = FONT_FAMILY_MAP[settings().fontFamily];
