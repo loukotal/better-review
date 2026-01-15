@@ -896,7 +896,7 @@ const AppContent: Component = () => {
             </Show>
 
             {/* Diff content */}
-            <div class="flex-1 overflow-y-auto px-4 py-3">
+            <div class="flex-1 overflow-y-auto px-4 pb-3">
               <Show
                 when={activeDiff()}
                 fallback={

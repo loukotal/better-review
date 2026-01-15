@@ -358,12 +358,13 @@ export function FileDiffView(props: FileDiffViewProps) {
   };
 
   return (
-    <div class="border border-border overflow-hidden">
-      {/* File Header */}
+    <div>
+      {/* File Header - sticky */}
       <button
         type="button"
         onClick={() => setCollapsed(!collapsed())}
-        class="w-full flex items-center gap-2 px-3 py-1.5 bg-bg-elevated hover:bg-bg-surface text-left group"
+        class="w-full flex items-center gap-2 px-3 py-1.5 bg-bg-elevated hover:bg-bg-surface text-left group sticky top-0 z-10 border border-border rounded-t-sm"
+        classList={{ "rounded-b-sm": collapsed() }}
       >
         {/* Collapse indicator */}
         <span
@@ -397,7 +398,10 @@ export function FileDiffView(props: FileDiffViewProps) {
 
       {/* Diff content */}
       <Show when={!collapsed()}>
-        <div class="border-t border-border" ref={renderDiff} />
+        <div
+          class="border border-t-0 border-border rounded-b-sm overflow-hidden"
+          ref={renderDiff}
+        />
       </Show>
     </div>
   );

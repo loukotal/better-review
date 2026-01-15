@@ -67,7 +67,7 @@ export function DiffViewer(props: Props) {
   };
 
   return (
-    <div>
+    <div class="pt-3">
       <div innerHTML={SVGSpriteSheet} style="display:none" />
 
       <Show when={props.loadingComments}>
