@@ -2,7 +2,10 @@ import { observable } from "@trpc/server/observable";
 import { Effect } from "effect";
 import { z } from "zod";
 
+import { GhService } from "../../gh/gh";
 import { OpencodeService } from "../../opencode";
+import { buildReviewContext } from "../../response";
+import { DiffCacheService, PrContextService } from "../../state";
 import { transformEvent, type StreamEvent } from "../../stream";
 import { runtime } from "../context";
 import { router, publicProcedure, runEffect } from "../index";
@@ -26,10 +29,7 @@ export const opencodeRouter = router({
     ),
   ),
 
-  /**
-   * Create a new OpenCode session for PR review
-   */
-  createSession: publicProcedure
+  getOrCreateSession: publicProcedure
     .input(
       z.object({
         prUrl: z.string(),
@@ -42,9 +42,53 @@ export const opencodeRouter = router({
     .mutation(({ input }) =>
       runEffect(
         Effect.gen(function* () {
+          const gh = yield* GhService;
           const opencode = yield* OpencodeService;
-
+          const diffCache = yield* DiffCacheService;
+          const prContext = yield* PrContextService;
           yield* Effect.log("[OpenCode] Creating session for PR:", input.prUrl);
+
+          // Run independent operations in parallel
+          const [currentHeadSha] = yield* Effect.all(
+            [
+              gh.getHeadSha(input.prUrl),
+              prContext.setCurrent(input.prUrl, input.files, {
+                owner: input.repoOwner,
+                repo: input.repoName,
+                number: String(input.prNumber),
+              }),
+              diffCache.getOrFetch(input.prUrl),
+            ],
+            { concurrency: "unbounded" },
+          );
+
+          const { sessions, activeSessionId } = yield* prContext.listSessions(input.prUrl);
+
+          if (activeSessionId) {
+            const activeSession = sessions.find((s) => s.id === activeSessionId);
+            if (activeSession) {
+              if (activeSession.headSha !== currentHeadSha) {
+                yield* diffCache.clear(input.prUrl);
+              }
+
+              const existingSessionData = yield* Effect.tryPromise(() =>
+                opencode.client.session.get({ sessionID: activeSessionId }),
+              );
+
+              if (existingSessionData.data) {
+                yield* prContext.registerSession(activeSessionId, input.prUrl);
+
+                return {
+                  session: existingSessionData.data,
+                  sessions,
+                  activeSessionId,
+                  existing: true,
+                  headSha: currentHeadSha,
+                  sessionHeadSha: activeSession.headSha,
+                };
+              }
+            }
+          }
 
           const session = yield* Effect.tryPromise(() =>
             opencode.client.session.create({
@@ -56,9 +100,25 @@ export const opencodeRouter = router({
             return yield* Effect.fail(new Error("Failed to create session"));
           }
 
-          yield* Effect.log("[OpenCode] Session created:", session.data.id);
+          const prData = yield* prContext.addSession(input.prUrl, session.data.id, currentHeadSha);
 
-          return { session: session.data };
+          const contextMessage = buildReviewContext(input);
+          yield* Effect.tryPromise(() =>
+            opencode.client.session.prompt({
+              sessionID: session.data!.id,
+              parts: [{ type: "text", text: contextMessage }],
+              noReply: true,
+            }),
+          );
+
+          return {
+            session: session.data,
+            sessions: prData.sessions,
+            activeSessionId: prData.activeSessionId,
+            existing: false,
+            headSha: currentHeadSha,
+            sessionHeadSha: currentHeadSha,
+          };
         }),
       ),
     ),

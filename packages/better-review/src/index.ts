@@ -3,8 +3,7 @@ import { Effect, Fiber } from "effect";
 
 import { filterDiffByLineRange } from "./diff";
 import { GhService } from "./gh/gh";
-import { OpencodeService } from "./opencode";
-import { buildReviewContext, getErrorMessage } from "./response";
+import { getErrorMessage } from "./response";
 import { runtime } from "./runtime";
 import { DiffCacheService, PrContextService } from "./state";
 import { createContext } from "./trpc/context";
@@ -40,12 +39,11 @@ async function serveStatic(pathname: string): Promise<Response> {
 
 type RouteServices = {
   gh: Effect.Effect.Success<typeof GhService>;
-  opencode: Effect.Effect.Success<typeof OpencodeService>;
   diffCache: Effect.Effect.Success<typeof DiffCacheService>;
   prContext: Effect.Effect.Success<typeof PrContextService>;
 };
 
-const createRoutes = ({ gh, opencode, diffCache, prContext }: RouteServices) => ({
+const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
   // tRPC endpoint
   "/api/trpc/*": (req: Request) =>
     fetchRequestHandler({
@@ -175,104 +173,6 @@ ${fileStats.join("\n")}`;
       }
     },
   },
-
-  // REST endpoint: /api/opencode/session (session management with context injection)
-  "/api/opencode/session": {
-    POST: async (req: Request) => {
-      const body = (await req.json()) as {
-        prUrl: string;
-        prNumber: number;
-        repoOwner: string;
-        repoName: string;
-        files: string[];
-      };
-
-      if (!body.prUrl) {
-        return Response.json({ error: "Missing prUrl" }, { status: 400 });
-      }
-
-      try {
-        // Run independent operations in parallel
-        const [currentHeadSha] = await runtime.runPromise(
-          Effect.all(
-            [
-              gh.getHeadSha(body.prUrl),
-              prContext.setCurrent(body.prUrl, body.files, {
-                owner: body.repoOwner,
-                repo: body.repoName,
-                number: String(body.prNumber),
-              }),
-              diffCache.getOrFetch(body.prUrl),
-            ],
-            { concurrency: "unbounded" },
-          ),
-        );
-
-        const { sessions, activeSessionId } = await runtime.runPromise(
-          prContext.listSessions(body.prUrl),
-        );
-
-        if (activeSessionId) {
-          const activeSession = sessions.find((s) => s.id === activeSessionId);
-          if (activeSession) {
-            if (activeSession.headSha !== currentHeadSha) {
-              await runtime.runPromise(diffCache.clear(body.prUrl));
-            }
-
-            const existingSessionData = await opencode.client.session.get({
-              sessionID: activeSessionId,
-            });
-
-            if (existingSessionData.data) {
-              await runtime.runPromise(prContext.registerSession(activeSessionId, body.prUrl));
-
-              return Response.json({
-                session: existingSessionData.data,
-                sessions,
-                activeSessionId,
-                existing: true,
-                headSha: currentHeadSha,
-                sessionHeadSha: activeSession.headSha,
-              });
-            }
-          }
-        }
-
-        const session = await opencode.client.session.create({
-          title: `PR Review: ${body.repoOwner}/${body.repoName}#${body.prNumber}`,
-        });
-
-        if (!session.data) {
-          throw new Error("Failed to create session");
-        }
-
-        const prData = await runtime.runPromise(
-          prContext.addSession(body.prUrl, session.data.id, currentHeadSha),
-        );
-
-        const contextMessage = buildReviewContext(body);
-        await opencode.client.session.prompt({
-          sessionID: session.data.id,
-          parts: [{ type: "text", text: contextMessage }],
-          noReply: true,
-        });
-
-        return Response.json({
-          session: session.data,
-          sessions: prData.sessions,
-          activeSessionId: prData.activeSessionId,
-          existing: false,
-          headSha: currentHeadSha,
-          sessionHeadSha: currentHeadSha,
-        });
-      } catch (error) {
-        return Response.json(
-          { error: error instanceof Error ? error.message : String(error) },
-          { status: 500 },
-        );
-      }
-    },
-  },
 });
 
 // =============================================================================
@@ -282,11 +182,10 @@ ${fileStats.join("\n")}`;
 const main = Effect.gen(function* () {
   // Get services from the shared runtime
   const gh = yield* GhService;
-  const opencode = yield* OpencodeService;
   const diffCache = yield* DiffCacheService;
   const prContext = yield* PrContextService;
 
-  const routes = createRoutes({ gh, opencode, diffCache, prContext });
+  const routes = createRoutes({ gh, diffCache, prContext });
 
   const server = Bun.serve({
     port: Number(process.env.API_PORT ?? 3001),
