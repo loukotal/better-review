@@ -1,28 +1,31 @@
-import { marked, Renderer } from "marked";
+import hljs from "highlight.js";
+import { marked } from "marked";
+import "highlight.js/styles/monokai.css";
 
-// Custom renderer to avoid escaping quotes in code
-const renderer = new Renderer();
-const originalCode = renderer.code.bind(renderer);
-const originalCodespan = renderer.codespan.bind(renderer);
-
-renderer.code = (code) => {
-  const result = originalCode(code);
-  // Unescape quotes in code blocks
-  return result.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-};
-
-renderer.codespan = (code) => {
-  const result = originalCodespan(code);
-  // Unescape quotes in inline code
-  return result.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-};
-
-// Configure marked defaults
+// Configure marked with syntax highlighting for fenced code blocks
 marked.setOptions({
   gfm: true,
   breaks: true,
-  renderer,
 });
+
+// Custom renderer for code blocks with syntax highlighting
+const renderer = new marked.Renderer();
+renderer.code = ({ text, lang }) => {
+  if (lang && hljs.getLanguage(lang)) {
+    const highlighted = hljs.highlight(text, { language: lang }).value;
+    return `<pre><code class="hljs language-${lang}">${highlighted}</code></pre>`;
+  }
+  // Fallback: auto-detect or plain
+  const highlighted = hljs.highlightAuto(text).value;
+  return `<pre><code class="hljs">${highlighted}</code></pre>`;
+};
+
+marked.use({ renderer });
+
+// Unescape quotes that marked escapes unnecessarily
+function unescapeQuotes(html: string): string {
+  return html.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+}
 
 // GitHub reference patterns
 const GITHUB_USER_MENTION = /@([a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)/g;
@@ -75,6 +78,9 @@ function processGitHubRefs(html: string, ctx: GitHubContext | null): string {
 export function parseMarkdown(text: string, context?: GitHubContext | null): string {
   // First parse with marked
   let html = marked.parse(text, { async: false }) as string;
+
+  // Unescape quotes
+  html = unescapeQuotes(html);
 
   // Then process GitHub-specific references
   html = processGitHubRefs(html, context ?? null);
