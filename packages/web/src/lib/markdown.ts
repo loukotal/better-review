@@ -28,7 +28,6 @@ marked.setOptions({
 const GITHUB_USER_MENTION = /@([a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)/g;
 const GITHUB_ISSUE_REF = /#(\d+)/g;
 const GITHUB_CROSS_REPO_REF = /([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)#(\d+)/g;
-const GITHUB_COMMIT_SHA = /\b([a-f0-9]{7,40})\b/g;
 
 interface GitHubContext {
   owner: string;
