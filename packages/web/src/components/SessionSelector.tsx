@@ -2,6 +2,10 @@ import { createSignal, For, Show, createMemo, onCleanup, onMount } from "solid-j
 
 import type { StoredSession } from "@better-review/shared";
 
+import { ChevronDownLargeIcon } from "../icons/chevron-down-icon";
+import { CloseLargeIcon } from "../icons/close-icon";
+import { PlusIcon } from "../icons/plus-icon";
+
 interface SessionSelectorProps {
   sessions: StoredSession[];
   activeSessionId: string | null;
@@ -89,14 +93,7 @@ export function SessionSelector(props: SessionSelectorProps) {
             *
           </span>
         </Show>
-        <svg class="w-3 h-3 text-text-faint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M19 9l-7 7-7-7"
-          />
-        </svg>
+        <ChevronDownLargeIcon size={12} class="text-text-faint" />
       </button>
 
       {/* Dropdown */}
@@ -137,14 +134,7 @@ export function SessionSelector(props: SessionSelectorProps) {
                       class="opacity-0 group-hover:opacity-100 p-1 text-text-faint hover:text-error transition-opacity"
                       title="Hide session"
                     >
-                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          stroke-width="2"
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
+                      <CloseLargeIcon size={12} />
                     </button>
                   </Show>
                 </div>
@@ -159,14 +149,7 @@ export function SessionSelector(props: SessionSelectorProps) {
               onClick={handleNewSession}
               class="w-full flex items-center gap-2 px-3 py-2 text-sm text-accent hover:bg-bg-elevated transition-colors"
             >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M12 4v16m8-8H4"
-                />
-              </svg>
+              <PlusIcon size={16} />
               New Session
             </button>
           </div>

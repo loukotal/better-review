@@ -1,5 +1,7 @@
 import { type Component, For, Show, createSignal, createMemo } from "solid-js";
 
+import { ChevronDownIcon } from "../icons/chevron-down-icon";
+import { CommentIcon } from "../icons/comment-icon";
 import type { IssueComment } from "../lib/query";
 import { CommentView } from "./CommentView";
 
@@ -143,29 +145,6 @@ function groupIntoThreads(comments: IssueComment[]): CommentThread[] {
   return threads;
 }
 
-function ChevronDownIcon() {
-  return (
-    <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
-      <path
-        d="M4.5 5.5L8 9l3.5-3.5"
-        stroke="currentColor"
-        stroke-width="1.5"
-        fill="none"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CommentIcon() {
-  return (
-    <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5L2.5 14.5V12H1.75a.75.75 0 0 1-.75-.75v-8.5z" />
-    </svg>
-  );
-}
-
 export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
   const [expanded, setExpanded] = createSignal(false);
   const [showNewCommentForm, setShowNewCommentForm] = createSignal(false);
@@ -277,10 +256,10 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
           <span
             class={`transform transition-transform text-text-faint ${expanded() ? "" : "-rotate-90"}`}
           >
-            <ChevronDownIcon />
+            <ChevronDownIcon size={12} />
           </span>
           <span class="text-text-muted">
-            <CommentIcon />
+            <CommentIcon size={16} />
           </span>
           <span class="text-sm text-text-muted">Comments</span>
           <Show when={hasComments()}>

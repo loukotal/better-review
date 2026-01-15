@@ -1,5 +1,8 @@
 import type { Component } from "solid-js";
 
+import { CriticalIcon } from "../icons/critical-icon";
+import { InfoIcon } from "../icons/info-icon";
+import { WarningIcon } from "../icons/warning-icon";
 import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens";
 
 interface AnnotationBlockProps {
@@ -34,25 +37,13 @@ const severityStyles: Record<
 
 function SeverityIcon(props: { severity: AnnotationSeverity }) {
   if (props.severity === "info") {
-    return (
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8zm6.5-.25A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75zM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2z" />
-      </svg>
-    );
+    return <InfoIcon size={12} />;
   }
   if (props.severity === "warning") {
-    return (
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575L6.457 1.047zM8 5a.75.75 0 0 0-.75.75v2.5a.75.75 0 0 0 1.5 0v-2.5A.75.75 0 0 0 8 5zm1 6a1 1 0 1 0-2 0 1 1 0 0 0 2 0z" />
-      </svg>
-    );
+    return <WarningIcon size={12} />;
   }
   // critical
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M2.343 13.657A8 8 0 1 1 13.657 2.343 8 8 0 0 1 2.343 13.657zM6.03 4.97a.751.751 0 0 0-1.042.018.751.751 0 0 0-.018 1.042L6.94 8 4.97 9.97a.749.749 0 0 0 .326 1.275.749.749 0 0 0 .734-.215L8 9.06l1.97 1.97a.749.749 0 0 0 1.275-.326.749.749 0 0 0-.215-.734L9.06 8l1.97-1.97a.749.749 0 0 0-.326-1.275.749.749 0 0 0-.734.215L8 6.94 6.03 4.97z" />
-    </svg>
-  );
+  return <CriticalIcon size={12} />;
 }
 
 /**
