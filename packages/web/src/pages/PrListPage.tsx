@@ -2,6 +2,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 
+import { SpinnerIcon } from "../icons/spinner-icon";
 import {
   queryKeys,
   api,
@@ -217,9 +218,12 @@ const PrListPage: Component = () => {
             <button
               onClick={() => prsQuery.refetch()}
               disabled={prsQuery.isFetching}
-              class="px-3 py-1.5 text-base border border-border hover:border-text-faint transition-colors disabled:opacity-50"
+              class="px-3 py-1.5 text-base border border-border hover:border-text-faint transition-colors disabled:opacity-50 flex items-center gap-1.5"
             >
-              {prsQuery.isFetching ? "Loading..." : "Refresh"}
+              <Show when={prsQuery.isFetching}>
+                <SpinnerIcon size={12} class="animate-spin" />
+              </Show>
+              {prsQuery.isFetching ? "Refreshing" : "Refresh"}
             </button>
           </div>
 

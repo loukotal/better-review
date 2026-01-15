@@ -21,6 +21,7 @@ import { ModelSelector } from "./components/ModelSelector";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { SessionSelector } from "./components/SessionSelector";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
+import { SpinnerIcon } from "./icons/spinner-icon";
 import { trpc } from "./lib/trpc";
 import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
 
@@ -666,12 +667,6 @@ export function ChatPanel(props: ChatPanelProps) {
           </div>
         </Show>
 
-        <Show when={props.prUrl && initializing()}>
-          <div class="text-center py-8">
-            <div class="text-text-faint text-sm">Initializing session...</div>
-          </div>
-        </Show>
-
         <Show when={props.prUrl && !initializing() && !sessionId() && sessionError()}>
           <div class="text-center py-8">
             <div class="text-error text-sm mb-2">{sessionError()}</div>
@@ -686,19 +681,36 @@ export function ChatPanel(props: ChatPanelProps) {
         </Show>
 
         <Show
-          when={props.prUrl && sessionId() && chat.messages().length === 0 && !chat.isStreaming()}
+          when={
+            props.prUrl &&
+            (initializing() || (sessionId() && chat.messages().length === 0 && !chat.isStreaming()))
+          }
         >
           <div class="text-center py-4">
-            <div class="text-text-faint text-sm mb-3">
-              Click "Start Review" for a structured review, or ask questions about this PR
-            </div>
+            <Show
+              when={!initializing()}
+              fallback={
+                <div class="flex items-center justify-center gap-2 text-text-faint text-sm mb-3">
+                  <SpinnerIcon size={14} class="animate-spin" />
+                  <span>Initializing session...</span>
+                </div>
+              }
+            >
+              <div class="text-text-faint text-sm mb-3">
+                Click "Start Review" for a structured review, or ask questions about this PR
+              </div>
+            </Show>
             <div class="flex flex-wrap gap-1.5 justify-center">
               <For each={quickPrompts}>
                 {(qp) => (
                   <button
                     type="button"
                     onClick={() => handleQuickPrompt(qp.prompt)}
-                    class="px-2 py-1 text-sm border border-border text-text-muted hover:border-accent hover:text-accent transition-colors"
+                    disabled={initializing()}
+                    class="px-2 py-1 text-sm border border-border text-text-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    classList={{
+                      "hover:border-accent hover:text-accent": !initializing(),
+                    }}
                   >
                     {qp.label}
                   </button>
