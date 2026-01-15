@@ -1,9 +1,27 @@
-import { marked } from "marked";
+import { marked, Renderer } from "marked";
+
+// Custom renderer to avoid escaping quotes in code
+const renderer = new Renderer();
+const originalCode = renderer.code.bind(renderer);
+const originalCodespan = renderer.codespan.bind(renderer);
+
+renderer.code = (code) => {
+  const result = originalCode(code);
+  // Unescape quotes in code blocks
+  return result.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+};
+
+renderer.codespan = (code) => {
+  const result = originalCodespan(code);
+  // Unescape quotes in inline code
+  return result.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+};
 
 // Configure marked defaults
 marked.setOptions({
   gfm: true,
   breaks: true,
+  renderer,
 });
 
 // GitHub reference patterns
@@ -39,7 +57,9 @@ function processGitHubRefs(html: string, ctx: GitHubContext | null): string {
     });
 
     // Process commit SHAs (only with context)
-    html = html.replace(GITHUB_COMMIT_SHA, (match, sha) => {
+    // Negative lookbehind to avoid matching hex inside HTML entities like &#39;
+    const COMMIT_SHA_SAFE = /(?<!&#)\b([a-f0-9]{7,40})\b/g;
+    html = html.replace(COMMIT_SHA_SAFE, (match, sha) => {
       // Only process if it looks like a commit SHA (hex chars only, reasonable length)
       if (sha.length >= 7 && sha.length <= 40) {
         const shortSha = sha.slice(0, 7);
