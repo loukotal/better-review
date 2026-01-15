@@ -1,12 +1,11 @@
-import { observable } from "@trpc/server/observable";
-import { Effect } from "effect";
+import { Effect, Stream } from "effect";
 import { z } from "zod";
 
+import { EventBroadcaster } from "../../event-broadcaster";
 import { GhService } from "../../gh/gh";
 import { OpencodeService } from "../../opencode";
 import { buildReviewContext } from "../../response";
 import { DiffCacheService, PrContextService } from "../../state";
-import { transformEvent, type StreamEvent } from "../../stream";
 import { runtime } from "../context";
 import { router, publicProcedure, runEffect } from "../index";
 import { getCurrentModel } from "./models";
@@ -252,58 +251,26 @@ export const opencodeRouter = router({
   ),
 
   /**
-   * SSE subscription for streaming events from an OpenCode session
+   * SSE subscription for streaming events from an OpenCode session.
+   * Uses EventBroadcaster for multiplexed SSE connection.
    */
-  events: publicProcedure.input(z.object({ sessionId: z.string() })).subscription(({ input }) => {
-    return observable<StreamEvent>((emit) => {
-      const abortController = new AbortController();
+  events: publicProcedure.input(z.object({ sessionId: z.string() })).subscription(async function* ({
+    input,
+  }) {
+    // Get the runtime and event stream from the broadcaster
+    const rt = await runtime.runtime();
+    const stream = await runtime.runPromise(
+      Effect.gen(function* () {
+        const broadcaster = yield* EventBroadcaster;
+        return yield* broadcaster.subscribe(input.sessionId);
+      }),
+    );
 
-      // Start async connection
-      (async () => {
-        try {
-          // Get OpenCode service from runtime
-          const opencode = await runtime.runPromise(
-            Effect.gen(function* () {
-              return yield* OpencodeService;
-            }),
-          );
+    yield { type: "connected" };
 
-          console.log(`[tRPC SSE] Connecting to OpenCode events for session: ${input.sessionId}`);
-
-          // Use the SDK's event.subscribe() which handles auth via configured headers
-          const { stream } = await opencode.client.event.subscribe(
-            {},
-            { signal: abortController.signal },
-          );
-
-          console.log(`[tRPC SSE] Connection established for session: ${input.sessionId}`);
-
-          // Emit connected event
-          emit.next({ type: "connected" });
-
-          // Consume the async generator
-          for await (const event of stream) {
-            const transformed = transformEvent(event, input.sessionId);
-            if (transformed) {
-              emit.next(transformed);
-            }
-          }
-
-          console.log(`[tRPC SSE] Stream ended for session: ${input.sessionId}`);
-          emit.complete();
-        } catch (error) {
-          if (!abortController.signal.aborted) {
-            console.error("[tRPC SSE] Error:", error);
-            emit.error(error instanceof Error ? error : new Error(String(error)));
-          }
-        }
-      })();
-
-      // Cleanup function
-      return () => {
-        console.log(`[tRPC SSE] Unsubscribing from session: ${input.sessionId}`);
-        abortController.abort();
-      };
-    });
+    // Convert Effect Stream to async iterable using our runtime
+    for await (const event of Stream.toAsyncIterableRuntime(rt)(stream)) {
+      yield event;
+    }
   }),
 });
