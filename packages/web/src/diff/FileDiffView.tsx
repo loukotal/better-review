@@ -40,6 +40,8 @@ interface FileDiffViewProps {
   highlightedLine?: number;
   repoOwner?: string | null;
   repoName?: string | null;
+  isRead?: boolean;
+  onToggleRead?: () => void;
 }
 
 function ChevronIcon() {
@@ -52,6 +54,31 @@ function ChevronIcon() {
         fill="none"
         stroke-linecap="square"
       />
+    </svg>
+  );
+}
+
+function CheckIcon(props: { size?: number }) {
+  const size = props.size ?? 14;
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor">
+      <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z" />
+    </svg>
+  );
+}
+
+function CircleIcon(props: { size?: number }) {
+  const size = props.size ?? 14;
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+    >
+      <circle cx="8" cy="8" r="5" />
     </svg>
   );
 }
@@ -357,6 +384,11 @@ export function FileDiffView(props: FileDiffViewProps) {
     }
   };
 
+  const handleToggleRead = (e: MouseEvent) => {
+    e.stopPropagation();
+    props.onToggleRead?.();
+  };
+
   return (
     <div>
       {/* File Header - sticky */}
@@ -364,7 +396,7 @@ export function FileDiffView(props: FileDiffViewProps) {
         type="button"
         onClick={() => setCollapsed(!collapsed())}
         class="w-full flex items-center gap-2 px-3 py-1.5 bg-bg-elevated hover:bg-bg-surface text-left group sticky top-0 z-10 border border-border rounded-t-sm"
-        classList={{ "rounded-b-sm": collapsed() }}
+        classList={{ "rounded-b-sm": collapsed(), "opacity-60": props.isRead }}
       >
         {/* Collapse indicator */}
         <span
@@ -393,6 +425,23 @@ export function FileDiffView(props: FileDiffViewProps) {
         {/* Comment count */}
         <Show when={props.comments.length > 0}>
           <span class="text-sm text-accent">{props.comments.length}</span>
+        </Show>
+
+        {/* Mark as read button */}
+        <Show when={props.onToggleRead}>
+          <span
+            onClick={handleToggleRead}
+            class="w-6 h-6 flex items-center justify-center rounded hover:bg-bg transition-colors"
+            classList={{
+              "text-success": props.isRead,
+              "text-text-faint hover:text-text-muted": !props.isRead,
+            }}
+            title={props.isRead ? "Mark as unread" : "Mark as read"}
+          >
+            <Show when={props.isRead} fallback={<CircleIcon />}>
+              <CheckIcon />
+            </Show>
+          </span>
         </Show>
       </button>
 

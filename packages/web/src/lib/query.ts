@@ -11,6 +11,7 @@ import type {
   IssueComment,
 } from "@better-review/shared";
 
+import type { Annotation } from "../utils/parseReviewTokens";
 import { trpc } from "./trpc";
 
 // Create a dedicated IndexedDB store for query cache
@@ -77,6 +78,12 @@ export const queryKeys = {
   },
   user: {
     current: ["user", "current"] as const,
+  },
+  // Local client-only state (persisted via IndexedDB with rest of query cache)
+  local: {
+    readFiles: (prUrl: string) => ["local", "readFiles", prUrl] as const,
+    reviewOrder: (prUrl: string) => ["local", "reviewOrder", prUrl] as const,
+    annotations: (prUrl: string) => ["local", "annotations", prUrl] as const,
   },
 };
 
@@ -266,3 +273,64 @@ export async function prefetchCiStatuses(urls: string[]): Promise<void> {
 
 // Re-export shared types for convenience
 export type { CiStatus, SearchedPr, PrStatus, PrCommit, PRComment };
+
+// ============================================================================
+// Local State Helpers (persisted via IndexedDB with query cache)
+// ============================================================================
+
+/**
+ * Get the set of files marked as read for a PR
+ */
+export function getReadFiles(prUrl: string): Set<string> {
+  const data = queryClient.getQueryData<string[]>(queryKeys.local.readFiles(prUrl));
+  return new Set(data ?? []);
+}
+
+/**
+ * Set the read files for a PR
+ */
+export function setReadFiles(prUrl: string, files: Set<string>): void {
+  queryClient.setQueryData(queryKeys.local.readFiles(prUrl), Array.from(files));
+}
+
+/**
+ * Toggle a file's read status and return the new set
+ */
+export function toggleFileRead(prUrl: string, fileName: string): Set<string> {
+  const current = getReadFiles(prUrl);
+  if (current.has(fileName)) {
+    current.delete(fileName);
+  } else {
+    current.add(fileName);
+  }
+  setReadFiles(prUrl, current);
+  return current;
+}
+
+/**
+ * Get the review order for a PR
+ */
+export function getReviewOrder(prUrl: string): string[] | null {
+  return queryClient.getQueryData<string[]>(queryKeys.local.reviewOrder(prUrl)) ?? null;
+}
+
+/**
+ * Set the review order for a PR
+ */
+export function setReviewOrder(prUrl: string, order: string[]): void {
+  queryClient.setQueryData(queryKeys.local.reviewOrder(prUrl), order);
+}
+
+/**
+ * Get the annotations for a PR
+ */
+export function getAnnotations(prUrl: string): Annotation[] {
+  return queryClient.getQueryData<Annotation[]>(queryKeys.local.annotations(prUrl)) ?? [];
+}
+
+/**
+ * Set the annotations for a PR
+ */
+export function setAnnotations(prUrl: string, annotations: Annotation[]): void {
+  queryClient.setQueryData(queryKeys.local.annotations(prUrl), annotations);
+}
