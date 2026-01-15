@@ -32,6 +32,8 @@ interface Props {
   highlightedLine?: { file: string; line: number } | null;
   repoOwner?: string | null;
   repoName?: string | null;
+  readFiles?: Set<string>;
+  onToggleRead?: (fileName: string) => void;
 }
 
 export function DiffViewer(props: Props) {
@@ -110,6 +112,10 @@ export function DiffViewer(props: Props) {
                   highlightedLine={highlightLine()}
                   repoOwner={props.repoOwner}
                   repoName={props.repoName}
+                  isRead={props.readFiles?.has(file.name)}
+                  onToggleRead={
+                    props.onToggleRead ? () => props.onToggleRead!(file.name) : undefined
+                  }
                 />
               </div>
             );

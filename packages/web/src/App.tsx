@@ -30,13 +30,21 @@ import {
   DEFAULT_DIFF_SETTINGS,
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
-import { queryKeys, api, queryClient, type IssueComment } from "./lib/query";
+import {
+  queryKeys,
+  api,
+  queryClient,
+  type IssueComment,
+  getReadFiles,
+  toggleFileRead as queryToggleFileRead,
+  getReviewOrder,
+  setReviewOrder as querySetReviewOrder,
+  getAnnotations,
+} from "./lib/query";
 import { trpc } from "./lib/trpc";
 import type { Annotation } from "./utils/parseReviewTokens";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
-const REVIEW_ORDER_STORAGE_KEY = "review-order";
-const ANNOTATIONS_STORAGE_KEY = "review-annotations";
 const PANELS_STORAGE_KEY = "panel-visibility";
 
 // Valid theme keys for validation
@@ -64,56 +72,6 @@ function saveSettings(settings: DiffSettings): void {
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   } catch {
     // Ignore storage errors
-  }
-}
-
-// Load review order from localStorage (keyed by PR URL)
-function loadReviewOrder(prUrl: string): string[] | null {
-  try {
-    const stored = localStorage.getItem(REVIEW_ORDER_STORAGE_KEY);
-    if (stored) {
-      const data = JSON.parse(stored);
-      return data[prUrl] ?? null;
-    }
-  } catch {
-    // Ignore
-  }
-  return null;
-}
-
-function saveReviewOrder(prUrl: string, order: string[]): void {
-  try {
-    const stored = localStorage.getItem(REVIEW_ORDER_STORAGE_KEY);
-    const data = stored ? JSON.parse(stored) : {};
-    data[prUrl] = order;
-    localStorage.setItem(REVIEW_ORDER_STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore
-  }
-}
-
-// Load annotations from localStorage (keyed by PR URL)
-function loadAnnotations(prUrl: string): Annotation[] {
-  try {
-    const stored = localStorage.getItem(ANNOTATIONS_STORAGE_KEY);
-    if (stored) {
-      const data = JSON.parse(stored);
-      return data[prUrl] ?? [];
-    }
-  } catch {
-    // Ignore
-  }
-  return [];
-}
-
-function _saveAnnotations(prUrl: string, annotations: Annotation[]): void {
-  try {
-    const stored = localStorage.getItem(ANNOTATIONS_STORAGE_KEY);
-    const data = stored ? JSON.parse(stored) : {};
-    data[prUrl] = annotations;
-    localStorage.setItem(ANNOTATIONS_STORAGE_KEY, JSON.stringify(data));
-  } catch {
-    // Ignore
   }
 }
 
@@ -170,6 +128,7 @@ const AppContent: Component = () => {
     file: string;
     line: number;
   } | null>(null);
+  const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
 
   // Panel visibility
   const [panelVisibility, setPanelVisibility] =
@@ -251,8 +210,16 @@ const AppContent: Component = () => {
     setReviewOrder(order);
     const url = loadedPrUrl();
     if (url) {
-      saveReviewOrder(url, order);
+      querySetReviewOrder(url, order);
     }
+  };
+
+  // Toggle file read status
+  const toggleFileRead = (fileName: string) => {
+    const url = loadedPrUrl();
+    if (!url) return;
+    const newReadFiles = queryToggleFileRead(url, fileName);
+    setReadFiles(newReadFiles);
   };
 
   // Add annotation as GitHub comment
@@ -404,18 +371,22 @@ const AppContent: Component = () => {
   createEffect(() => {
     const url = loadedPrUrl();
     if (url) {
-      const savedOrder = loadReviewOrder(url);
+      const savedOrder = getReviewOrder(url);
       if (savedOrder) {
         setReviewOrder(savedOrder);
       } else {
         setReviewOrder(null);
       }
 
-      const savedAnnotations = loadAnnotations(url);
+      const savedAnnotations = getAnnotations(url);
       setAnnotations(savedAnnotations);
+
+      const savedReadFiles = getReadFiles(url);
+      setReadFiles(savedReadFiles);
     } else {
       setReviewOrder(null);
       setAnnotations([]);
+      setReadFiles(new Set<string>());
     }
   });
 
@@ -919,6 +890,8 @@ const AppContent: Component = () => {
                   repoName={prInfo()?.repo}
                   fileOrder={reviewOrder()}
                   highlightedLine={highlightedLine()}
+                  readFiles={readFiles()}
+                  onToggleRead={toggleFileRead}
                 />
               </Show>
             </div>
@@ -930,6 +903,8 @@ const AppContent: Component = () => {
               files={orderedFiles()}
               onFileSelect={(file) => scrollToFile(file)}
               reviewOrder={reviewOrder()}
+              readFiles={readFiles()}
+              onToggleRead={toggleFileRead}
             />
           </Show>
         </Show>
