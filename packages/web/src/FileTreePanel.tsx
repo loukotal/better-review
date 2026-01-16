@@ -1,6 +1,10 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { createSignal, createMemo, For, Show } from "solid-js";
 
+import { CheckIcon } from "./icons/check-icon";
+import { CircleIcon } from "./icons/circle-icon";
+import { ListOrderIcon } from "./icons/list-order-icon";
+
 interface FileTreePanelProps {
   files: FileDiffMetadata[];
   onFileSelect: (fileName: string) => void;
@@ -97,29 +101,6 @@ function FileStatusIndicator(props: { type: FileDiffMetadata["type"] }) {
   return <span class={`text-base w-3 text-center ${indicator().class}`}>{indicator().char}</span>;
 }
 
-function CheckIcon() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" class="text-success">
-      <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z" />
-    </svg>
-  );
-}
-
-function CircleIcon() {
-  return (
-    <svg
-      width="10"
-      height="10"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.5"
-    >
-      <circle cx="8" cy="8" r="5" />
-    </svg>
-  );
-}
-
 function TreeNodeView(props: {
   node: TreeNode;
   depth: number;
@@ -204,8 +185,8 @@ function TreeNodeView(props: {
                 classList={{ "!opacity-100": isRead() }}
                 title={isRead() ? "Mark as unread" : "Mark as read"}
               >
-                <Show when={isRead()} fallback={<CircleIcon />}>
-                  <CheckIcon />
+                <Show when={isRead()} fallback={<CircleIcon size={10} />}>
+                  <CheckIcon size={10} class="text-success" />
                 </Show>
               </span>
             </Show>
@@ -303,9 +284,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
       <Show when={props.reviewOrder && props.reviewOrder.length > 0}>
         <div class="px-2 py-1.5 border-b border-accent/30 bg-accent/5">
           <div class="flex items-center gap-1.5 text-base text-accent">
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M7 5.75A.75.75 0 0 1 7.75 5h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 5.75zm0 4A.75.75 0 0 1 7.75 9h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 9.75zM3.5 6a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5zM4.25 10a.75.75 0 1 0-1.5 0 .75.75 0 0 0 1.5 0z" />
-            </svg>
+            <ListOrderIcon size={10} />
             <span>AI review order applied</span>
           </div>
         </div>

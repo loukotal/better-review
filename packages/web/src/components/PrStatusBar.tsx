@@ -3,24 +3,13 @@ import { type Component, Show, createMemo, createSignal, createEffect, onCleanup
 import type { PrState, PrStatus, CheckRun } from "@better-review/shared";
 
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { CheckIcon } from "../icons/check-icon";
+import { ChevronDownIcon } from "../icons/chevron-down-icon";
+import { CloseIcon } from "../icons/close-icon";
+import { CopyIcon } from "../icons/copy-icon";
+import { ExternalLinkIcon } from "../icons/external-link-icon";
+import { SpinnerIcon } from "../icons/spinner-icon";
 import { parseMarkdown } from "../lib/markdown";
-
-function CopyIcon() {
-  return (
-    <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z" />
-      <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
-    </svg>
-  );
-}
-
-function CheckIcon() {
-  return (
-    <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z" />
-    </svg>
-  );
-}
 
 interface PrStatusBarProps {
   status: PrStatus | null;
@@ -72,27 +61,13 @@ function ChecksIndicator(props: { checks: readonly CheckRun[] }) {
       {(s) => (
         <div class="flex items-center gap-1.5">
           <Show when={status() === "passed"}>
-            <svg class="w-3 h-3 text-success" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z" />
-            </svg>
+            <CheckIcon size={12} class="text-success" />
           </Show>
           <Show when={status() === "failed"}>
-            <svg class="w-3 h-3 text-error" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z" />
-            </svg>
+            <CloseIcon size={12} class="text-error" />
           </Show>
           <Show when={status() === "pending"}>
-            <svg
-              class="w-3 h-3 text-yellow-500 animate-spin"
-              viewBox="0 0 16 16"
-              fill="currentColor"
-            >
-              <path
-                d="M8 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8z"
-                opacity="0.3"
-              />
-              <path d="M8 0a8 8 0 0 1 8 8h-2a6 6 0 0 0-6-6V0z" />
-            </svg>
+            <SpinnerIcon size={12} class="text-yellow-500 animate-spin" />
           </Show>
           <span class="text-sm text-text-muted">
             {s().passed}/{s().total} checks
@@ -100,29 +75,6 @@ function ChecksIndicator(props: { checks: readonly CheckRun[] }) {
         </div>
       )}
     </Show>
-  );
-}
-
-function ExternalLinkIcon() {
-  return (
-    <svg class="w-2.5 h-2.5" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1z" />
-    </svg>
-  );
-}
-
-function ChevronDownIcon() {
-  return (
-    <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
-      <path
-        d="M4.5 5.5L8 9l3.5-3.5"
-        stroke="currentColor"
-        stroke-width="1.5"
-        fill="none"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </svg>
   );
 }
 
@@ -186,7 +138,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
               >
                 <span class="break-words">{status().title}</span>
                 <span class="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                  <ExternalLinkIcon />
+                  <ExternalLinkIcon size={10} />
                 </span>
               </a>
             </div>
@@ -217,10 +169,8 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                   class="p-0.5 text-text-faint hover:text-text transition-colors"
                   title={copied() ? "Copied!" : "Copy branch name"}
                 >
-                  <Show when={copied()} fallback={<CopyIcon />}>
-                    <span class="text-success">
-                      <CheckIcon />
-                    </span>
+                  <Show when={copied()} fallback={<CopyIcon size={14} />}>
+                    <CheckIcon size={14} class="text-success" />
                   </Show>
                 </button>
               </div>
@@ -255,7 +205,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                   <span
                     class={`transform transition-transform duration-150 ${showDescription() ? "rotate-180" : ""}`}
                   >
-                    <ChevronDownIcon />
+                    <ChevronDownIcon size={12} />
                   </span>
                   <span>Description</span>
                 </button>
@@ -290,9 +240,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                     title="Close (Esc)"
                   >
                     <span class="hidden sm:inline">Close</span>
-                    <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06z" />
-                    </svg>
+                    <CloseIcon size={14} />
                   </button>
                 </div>
                 <div

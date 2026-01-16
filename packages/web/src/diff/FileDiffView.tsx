@@ -7,6 +7,9 @@ import {
 import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "solid-js";
 
 import { renderCommentThread, renderPendingCommentForm } from "../components/CommentView";
+import { CheckIcon } from "../icons/check-icon";
+import { ChevronDownIcon } from "../icons/chevron-down-icon";
+import { CircleIcon } from "../icons/circle-icon";
 import {
   type DiffSettings,
   type PRComment,
@@ -42,45 +45,6 @@ interface FileDiffViewProps {
   repoName?: string | null;
   isRead?: boolean;
   onToggleRead?: () => void;
-}
-
-function ChevronIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-      <path
-        d="M4.5 5.5L8 9l3.5-3.5"
-        stroke="currentColor"
-        stroke-width="2"
-        fill="none"
-        stroke-linecap="square"
-      />
-    </svg>
-  );
-}
-
-function CheckIcon(props: { size?: number }) {
-  const size = props.size ?? 14;
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor">
-      <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z" />
-    </svg>
-  );
-}
-
-function CircleIcon(props: { size?: number }) {
-  const size = props.size ?? 14;
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.5"
-    >
-      <circle cx="8" cy="8" r="5" />
-    </svg>
-  );
 }
 
 // Group comments into threads by their root comment
@@ -403,7 +367,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           class="text-text-faint group-hover:text-text-muted text-sm"
           classList={{ "rotate-[-90deg]": collapsed() }}
         >
-          <ChevronIcon />
+          <ChevronDownIcon size={12} />
         </span>
 
         {/* Status indicator */}

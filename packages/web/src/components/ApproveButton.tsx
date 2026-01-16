@@ -1,15 +1,9 @@
 import { createSignal, Show } from "solid-js";
 
 import { usePrContext } from "../context/PrContext";
+import { CheckIcon } from "../icons/check-icon";
+import { SpinnerIcon } from "../icons/spinner-icon";
 import { trpc } from "../lib/trpc";
-
-function CheckIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
-    </svg>
-  );
-}
 
 export function ApproveButton() {
   const { prUrl } = usePrContext();
@@ -55,7 +49,7 @@ export function ApproveButton() {
         }}
         title={approved() ? "PR approved" : "Approve this PR"}
       >
-        <CheckIcon />
+        <CheckIcon size={12} />
         <span>{approved() ? "Approved" : "Approve"}</span>
       </button>
 
@@ -80,6 +74,12 @@ export function ApproveButton() {
             <textarea
               value={comment()}
               onInput={(e) => setComment(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && !submitting()) {
+                  e.preventDefault();
+                  handleApprove();
+                }
+              }}
               placeholder="Leave a comment (optional)..."
               class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint resize-y min-h-[80px] focus:border-accent focus:outline-none"
             />
@@ -95,9 +95,17 @@ export function ApproveButton() {
                 type="button"
                 onClick={handleApprove}
                 disabled={submitting()}
-                class="flex-1 px-3 py-1.5 bg-green-600 text-white text-sm hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                class="flex-1 px-3 py-1.5 bg-green-600 text-white text-sm hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
               >
+                <Show when={submitting()}>
+                  <SpinnerIcon size={12} class="animate-spin" />
+                </Show>
                 {submitting() ? "Approving..." : "Submit approval"}
+                <Show when={!submitting()}>
+                  <span class="text-white/60 text-xs ml-1">
+                    ({navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+↵)
+                  </span>
+                </Show>
               </button>
               <button
                 type="button"
