@@ -12,7 +12,7 @@
     "@better-review/shared": "workspace:*",
     "@effect/platform": "^0.94.0",
     "@effect/platform-bun": "^0.87.0",
-    "@opencode-ai/sdk": "^1.1.15",
+    "@opencode-ai/sdk": "^1.1.21",
     "@pierre/diffs": "^1.0.2",
     "@trpc/server": "^11.8.1",
     "effect": "^3.19.13",

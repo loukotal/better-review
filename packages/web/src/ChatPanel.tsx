@@ -126,36 +126,13 @@ export function ChatPanel(props: ChatPanelProps) {
     setSessionError(null);
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-      const res = await fetch("/api/opencode/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prUrl: props.prUrl,
-          prNumber: props.prNumber,
-          repoOwner: props.repoOwner,
-          repoName: props.repoName,
-          files: props.files,
-        }),
-        signal: controller.signal,
+      const data = await trpc.opencode.getOrCreateSession.mutate({
+        prUrl: props.prUrl,
+        prNumber: props.prNumber,
+        repoOwner: props.repoOwner,
+        repoName: props.repoName,
+        files: props.files,
       });
-
-      clearTimeout(timeoutId);
-
-      if (!res.ok) {
-        const text = await res.text();
-        setSessionError(`Server error: ${res.status} - ${text}`);
-        return;
-      }
-
-      const data = await res.json();
-
-      if (data.error) {
-        setSessionError(data.error);
-        return;
-      }
 
       if (!data.session?.id) {
         setSessionError("Invalid response: no session ID");
@@ -177,11 +154,7 @@ export function ChatPanel(props: ChatPanelProps) {
         await loadMessages(data.session.id);
       }
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        setSessionError("Connection timed out - is OpenCode running?");
-      } else {
-        setSessionError(err instanceof Error ? err.message : "Failed to initialize chat session");
-      }
+      setSessionError(err instanceof Error ? err.message : "Failed to initialize chat session");
     } finally {
       setInitializing(false);
     }
