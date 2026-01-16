@@ -77,6 +77,8 @@ export const LINE_DIFF_LABELS: Record<LineDiffType, string> = {
 
 // ============ Annotation Metadata Types ============
 
+import type { Annotation } from "../utils/parseReviewTokens";
+
 export type AnnotationMetadata =
   | { type: "thread"; rootComment: PRComment; replies: PRComment[] }
   | { type: "pending"; startLine: number; endLine: number; side: "LEFT" | "RIGHT" }
@@ -85,7 +87,8 @@ export type AnnotationMetadata =
       rootCommentId: number;
       line: number | null;
       side: "LEFT" | "RIGHT";
-    };
+    }
+  | { type: "ai-annotation"; annotation: Annotation };
 
 // ============ Review Mode Types ============
 

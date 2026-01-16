@@ -40,6 +40,8 @@ import {
   getReviewOrder,
   setReviewOrder as querySetReviewOrder,
   getAnnotations,
+  addAnnotations as queryAddAnnotations,
+  removeAnnotation as queryRemoveAnnotation,
 } from "./lib/query";
 import { trpc } from "./lib/trpc";
 import type { Annotation } from "./utils/parseReviewTokens";
@@ -123,12 +125,19 @@ const AppContent: Component = () => {
 
   // Review state
   const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
-  const [_annotations, setAnnotations] = createSignal<Annotation[]>([]);
+  const [aiAnnotations, setAiAnnotations] = createSignal<Annotation[]>([]);
   const [highlightedLine, setHighlightedLine] = createSignal<{
     file: string;
     line: number;
   } | null>(null);
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
+
+  // Pending prefilled comment (for converting AI annotations to comments)
+  const [pendingPrefill, setPendingPrefill] = createSignal<{
+    file: string;
+    line: number;
+    body: string;
+  } | null>(null);
 
   // Panel visibility
   const [panelVisibility, setPanelVisibility] =
@@ -222,7 +231,7 @@ const AppContent: Component = () => {
     setReadFiles(newReadFiles);
   };
 
-  // Add annotation as GitHub comment
+  // Add annotation as GitHub comment (from chat panel - posts directly)
   const addAnnotationAsComment = async (annotation: Annotation) => {
     // Scroll to the file and line first
     scrollToFile(annotation.file, annotation.line);
@@ -239,6 +248,36 @@ const AppContent: Component = () => {
     // Add the comment via the existing addComment function
     // Default to RIGHT side (additions) for now
     await addComment(annotation.file, annotation.line, "RIGHT", body);
+  };
+
+  // Convert AI annotation to comment (prefills the comment form)
+  const convertAiAnnotationToComment = (annotation: Annotation, prefillBody: string) => {
+    // Scroll to the file and line
+    scrollToFile(annotation.file, annotation.line);
+    // Set the prefill state - the DiffViewer will use this to open a comment form
+    setPendingPrefill({
+      file: annotation.file,
+      line: annotation.line,
+      body: prefillBody,
+    });
+  };
+
+  // Dismiss an AI annotation
+  const dismissAiAnnotation = (annotationId: string) => {
+    const url = loadedPrUrl();
+    if (url) {
+      const updated = queryRemoveAnnotation(url, annotationId);
+      setAiAnnotations(updated);
+    }
+  };
+
+  // Add new AI annotations (called when chat receives annotations)
+  const addNewAiAnnotations = (annotations: Annotation[]) => {
+    const url = loadedPrUrl();
+    if (url && annotations.length > 0) {
+      const updated = queryAddAnnotations(url, annotations);
+      setAiAnnotations(updated);
+    }
   };
 
   // Load commit diff using TanStack Query (auto-cached)
@@ -379,13 +418,13 @@ const AppContent: Component = () => {
       }
 
       const savedAnnotations = getAnnotations(url);
-      setAnnotations(savedAnnotations);
+      setAiAnnotations(savedAnnotations);
 
       const savedReadFiles = getReadFiles(url);
       setReadFiles(savedReadFiles);
     } else {
       setReviewOrder(null);
-      setAnnotations([]);
+      setAiAnnotations([]);
       setReadFiles(new Set<string>());
     }
   });
@@ -680,7 +719,11 @@ const AppContent: Component = () => {
       if (data.comment) {
         const newComments = issueComments().map((c) =>
           c.id === commentId
-            ? { ...c, body: data.comment.body, updated_at: data.comment.updated_at }
+            ? {
+                ...c,
+                body: data.comment.body,
+                updated_at: data.comment.updated_at,
+              }
             : c,
         );
         updateIssueCommentsCache(url, newComments);
@@ -836,6 +879,7 @@ const AppContent: Component = () => {
             onScrollToFile={scrollToFile}
             onApplyReviewOrder={applyReviewOrder}
             onAddAnnotationAsComment={addAnnotationAsComment}
+            onAnnotationsReceived={addNewAiAnnotations}
           />
         </Show>
 
@@ -879,11 +923,14 @@ const AppContent: Component = () => {
                 <DiffViewer
                   rawDiff={activeDiff()!}
                   comments={comments()}
+                  aiAnnotations={aiAnnotations()}
                   loadingComments={loadingComments()}
                   onAddComment={addComment}
                   onReplyToComment={replyToComment}
                   onEditComment={editComment}
                   onDeleteComment={deleteComment}
+                  onConvertAiAnnotation={convertAiAnnotationToComment}
+                  onDismissAiAnnotation={dismissAiAnnotation}
                   settings={settings()}
                   onFilesLoaded={setFiles}
                   repoOwner={prInfo()?.owner}

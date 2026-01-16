@@ -11,6 +11,7 @@ import {
   onMount,
   onCleanup,
   batch,
+  on,
 } from "solid-js";
 
 import { SYSTEM_CONTEXT_MARKER, type StoredSession } from "@better-review/shared";
@@ -40,6 +41,7 @@ interface ChatPanelProps {
   onScrollToFile?: (file: string, line?: number) => void;
   onApplyReviewOrder?: (files: string[]) => void;
   onAddAnnotationAsComment?: (annotation: Annotation) => void;
+  onAnnotationsReceived?: (annotations: Annotation[]) => void;
 }
 
 const CHAT_WIDTH_KEY = "chat-panel-width";
@@ -99,6 +101,34 @@ export function ChatPanel(props: ChatPanelProps) {
       }
     });
   });
+
+  // Extract and notify annotations when messages change
+  createEffect(
+    on(
+      () =>
+        chat
+          .messages()
+          .map((m) => m.id)
+          .join(","),
+      () => {
+        if (!props.onAnnotationsReceived) return;
+
+        // Extract annotations from all assistant messages
+        const allAnnotations: Annotation[] = [];
+        for (const msg of chat.messages()) {
+          if (msg.role === "assistant") {
+            const parsed = parseReviewTokens(msg.content);
+            allAnnotations.push(...parsed.annotations);
+          }
+        }
+
+        if (allAnnotations.length > 0) {
+          props.onAnnotationsReceived(allAnnotations);
+        }
+      },
+      { defer: true },
+    ),
+  );
 
   // Initialize session when PR changes
   createEffect(() => {
@@ -568,10 +598,10 @@ export function ChatPanel(props: ChatPanelProps) {
       <div class="px-3 py-2 border-b border-border">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2 min-w-0">
-            <span class="text-accent text-sm flex-shrink-0">AI</span>
+            <span class="text-accent text-sm shrink-0">AI</span>
             <h2 class="text-sm text-text font-medium truncate">Review Assistant</h2>
           </div>
-          <div class="flex items-center gap-1 flex-shrink-0">
+          <div class="flex items-center gap-1 shrink-0">
             <Show when={sessionId() && !chat.isStreaming()}>
               <button
                 type="button"
@@ -615,7 +645,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 type="button"
                 onClick={handleNewSession}
                 disabled={chat.isStreaming() || initializing()}
-                class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                 title="Create new session"
               >
                 {width() < 300 ? "+New" : "+ New"}
@@ -715,7 +745,7 @@ export function ChatPanel(props: ChatPanelProps) {
                   </div>
                 </Show>
 
-                <div class="text-text break-words leading-relaxed text-sm">
+                <div class="text-text wrap-break-word leading-relaxed text-sm">
                   <MessageContent role={msg.role} content={msg.content} />
                 </div>
               </div>
@@ -738,7 +768,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
               {/* Streaming content - render markdown with remend for incomplete blocks */}
               <Show when={chat.streamingContent()}>
-                <div class="text-sm text-text break-words leading-relaxed">
+                <div class="text-sm text-text wrap-break-word leading-relaxed">
                   <MarkdownText content={chat.streamingContent()!} streaming={true} />
                 </div>
               </Show>
