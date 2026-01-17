@@ -5,7 +5,6 @@ import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens"
 
 export interface AiAnnotationInlineProps {
   annotation: Annotation;
-  onAddAsComment: (annotation: Annotation, prefillBody: string) => void;
   onDismiss?: (annotationId: string) => void;
 }
 
@@ -42,10 +41,19 @@ function SparklesIcon() {
   );
 }
 
-function CommentIcon() {
+function CopyIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l-2.573 2.573A1.458 1.458 0 0 1 4 13.543V12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h4.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
+      <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z" />
+      <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
     </svg>
   );
 }
@@ -87,12 +95,14 @@ function SeverityIcon(props: { severity: AnnotationSeverity }) {
  */
 export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) => {
   const [isHovered, setIsHovered] = createSignal(false);
+  const [copied, setCopied] = createSignal(false);
   const config = () => severityConfig[props.annotation.severity];
 
-  const handleAddAsComment = () => {
-    // Prefill the comment with a formatted version of the AI annotation
-    const prefillBody = `**${config().label}:** ${props.annotation.message}`;
-    props.onAddAsComment(props.annotation, prefillBody);
+  const handleCopy = async () => {
+    const text = props.annotation.message;
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleDismiss = () => {
@@ -131,14 +141,14 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
         >
           <button
             type="button"
-            onClick={handleAddAsComment}
-            class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 
-                   text-text-faint hover:text-accent
-                   transition-colors duration-150"
-            title="Convert to GitHub comment"
+            onClick={handleCopy}
+            class={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 
+                   transition-colors duration-150
+                   ${copied() ? "text-success" : "text-text-faint hover:text-accent"}`}
+            title="Copy to clipboard"
           >
-            <CommentIcon />
-            <span>Comment</span>
+            {copied() ? <CheckIcon /> : <CopyIcon />}
+            <span>{copied() ? "Copied" : "Copy"}</span>
           </button>
           <Show when={props.onDismiss}>
             <button

@@ -1,4 +1,4 @@
-import { marked } from "marked";
+import { marked, type Tokens } from "marked";
 import remend from "remend";
 import {
   createSignal,
@@ -21,8 +21,10 @@ import { FileLink } from "./components/FileLink";
 import { ModelSelector } from "./components/ModelSelector";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { SessionSelector } from "./components/SessionSelector";
+import type { DiffTheme } from "./diff/types";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { SpinnerIcon } from "./icons/spinner-icon";
+import { highlightCode, clearHighlightCache } from "./lib/shiki";
 import { trpc } from "./lib/trpc";
 import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
 
@@ -38,9 +40,9 @@ interface ChatPanelProps {
   repoOwner: string | null;
   repoName: string | null;
   files: string[];
+  theme: DiffTheme;
   onScrollToFile?: (file: string, line?: number) => void;
   onApplyReviewOrder?: (files: string[]) => void;
-  onAddAnnotationAsComment?: (annotation: Annotation) => void;
   onAnnotationsReceived?: (annotations: Annotation[]) => void;
 }
 
@@ -125,6 +127,17 @@ export function ChatPanel(props: ChatPanelProps) {
         if (allAnnotations.length > 0) {
           props.onAnnotationsReceived(allAnnotations);
         }
+      },
+      { defer: true },
+    ),
+  );
+
+  // Clear highlight cache when theme changes
+  createEffect(
+    on(
+      () => props.theme,
+      () => {
+        clearHighlightCache();
       },
       { defer: true },
     ),
@@ -391,24 +404,83 @@ export function ChatPanel(props: ChatPanelProps) {
     props.onApplyReviewOrder?.(files);
   };
 
-  // Handle add annotation as comment
-  const handleAddAsComment = (annotation: Annotation) => {
-    props.onAddAnnotationAsComment?.(annotation);
-  };
-
-  // Render markdown text (with streaming support via remend)
+  // Render markdown text with Shiki syntax highlighting for code blocks
   function MarkdownText(mdProps: { content: string; streaming?: boolean }) {
-    const html = () => {
-      try {
-        // Use remend to complete incomplete markdown during streaming
-        const preprocessed = mdProps.streaming ? remend(mdProps.content) : mdProps.content;
-        return marked.parse(preprocessed, { async: false }) as string;
-      } catch {
-        return mdProps.content;
-      }
+    const [html, setHtml] = createSignal<string>("");
+
+    // Track code blocks that need highlighting
+    const codeBlocks: Array<{ id: string; code: string; lang: string }> = [];
+    let blockCounter = 0;
+
+    // Custom renderer that creates placeholders for code blocks
+    const renderer = new marked.Renderer();
+    renderer.code = (token: Tokens.Code) => {
+      const id = `code-block-${blockCounter++}`;
+      const lang = token.lang || "text";
+      codeBlocks.push({ id, code: token.text, lang });
+      // Return a placeholder div that will be replaced with highlighted code
+      return `<div data-code-block-id="${id}" class="shiki-placeholder"><pre><code>${escapeHtml(token.text)}</code></pre></div>`;
     };
 
+    // Parse markdown and trigger async highlighting
+    createEffect(() => {
+      const content = mdProps.content;
+      const streaming = mdProps.streaming;
+
+      // Reset for new content
+      codeBlocks.length = 0;
+      blockCounter = 0;
+
+      try {
+        // Use remend to complete incomplete markdown during streaming
+        const preprocessed = streaming ? remend(content) : content;
+        const parsedHtml = marked.parse(preprocessed, {
+          async: false,
+          renderer,
+        }) as string;
+        setHtml(parsedHtml);
+
+        // If not streaming and there are code blocks, highlight them
+        if (!streaming && codeBlocks.length > 0) {
+          highlightCodeBlocks(parsedHtml, [...codeBlocks]);
+        }
+      } catch {
+        setHtml(content);
+      }
+    });
+
+    // Highlight code blocks asynchronously and update HTML
+    async function highlightCodeBlocks(
+      baseHtml: string,
+      blocks: Array<{ id: string; code: string; lang: string }>,
+    ) {
+      let updatedHtml = baseHtml;
+
+      for (const block of blocks) {
+        try {
+          const highlighted = await highlightCode(block.code, block.lang, props.theme);
+          // Replace the placeholder with highlighted code
+          const placeholder = `<div data-code-block-id="${block.id}" class="shiki-placeholder"><pre><code>${escapeHtml(block.code)}</code></pre></div>`;
+          updatedHtml = updatedHtml.replace(placeholder, highlighted);
+        } catch {
+          // Keep the placeholder if highlighting fails
+        }
+      }
+
+      setHtml(updatedHtml);
+    }
+
     return <span class="markdown-content" innerHTML={html()} />;
+  }
+
+  // Helper to escape HTML for placeholders
+  function escapeHtml(str: string): string {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
   // Render a message segment
@@ -454,7 +526,6 @@ export function ChatPanel(props: ChatPanelProps) {
               ).annotation
             }
             onNavigate={handleFileClick}
-            onAddAsComment={handleAddAsComment}
           />
         </Match>
         <Match when={segmentProps.segment.type === "review-order"}>

@@ -42,7 +42,6 @@ interface FileDiffViewProps {
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
-  onConvertAiAnnotation?: (annotation: Annotation, prefillBody: string) => void;
   onDismissAiAnnotation?: (annotationId: string) => void;
   settings: DiffSettings;
   highlightedLine?: number;
@@ -330,14 +329,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           // Render the AI annotation component into the div
           const dispose = renderAiAnnotation(div, {
             annotation: metadata.annotation,
-            onAddAsComment: (ann, prefillBody) => {
-              props.onConvertAiAnnotation?.(ann, prefillBody);
-            },
-            onDismiss: props.onDismissAiAnnotation
-              ? (annotationId) => {
-                  props.onDismissAiAnnotation?.(annotationId);
-                }
-              : undefined,
+            onDismiss: props.onDismissAiAnnotation,
           });
           disposeList.push(dispose);
         } else if (metadata.type === "pending") {

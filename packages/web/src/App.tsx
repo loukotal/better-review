@@ -132,13 +132,6 @@ const AppContent: Component = () => {
   } | null>(null);
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
 
-  // Pending prefilled comment (for converting AI annotations to comments)
-  const [pendingPrefill, setPendingPrefill] = createSignal<{
-    file: string;
-    line: number;
-    body: string;
-  } | null>(null);
-
   // Panel visibility
   const [panelVisibility, setPanelVisibility] =
     createSignal<PanelVisibility>(loadPanelVisibility());
@@ -229,37 +222,6 @@ const AppContent: Component = () => {
     if (!url) return;
     const newReadFiles = queryToggleFileRead(url, fileName);
     setReadFiles(newReadFiles);
-  };
-
-  // Add annotation as GitHub comment (from chat panel - posts directly)
-  const addAnnotationAsComment = async (annotation: Annotation) => {
-    // Scroll to the file and line first
-    scrollToFile(annotation.file, annotation.line);
-
-    // Format the comment body with severity prefix
-    const severityPrefix =
-      annotation.severity === "critical"
-        ? "[CRITICAL] "
-        : annotation.severity === "warning"
-          ? "[WARNING] "
-          : "";
-    const body = `${severityPrefix}${annotation.message}`;
-
-    // Add the comment via the existing addComment function
-    // Default to RIGHT side (additions) for now
-    await addComment(annotation.file, annotation.line, "RIGHT", body);
-  };
-
-  // Convert AI annotation to comment (prefills the comment form)
-  const convertAiAnnotationToComment = (annotation: Annotation, prefillBody: string) => {
-    // Scroll to the file and line
-    scrollToFile(annotation.file, annotation.line);
-    // Set the prefill state - the DiffViewer will use this to open a comment form
-    setPendingPrefill({
-      file: annotation.file,
-      line: annotation.line,
-      body: prefillBody,
-    });
   };
 
   // Dismiss an AI annotation
@@ -876,9 +838,9 @@ const AppContent: Component = () => {
             repoOwner={prInfo()?.owner ?? null}
             repoName={prInfo()?.repo ?? null}
             files={fileNames()}
+            theme={settings().theme}
             onScrollToFile={scrollToFile}
             onApplyReviewOrder={applyReviewOrder}
-            onAddAnnotationAsComment={addAnnotationAsComment}
             onAnnotationsReceived={addNewAiAnnotations}
           />
         </Show>
@@ -929,7 +891,6 @@ const AppContent: Component = () => {
                   onReplyToComment={replyToComment}
                   onEditComment={editComment}
                   onDeleteComment={deleteComment}
-                  onConvertAiAnnotation={convertAiAnnotationToComment}
                   onDismissAiAnnotation={dismissAiAnnotation}
                   settings={settings()}
                   onFilesLoaded={setFiles}
