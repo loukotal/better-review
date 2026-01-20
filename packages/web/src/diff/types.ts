@@ -6,7 +6,17 @@ export type { PRComment, PrCommit };
 // ============ Settings Types ============
 
 export type DiffStyle = "unified" | "split";
-export type DiffTheme = "vesper" | "github-dark" | "github-light" | "pierre-dark" | "pierre-light";
+export type DiffTheme =
+  | "vesper"
+  | "github-dark"
+  | "github-light"
+  | "pierre-dark"
+  | "pierre-light"
+  | "tokyo-night"
+  | "dracula"
+  | "catppuccin-mocha"
+  | "nord"
+  | "rose-pine";
 export type LineDiffType = "word-alt" | "word" | "char" | "none";
 export type FontFamily =
   | "berkeley-mono"
@@ -60,6 +70,11 @@ export const FONT_LABELS: Record<FontFamily, string> = {
 
 export const THEME_LABELS: Record<DiffTheme, string> = {
   vesper: "Vesper",
+  "tokyo-night": "Tokyo Night",
+  dracula: "Dracula",
+  "catppuccin-mocha": "Catppuccin Mocha",
+  nord: "Nord",
+  "rose-pine": "Rosé Pine",
   "github-dark": "GitHub Dark",
   "github-light": "GitHub Light",
   "pierre-dark": "Pierre Dark",
@@ -77,6 +92,8 @@ export const LINE_DIFF_LABELS: Record<LineDiffType, string> = {
 
 // ============ Annotation Metadata Types ============
 
+import type { Annotation } from "../utils/parseReviewTokens";
+
 export type AnnotationMetadata =
   | { type: "thread"; rootComment: PRComment; replies: PRComment[] }
   | { type: "pending"; startLine: number; endLine: number; side: "LEFT" | "RIGHT" }
@@ -85,7 +102,8 @@ export type AnnotationMetadata =
       rootCommentId: number;
       line: number | null;
       side: "LEFT" | "RIGHT";
-    };
+    }
+  | { type: "ai-annotation"; annotation: Annotation };
 
 // ============ Review Mode Types ============
 

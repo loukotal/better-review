@@ -3,6 +3,7 @@ import { For, Show, createMemo } from "solid-js";
 
 import { FileDiffView } from "./diff/FileDiffView";
 import type { DiffSettings, PRComment } from "./diff/types";
+import type { Annotation } from "./utils/parseReviewTokens";
 
 // Re-export types for convenience
 export type { DiffSettings, PRComment } from "./diff/types";
@@ -16,6 +17,7 @@ export function getFileElementId(fileName: string): string {
 interface Props {
   rawDiff: string;
   comments: PRComment[];
+  aiAnnotations?: Annotation[];
   loadingComments?: boolean;
   onAddComment: (
     filePath: string,
@@ -26,6 +28,7 @@ interface Props {
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
+  onDismissAiAnnotation?: (annotationId: string) => void;
   settings: DiffSettings;
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
   fileOrder?: string[] | null;
@@ -68,6 +71,10 @@ export function DiffViewer(props: Props) {
     return props.comments.filter((c) => c.path === fileName);
   };
 
+  const aiAnnotationsForFile = (fileName: string) => {
+    return props.aiAnnotations?.filter((a) => a.file === fileName) ?? [];
+  };
+
   return (
     <div class="pt-3">
       <div innerHTML={SVGSpriteSheet} style="display:none" />
@@ -102,12 +109,14 @@ export function DiffViewer(props: Props) {
                 <FileDiffView
                   file={file}
                   comments={commentsForFile(file.name)}
+                  aiAnnotations={aiAnnotationsForFile(file.name)}
                   onAddComment={(line, side, body) =>
                     props.onAddComment(file.name, line, side, body)
                   }
                   onReplyToComment={props.onReplyToComment}
                   onEditComment={props.onEditComment}
                   onDeleteComment={props.onDeleteComment}
+                  onDismissAiAnnotation={props.onDismissAiAnnotation}
                   settings={props.settings}
                   highlightedLine={highlightLine()}
                   repoOwner={props.repoOwner}

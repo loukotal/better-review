@@ -203,15 +203,36 @@ body {
     font-size: 0.9em;
   }
 
-  /* Code blocks */
+  /* Code blocks - basic styling */
   & pre {
     padding: 0.5em;
     margin: 0.5em 0;
     overflow-x: auto;
     border: 1px solid var(--color-border);
+    border-radius: 2px;
   }
   & pre code {
     padding: 0;
+    background: transparent;
+    color: inherit;
+  }
+
+  /* Shiki highlighted code blocks */
+  & pre.shiki {
+    /* Use Shiki's background color */
+    background-color: var(--shiki-color-background, var(--color-bg-elevated));
+    padding: 0.75em;
+  }
+  & pre.shiki code {
+    background: transparent;
+    color: inherit;
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+
+  /* Placeholder while code is being highlighted */
+  & .shiki-placeholder pre {
+    background: var(--color-bg-elevated);
   }
 
   /* Lists */

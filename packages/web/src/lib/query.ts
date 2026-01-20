@@ -334,3 +334,32 @@ export function getAnnotations(prUrl: string): Annotation[] {
 export function setAnnotations(prUrl: string, annotations: Annotation[]): void {
   queryClient.setQueryData(queryKeys.local.annotations(prUrl), annotations);
 }
+
+/**
+ * Add annotations to a PR (merges with existing, avoiding duplicates by id)
+ */
+export function addAnnotations(prUrl: string, newAnnotations: Annotation[]): Annotation[] {
+  const current = getAnnotations(prUrl);
+  const existingIds = new Set(current.map((a) => a.id));
+  const toAdd = newAnnotations.filter((a) => !existingIds.has(a.id));
+  const merged = [...current, ...toAdd];
+  setAnnotations(prUrl, merged);
+  return merged;
+}
+
+/**
+ * Remove an annotation from a PR by id
+ */
+export function removeAnnotation(prUrl: string, annotationId: string): Annotation[] {
+  const current = getAnnotations(prUrl);
+  const filtered = current.filter((a) => a.id !== annotationId);
+  setAnnotations(prUrl, filtered);
+  return filtered;
+}
+
+/**
+ * Get annotations for a specific file
+ */
+export function getAnnotationsForFile(prUrl: string, fileName: string): Annotation[] {
+  return getAnnotations(prUrl).filter((a) => a.file === fileName);
+}

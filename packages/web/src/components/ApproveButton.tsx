@@ -58,7 +58,7 @@ export function ApproveButton() {
         <div class="fixed inset-0 z-40" onClick={() => setOpen(false)} />
 
         {/* Popover */}
-        <div class="absolute top-full right-0 mt-1 z-50 w-[300px] border border-border bg-bg-surface shadow-lg shadow-black/50">
+        <div class="absolute top-full right-0 mt-1 z-50 w-75 border border-border bg-bg-surface shadow-lg shadow-black/50">
           {/* Header */}
           <div class="px-3 py-2 border-b border-border flex items-center justify-between">
             <span class="text-sm text-text">Approve PR</span>
@@ -81,7 +81,7 @@ export function ApproveButton() {
                 }
               }}
               placeholder="Leave a comment (optional)..."
-              class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint resize-y min-h-[80px] focus:border-accent focus:outline-none"
+              class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint resize-y min-h-20 focus:border-accent focus:outline-none"
             />
 
             <Show when={error()}>
@@ -100,12 +100,7 @@ export function ApproveButton() {
                 <Show when={submitting()}>
                   <SpinnerIcon size={12} class="animate-spin" />
                 </Show>
-                {submitting() ? "Approving..." : "Submit approval"}
-                <Show when={!submitting()}>
-                  <span class="text-white/60 text-xs ml-1">
-                    ({navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+↵)
-                  </span>
-                </Show>
+                {submitting() ? "Approving..." : "Approve"}
               </button>
               <button
                 type="button"

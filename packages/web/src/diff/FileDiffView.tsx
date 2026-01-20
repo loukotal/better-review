@@ -6,10 +6,12 @@ import {
 } from "@pierre/diffs";
 import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "solid-js";
 
+import { renderAiAnnotation } from "../components/AiAnnotationInline";
 import { renderCommentThread, renderPendingCommentForm } from "../components/CommentView";
 import { CheckIcon } from "../icons/check-icon";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CircleIcon } from "../icons/circle-icon";
+import type { Annotation } from "../utils/parseReviewTokens";
 import {
   type DiffSettings,
   type PRComment,
@@ -35,10 +37,12 @@ const GENERATED_FILE_PATTERNS = [
 interface FileDiffViewProps {
   file: FileDiffMetadata;
   comments: PRComment[];
+  aiAnnotations?: Annotation[];
   onAddComment: (line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
+  onDismissAiAnnotation?: (annotationId: string) => void;
   settings: DiffSettings;
   highlightedLine?: number;
   repoOwner?: string | null;
@@ -140,6 +144,18 @@ export function FileDiffView(props: FileDiffViewProps) {
       });
     });
 
+    // Add AI annotations
+    if (props.aiAnnotations) {
+      for (const annotation of props.aiAnnotations) {
+        result.push({
+          // AI annotations are always on the additions side (new code)
+          side: "additions" as AnnotationSide,
+          lineNumber: annotation.line,
+          metadata: { type: "ai-annotation", annotation },
+        });
+      }
+    }
+
     // Add pending new comment form
     const pending = pendingComment();
     if (pending) {
@@ -172,6 +188,17 @@ export function FileDiffView(props: FileDiffViewProps) {
   createEffect(
     on(
       () => props.comments.map((c) => `${c.id}:${c.body}`).join("|"),
+      () => {
+        setTimeout(rerender, 0);
+      },
+      { defer: true },
+    ),
+  );
+
+  // Re-render when AI annotations change
+  createEffect(
+    on(
+      () => props.aiAnnotations?.map((a) => a.id).join("|") ?? "",
       () => {
         setTimeout(rerender, 0);
       },
@@ -296,6 +323,15 @@ export function FileDiffView(props: FileDiffViewProps) {
             },
           });
           disposeList.push(dispose);
+        } else if (metadata.type === "ai-annotation") {
+          div.className = "my-1 mx-2";
+
+          // Render the AI annotation component into the div
+          const dispose = renderAiAnnotation(div, {
+            annotation: metadata.annotation,
+            onDismiss: props.onDismissAiAnnotation,
+          });
+          disposeList.push(dispose);
         } else if (metadata.type === "pending") {
           div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
 
@@ -365,7 +401,7 @@ export function FileDiffView(props: FileDiffViewProps) {
         {/* Collapse indicator */}
         <span
           class="text-text-faint group-hover:text-text-muted text-sm"
-          classList={{ "rotate-[-90deg]": collapsed() }}
+          classList={{ "-rotate-90": collapsed() }}
         >
           <ChevronDownIcon size={12} />
         </span>

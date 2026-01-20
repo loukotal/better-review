@@ -1,5 +1,7 @@
-import type { Component } from "solid-js";
+import { type Component, createSignal } from "solid-js";
 
+import { CheckIcon } from "../icons/check-icon";
+import { CopyIcon } from "../icons/copy-icon";
 import { CriticalIcon } from "../icons/critical-icon";
 import { InfoIcon } from "../icons/info-icon";
 import { WarningIcon } from "../icons/warning-icon";
@@ -8,7 +10,6 @@ import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens"
 interface AnnotationBlockProps {
   annotation: Annotation;
   onNavigate: (file: string, line: number) => void;
-  onAddAsComment?: (annotation: Annotation) => void;
 }
 
 const severityStyles: Record<
@@ -50,6 +51,7 @@ function SeverityIcon(props: { severity: AnnotationSeverity }) {
  * Displays an annotation with severity styling and action buttons
  */
 export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
+  const [copied, setCopied] = createSignal(false);
   const styles = () => severityStyles[props.annotation.severity];
 
   const fileName = () => {
@@ -61,8 +63,10 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
     props.onNavigate(props.annotation.file, props.annotation.line);
   };
 
-  const handleAddAsComment = () => {
-    props.onAddAsComment?.(props.annotation);
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(props.annotation.message);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -82,16 +86,17 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
             {fileName()}:{props.annotation.line}
           </button>
         </div>
-        {props.onAddAsComment && (
-          <button
-            type="button"
-            onClick={handleAddAsComment}
-            class="text-xs px-1.5 py-0.5 text-text-faint hover:text-accent border border-transparent hover:border-accent/30 transition-colors"
-            title="Add as GitHub comment"
-          >
-            + Comment
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleCopy}
+          class={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 transition-colors ${
+            copied() ? "text-success" : "text-text-faint hover:text-accent"
+          }`}
+          title="Copy to clipboard"
+        >
+          {copied() ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+          <span>{copied() ? "Copied" : "Copy"}</span>
+        </button>
       </div>
 
       {/* Message */}
