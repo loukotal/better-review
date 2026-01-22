@@ -16,6 +16,7 @@ export function ModelSelector(props: ModelSelectorProps) {
   const [isOpen, setIsOpen] = createSignal(false);
   const [searchQuery, setSearchQuery] = createSignal("");
   const [searchResults, setSearchResults] = createSignal<ModelEntry[]>([]);
+  const [connectedProvidersCount, setConnectedProvidersCount] = createSignal<number | null>(null);
   const [currentModel, setCurrentModel] = createSignal<ModelEntry | null>(null);
   const [isLoading, setIsLoading] = createSignal(false);
 
@@ -42,6 +43,7 @@ export function ModelSelector(props: ModelSelectorProps) {
     try {
       const data = await trpc.models.search.query({ q: query });
       setSearchResults(data.models || []);
+      setConnectedProvidersCount(data.connectedProvidersCount ?? null);
     } catch (err) {
       console.error("Failed to search models:", err);
     } finally {
@@ -90,7 +92,7 @@ export function ModelSelector(props: ModelSelectorProps) {
   };
 
   return (
-    <div ref={containerRef} class="relative">
+    <div ref={(el) => (containerRef = el)} class="relative">
       {/* Current selection button */}
       <button
         type="button"
@@ -111,7 +113,7 @@ export function ModelSelector(props: ModelSelectorProps) {
           {/* Search input */}
           <div class="p-2 border-b border-border">
             <input
-              ref={inputRef}
+              ref={(el) => (inputRef = el)}
               type="text"
               value={searchQuery()}
               onInput={(e) => setSearchQuery(e.currentTarget.value)}
@@ -127,7 +129,9 @@ export function ModelSelector(props: ModelSelectorProps) {
             </Show>
 
             <Show when={!isLoading() && searchResults().length === 0}>
-              <div class="px-3 py-2 text-sm text-text-faint">No models found</div>
+              <div class="px-3 py-2 text-sm text-text-faint">
+                {connectedProvidersCount() === 0 ? "No providers connected" : "No models found"}
+              </div>
             </Show>
 
             <For each={searchResults()}>
