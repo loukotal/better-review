@@ -17,6 +17,7 @@ import {
   type PRComment,
   type AnnotationMetadata,
   FONT_FAMILY_MAP,
+  THEME_SELECTION_COLORS,
 } from "./types";
 
 // Large file thresholds
@@ -116,10 +117,15 @@ export function FileDiffView(props: FileDiffViewProps) {
     return null;
   };
 
-  // Generate CSS for font injection into shadow DOM
-  const getFontCSS = () => {
+  // Generate CSS for font and selection color injection into shadow DOM
+  const getCustomCSS = () => {
     const fontFamily = FONT_FAMILY_MAP[props.settings.fontFamily];
-    return `:host { --diffs-font-family: ${fontFamily}; } .diffs-code { font-family: ${fontFamily} !important; }`;
+    const selectionColor = THEME_SELECTION_COLORS[props.settings.theme];
+    return `
+      :host { --diffs-font-family: ${fontFamily}; }
+      .diffs-code { font-family: ${fontFamily} !important; }
+      *::selection { background-color: ${selectionColor} !important; }
+    `;
   };
 
   const annotations = () => {
@@ -285,7 +291,7 @@ export function FileDiffView(props: FileDiffViewProps) {
       hunkSeparators: "line-info",
       disableFileHeader: true,
       enableLineSelection: true,
-      unsafeCSS: getFontCSS(),
+      unsafeCSS: getCustomCSS(),
       onLineSelectionEnd: (range: SelectedLineRange | null) => {
         if (range && range.start && range.end) {
           // Clear any existing text selection so it doesn't block future interactions

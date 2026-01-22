@@ -81,6 +81,20 @@ export const THEME_LABELS: Record<DiffTheme, string> = {
   "pierre-light": "Pierre Light",
 };
 
+// Selection colors - using theme accent colors with transparency for better visibility
+export const THEME_SELECTION_COLORS: Record<DiffTheme, string> = {
+  vesper: "#ffc79940", // vesper orange/gold accent
+  "tokyo-night": "#7aa2f766", // tokyo-night blue accent
+  dracula: "#bd93f966", // dracula purple accent
+  "catppuccin-mocha": "#cba6f766", // catppuccin mauve accent
+  nord: "#88c0d066", // nord frost cyan
+  "rose-pine": "#c4a7e766", // rose-pine iris
+  "github-dark": "#58a6ff55", // github blue accent
+  "github-light": "#0969da40", // github blue accent (light)
+  "pierre-dark": "#009fff50", // pierre blue accent
+  "pierre-light": "#009fff40", // pierre blue accent
+};
+
 // ============ Line Diff Configuration ============
 
 export const LINE_DIFF_LABELS: Record<LineDiffType, string> = {
