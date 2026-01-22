@@ -7,10 +7,11 @@ import { trpc } from "../lib/trpc";
 // =============================================================================
 
 export type StreamEvent =
-  | { type: "text"; delta: string; messageId: string; partId: string }
-  | { type: "reasoning"; delta: string; messageId: string; partId: string }
+  | { type: "text"; sessionId: string; delta: string; messageId: string; partId: string }
+  | { type: "reasoning"; sessionId: string; delta: string; messageId: string; partId: string }
   | {
       type: "tool-start";
+      sessionId: string;
       tool: string;
       callId: string;
       input: Record<string, unknown>;
@@ -19,6 +20,7 @@ export type StreamEvent =
     }
   | {
       type: "tool-running";
+      sessionId: string;
       tool: string;
       callId: string;
       title?: string;
@@ -27,6 +29,7 @@ export type StreamEvent =
     }
   | {
       type: "tool-done";
+      sessionId: string;
       tool: string;
       callId: string;
       output: string;
@@ -36,15 +39,16 @@ export type StreamEvent =
     }
   | {
       type: "tool-error";
+      sessionId: string;
       tool: string;
       callId: string;
       error: string;
       messageId: string;
       partId: string;
     }
-  | { type: "status"; status: "busy" | "idle" | "retry"; message?: string }
-  | { type: "error"; code: string; message: string }
-  | { type: "done"; messageId: string }
+  | { type: "status"; sessionId: string; status: "busy" | "idle" | "retry"; message?: string }
+  | { type: "error"; sessionId: string; code: string; message: string }
+  | { type: "done"; sessionId: string; messageId: string }
   | { type: "connected" };
 
 export interface ToolCall {
@@ -90,45 +94,33 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
   let unsubscribe: (() => void) | null = null;
 
-  // Connect to tRPC subscription when sessionId changes
+  // Single SSE connection - subscribe once on mount, filter by sessionId client-side
+  // This avoids the cleanup issues with per-session subscriptions
   createEffect(() => {
-    const sessionId = options.getSessionId();
+    // Only subscribe once
+    if (unsubscribe) return;
 
-    // Cleanup previous subscription
-    if (unsubscribe) {
-      unsubscribe();
-      unsubscribe = null;
-      setIsConnected(false);
-    }
+    console.log("[useStreamingChat] Connecting to event stream");
 
-    if (!sessionId) {
-      return;
-    }
-
-    console.log(`[useStreamingChat] Connecting to session: ${sessionId}`);
-
-    // Subscribe using tRPC subscription
-    const subscription = trpc.opencode.events.subscribe(
-      { sessionId },
-      {
-        onStarted: () => {
-          console.log("[useStreamingChat] Subscription started");
-        },
-        onData: (event) => {
-          handleEvent(event as StreamEvent);
-        },
-        onError: (err) => {
-          console.error("[useStreamingChat] Subscription error:", err);
-          setIsConnected(false);
-          setError("Connection lost");
-          options.onError?.("Connection lost");
-        },
-        onComplete: () => {
-          console.log("[useStreamingChat] Subscription completed");
-          setIsConnected(false);
-        },
+    // Subscribe to ALL events (no session filter)
+    const subscription = trpc.opencode.events.subscribe(undefined, {
+      onStarted: () => {
+        console.log("[useStreamingChat] Subscription started");
       },
-    );
+      onData: (event) => {
+        handleEvent(event as StreamEvent);
+      },
+      onError: (err) => {
+        console.error("[useStreamingChat] Subscription error:", err);
+        setIsConnected(false);
+        setError("Connection lost");
+        options.onError?.("Connection lost");
+      },
+      onComplete: () => {
+        console.log("[useStreamingChat] Subscription completed");
+        setIsConnected(false);
+      },
+    });
 
     unsubscribe = subscription.unsubscribe;
   });
@@ -136,19 +128,44 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   // Cleanup on unmount
   onCleanup(() => {
     if (unsubscribe) {
+      console.log("[useStreamingChat] Disconnecting from event stream");
       unsubscribe();
       unsubscribe = null;
     }
   });
 
-  function handleEvent(event: StreamEvent) {
-    switch (event.type) {
-      case "connected":
-        console.log("[useStreamingChat] Connected to event stream");
-        setIsConnected(true);
-        setError(null);
-        break;
+  // Reset streaming state when session changes
+  createEffect(() => {
+    const _sessionId = options.getSessionId();
+    // Reset streaming state for new session
+    batch(() => {
+      setStreamingContent("");
+      setStreamingReasoning("");
+      setActiveTools([]);
+      setCurrentMessageId(null);
+      setIsStreaming(false);
+    });
+  });
 
+  function handleEvent(event: StreamEvent) {
+    // Handle global events (no sessionId filtering needed)
+    if (event.type === "connected") {
+      console.log("[useStreamingChat] Connected to event stream");
+      setIsConnected(true);
+      setError(null);
+      return;
+    }
+
+    // Filter events by current sessionId (client-side filtering)
+    const currentSessionId = options.getSessionId();
+    if (!currentSessionId) return;
+
+    // All other events have sessionId - filter by current session
+    if ("sessionId" in event && event.sessionId !== currentSessionId) {
+      return; // Event is for a different session, ignore it
+    }
+
+    switch (event.type) {
       case "text":
         // Append streaming text
         setStreamingContent((prev) => prev + event.delta);
@@ -264,11 +281,39 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     });
   }
 
+  /**
+   * Wait for the SSE subscription to be connected with a timeout.
+   * Returns true if connected, false if timed out.
+   */
+  async function waitForConnection(timeoutMs: number = 5000): Promise<boolean> {
+    if (isConnected()) return true;
+
+    return new Promise((resolve) => {
+      const startTime = Date.now();
+      const checkInterval = setInterval(() => {
+        if (isConnected()) {
+          clearInterval(checkInterval);
+          resolve(true);
+        } else if (Date.now() - startTime >= timeoutMs) {
+          clearInterval(checkInterval);
+          resolve(false);
+        }
+      }, 50);
+    });
+  }
+
   async function sendMessage(message: string, agent?: string): Promise<boolean> {
     const sessionId = options.getSessionId();
     if (!sessionId) {
       setError("No session");
       return false;
+    }
+
+    // Wait for SSE subscription to be ready before sending
+    // This prevents a race condition where events are published before we're subscribed
+    const connected = await waitForConnection(5000);
+    if (!connected) {
+      console.warn("[useStreamingChat] Timed out waiting for connection, proceeding anyway");
     }
 
     // Add user message immediately

@@ -236,31 +236,28 @@ export class EventBroadcaster extends Effect.Service<EventBroadcaster>()("EventB
     // ========================================
 
     /**
-     * Subscribe to events for a specific session.
+     * Subscribe to ALL events (no session filtering).
+     * Events include sessionId so frontend can filter by session.
      * Returns an Effect that yields a Stream of transformed StreamEvents.
      * The connection is started automatically on first subscriber.
      */
-    const subscribe = (sessionId: string) =>
+    const subscribe = () =>
       Effect.gen(function* () {
         // Setup: increment count and ensure connection
         const count = yield* incrementSubscribers;
-        yield* Effect.log(
-          `[EventBroadcaster] Subscriber added for session ${sessionId}. Total: ${count}`,
-        );
+        yield* Effect.log(`[EventBroadcaster] Subscriber added. Total: ${count}`);
         yield* maybeStartOrStopConnection;
 
         // Return a Stream that:
         // 1. Subscribes to PubSub (scoped - auto-cleanup)
-        // 2. Filters/transforms events for this session
+        // 2. Transforms events (no session filtering - frontend does that)
         // 3. Cleans up subscriber count when done
         return Stream.fromPubSub(eventPubSub).pipe(
-          Stream.filterMap((event) => Option.fromNullable(transformEvent(event, sessionId))),
+          Stream.filterMap((event) => Option.fromNullable(transformEvent(event))),
           Stream.ensuring(
             Effect.gen(function* () {
               const count = yield* decrementSubscribers;
-              yield* Effect.log(
-                `[EventBroadcaster] Subscriber removed for session ${sessionId}. Total: ${count}`,
-              );
+              yield* Effect.log(`[EventBroadcaster] Subscriber removed. Total: ${count}`);
               yield* maybeStartOrStopConnection;
             }),
           ),

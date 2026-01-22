@@ -190,6 +190,7 @@ const main = Effect.gen(function* () {
   const server = Bun.serve({
     port: Number(process.env.API_PORT ?? 3001),
     routes,
+    idleTimeout: 255,
     // Fallback for static files in production
     fetch: isProduction ? (req) => serveStatic(new URL(req.url).pathname) : undefined,
   });

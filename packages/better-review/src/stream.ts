@@ -8,10 +8,23 @@ type ErrorData = { message?: string } | { [key: string]: unknown };
 // =============================================================================
 
 export type StreamEvent =
-  | { type: "text"; delta: string; messageId: string; partId: string }
-  | { type: "reasoning"; delta: string; messageId: string; partId: string }
+  | {
+      type: "text";
+      sessionId: string;
+      delta: string;
+      messageId: string;
+      partId: string;
+    }
+  | {
+      type: "reasoning";
+      sessionId: string;
+      delta: string;
+      messageId: string;
+      partId: string;
+    }
   | {
       type: "tool-start";
+      sessionId: string;
       tool: string;
       callId: string;
       input: Record<string, unknown>;
@@ -20,6 +33,7 @@ export type StreamEvent =
     }
   | {
       type: "tool-running";
+      sessionId: string;
       tool: string;
       callId: string;
       title?: string;
@@ -28,6 +42,7 @@ export type StreamEvent =
     }
   | {
       type: "tool-done";
+      sessionId: string;
       tool: string;
       callId: string;
       output: string;
@@ -37,15 +52,21 @@ export type StreamEvent =
     }
   | {
       type: "tool-error";
+      sessionId: string;
       tool: string;
       callId: string;
       error: string;
       messageId: string;
       partId: string;
     }
-  | { type: "status"; status: "busy" | "idle" | "retry"; message?: string }
-  | { type: "error"; code: string; message: string }
-  | { type: "done"; messageId: string }
+  | {
+      type: "status";
+      sessionId: string;
+      status: "busy" | "idle" | "retry";
+      message?: string;
+    }
+  | { type: "error"; sessionId: string; code: string; message: string }
+  | { type: "done"; sessionId: string; messageId: string }
   | { type: "connected" };
 
 // =============================================================================
@@ -53,6 +74,7 @@ export type StreamEvent =
 // =============================================================================
 
 function transformToolState(
+  sessionId: string,
   tool: string,
   callId: string,
   state: ToolState,
@@ -63,6 +85,7 @@ function transformToolState(
     case "pending":
       return {
         type: "tool-start",
+        sessionId,
         tool,
         callId,
         input: state.input,
@@ -72,6 +95,7 @@ function transformToolState(
     case "running":
       return {
         type: "tool-running",
+        sessionId,
         tool,
         callId,
         title: state.title,
@@ -81,6 +105,7 @@ function transformToolState(
     case "completed":
       return {
         type: "tool-done",
+        sessionId,
         tool,
         callId,
         output: state.output,
@@ -91,6 +116,7 @@ function transformToolState(
     case "error":
       return {
         type: "tool-error",
+        sessionId,
         tool,
         callId,
         error: state.error,
@@ -103,48 +129,50 @@ function transformToolState(
 }
 
 /**
- * Transform an OpenCode SDK event into a simplified StreamEvent for the frontend.
- * Returns null if the event should be filtered out.
+ * Extract sessionId from an OpenCode event.
+ * Returns undefined for global events like server.connected.
  */
-export function transformEvent(event: OpenCodeEvent, sessionId: string): StreamEvent | null {
+function extractSessionId(event: OpenCodeEvent): string | undefined {
   const props = event.properties as Record<string, unknown>;
-
-  // Extract sessionID based on event type - it's nested differently for each
-  let eventSessionId: string | undefined;
 
   switch (event.type) {
     case "message.part.updated":
     case "message.part.removed":
       // sessionID is inside the part object
-      eventSessionId = (props.part as { sessionID?: string })?.sessionID;
-      break;
+      return (props.part as { sessionID?: string })?.sessionID;
     case "message.updated":
     case "message.removed":
       // sessionID is inside the info/message object
-      eventSessionId = (props.info as { sessionID?: string })?.sessionID;
-      break;
+      return (props.info as { sessionID?: string })?.sessionID;
     case "server.connected":
-      // Global event, no sessionID - let it through
-      eventSessionId = undefined;
-      break;
+      // Global event, no sessionID
+      return undefined;
     default:
       // Most events (session.status, session.idle, session.error, etc.) have sessionID at top level
-      eventSessionId = props.sessionID as string | undefined;
+      return props.sessionID as string | undefined;
   }
+}
 
-  // Filter events that don't belong to this session
-  if (eventSessionId && eventSessionId !== sessionId) {
-    return null;
-  }
+/**
+ * Transform an OpenCode SDK event into a simplified StreamEvent for the frontend.
+ * Returns null if the event should be filtered out (e.g., unknown event types).
+ * Events now include sessionId so frontend can filter by session.
+ */
+export function transformEvent(event: OpenCodeEvent): StreamEvent | null {
+  const sessionId = extractSessionId(event);
 
   switch (event.type) {
     case "message.part.updated": {
       const { part, delta } = event.properties;
 
+      // Skip events without sessionId (shouldn't happen for message events)
+      if (!sessionId) return null;
+
       // Handle text parts with delta (streaming content)
       if (part.type === "text" && delta) {
         return {
           type: "text",
+          sessionId,
           delta,
           messageId: part.messageID,
           partId: part.id,
@@ -155,6 +183,7 @@ export function transformEvent(event: OpenCodeEvent, sessionId: string): StreamE
       if (part.type === "reasoning" && delta) {
         return {
           type: "reasoning",
+          sessionId,
           delta,
           messageId: part.messageID,
           partId: part.id,
@@ -165,6 +194,7 @@ export function transformEvent(event: OpenCodeEvent, sessionId: string): StreamE
       if (part.type === "tool") {
         const toolPart = part as ToolPart;
         return transformToolState(
+          sessionId,
           toolPart.tool,
           toolPart.callID,
           toolPart.state,
@@ -177,16 +207,18 @@ export function transformEvent(event: OpenCodeEvent, sessionId: string): StreamE
     }
 
     case "session.status": {
+      if (!sessionId) return null;
       const { status } = event.properties;
       if (status.type === "busy") {
-        return { type: "status", status: "busy" };
+        return { type: "status", sessionId, status: "busy" };
       }
       if (status.type === "idle") {
-        return { type: "status", status: "idle" };
+        return { type: "status", sessionId, status: "idle" };
       }
       if (status.type === "retry") {
         return {
           type: "status",
+          sessionId,
           status: "retry",
           message: status.message,
         };
@@ -195,13 +227,20 @@ export function transformEvent(event: OpenCodeEvent, sessionId: string): StreamE
     }
 
     case "session.idle": {
-      return { type: "status", status: "idle" };
+      if (!sessionId) return null;
+      return { type: "status", sessionId, status: "idle" };
     }
 
     case "session.error": {
+      if (!sessionId) return null;
       const { error } = event.properties;
       if (!error) {
-        return { type: "error", code: "unknown", message: "Unknown error" };
+        return {
+          type: "error",
+          sessionId,
+          code: "unknown",
+          message: "Unknown error",
+        };
       }
 
       const errorData = error.data as ErrorData | undefined;
@@ -212,16 +251,18 @@ export function transformEvent(event: OpenCodeEvent, sessionId: string): StreamE
 
       return {
         type: "error",
+        sessionId,
         code: error.name,
         message: errorMessage,
       };
     }
 
     case "message.updated": {
+      if (!sessionId) return null;
       const { info } = event.properties;
       // When message is completed
       if (info.role === "assistant" && info.time.completed) {
-        return { type: "done", messageId: info.id };
+        return { type: "done", sessionId, messageId: info.id };
       }
       return null;
     }

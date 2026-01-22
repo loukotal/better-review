@@ -250,27 +250,40 @@ export const opencodeRouter = router({
     ),
   ),
 
-  /**
-   * SSE subscription for streaming events from an OpenCode session.
-   * Uses EventBroadcaster for multiplexed SSE connection.
-   */
-  events: publicProcedure.input(z.object({ sessionId: z.string() })).subscription(async function* ({
-    input,
-  }) {
-    // Get the runtime and event stream from the broadcaster
+  events: publicProcedure.subscription(async function* () {
+    console.log(`[SSE] Subscription requested`);
+
+    // Get the runtime and subscribe to events
     const rt = await runtime.runtime();
+
     const stream = await runtime.runPromise(
       Effect.gen(function* () {
         const broadcaster = yield* EventBroadcaster;
-        return yield* broadcaster.subscribe(input.sessionId);
+        return yield* broadcaster.subscribe();
       }),
     );
+
+    console.log(`[SSE] Subscription established`);
 
     yield { type: "connected" };
 
     // Convert Effect Stream to async iterable using our runtime
-    for await (const event of Stream.toAsyncIterableRuntime(rt)(stream)) {
-      yield event;
+    // This properly handles cleanup when the iterator is returned
+    const asyncIterable = Stream.toAsyncIterableRuntime(rt)(stream);
+    const iterator = asyncIterable[Symbol.asyncIterator]();
+
+    try {
+      while (true) {
+        const result = await iterator.next();
+        if (result.done) {
+          break;
+        }
+        yield result.value;
+      }
+    } finally {
+      console.log(`[SSE] Cleaning up subscription`);
+
+      await iterator.return?.().catch(() => {});
     }
   }),
 });
