@@ -320,6 +320,59 @@ ${fileStats.join("\n")}`;
     ),
   ),
 
+  fileContents: publicProcedure
+    .input(
+      z.object({
+        url: z.string(),
+        path: z.string(),
+        prevPath: z.string().optional(),
+      }),
+    )
+    .query(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const gh = yield* GhService;
+
+          const { owner, repo } = yield* gh.getPrInfo(input.url);
+          const { baseSha, headSha } = yield* gh.getPrRefs(input.url);
+
+          const basePath = input.prevPath ?? input.path;
+          const headPath = input.path;
+
+          const [base, head] = yield* Effect.all(
+            [
+              gh.getBlobText({ owner, repo, expression: `${baseSha}:${basePath}` }),
+              gh.getBlobText({ owner, repo, expression: `${headSha}:${headPath}` }),
+            ],
+            { concurrency: "unbounded" },
+          );
+
+          return {
+            base: base
+              ? { found: true as const, sha: baseSha, path: basePath, ...base }
+              : {
+                  found: false as const,
+                  sha: baseSha,
+                  path: basePath,
+                  text: null,
+                  isBinary: false,
+                  byteSize: 0,
+                },
+            head: head
+              ? { found: true as const, sha: headSha, path: headPath, ...head }
+              : {
+                  found: false as const,
+                  sha: headSha,
+                  path: headPath,
+                  text: null,
+                  isBinary: false,
+                  byteSize: 0,
+                },
+          };
+        }),
+      ),
+    ),
+
   // =========================================================================
   // Write Operations (Mutations)
   // =========================================================================

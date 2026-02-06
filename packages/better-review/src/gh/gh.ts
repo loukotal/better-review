@@ -186,6 +186,26 @@ const PrDataResponseSchema = Schema.Struct({
   head_ref: Schema.String,
 });
 
+const PrRefsResponseSchema = Schema.Struct({
+  base: Schema.Struct({ sha: Schema.String }),
+  head: Schema.Struct({ sha: Schema.String }),
+});
+
+const GraphQLBlobObjectSchema = Schema.Struct({
+  __typename: Schema.String,
+  text: Schema.optional(Schema.String),
+  isBinary: Schema.optional(Schema.Boolean),
+  byteSize: Schema.optional(Schema.Number),
+});
+
+const GraphQLBlobResponseSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      object: Schema.NullOr(GraphQLBlobObjectSchema),
+    }),
+  }),
+});
+
 // Schema for raw commit from listCommits API
 const RawCommitSchema = Schema.Struct({
   sha: Schema.String,
@@ -247,6 +267,16 @@ interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError, never>;
   getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError, never>;
   getPrStatus: (urlOrNumber: string) => Effect.Effect<PrStatus, GhError, never>;
+  getPrRefs: (prUrl: string) => Effect.Effect<{ baseSha: string; headSha: string }, GhError, never>;
+  getBlobText: (params: {
+    owner: string;
+    repo: string;
+    expression: string;
+  }) => Effect.Effect<
+    { text: string | null; isBinary: boolean; byteSize: number } | null,
+    GhError,
+    never
+  >;
   listComments: (prUrl: string) => Effect.Effect<readonly RawPRComment[], GhError, never>;
   listIssueComments: (prUrl: string) => Effect.Effect<readonly RawIssueComment[], GhError, never>;
   addComment: (params: AddCommentParams) => Effect.Effect<RawPRComment, GhError, never>;
@@ -387,6 +417,62 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getPrStatus", cause })),
       Effect.withSpan("GhService.getPrStatus", { attributes: { urlOrNumber } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getPrRefs: (prUrl: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(prUrl);
+      const cmd = Command.make("gh", "api", `repos/${owner}/${repo}/pulls/${number}`);
+      const json = yield* Command.string(cmd);
+      const data = yield* parseJsonPreserve(PrRefsResponseSchema)(json);
+      return { baseSha: data.base.sha, headSha: data.head.sha };
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getPrRefs", cause })),
+      Effect.withSpan("GhService.getPrRefs", { attributes: { prUrl } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getBlobText: ({ owner, repo, expression }) =>
+    Effect.gen(function* () {
+      const query = `
+        query($owner: String!, $repo: String!, $expression: String!) {
+          repository(owner: $owner, name: $repo) {
+            object(expression: $expression) {
+              __typename
+              ... on Blob { text isBinary byteSize }
+            }
+          }
+        }
+      `;
+
+      const graphqlCmd = Command.make(
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        `query=${query}`,
+        "-f",
+        `owner=${owner}`,
+        "-f",
+        `repo=${repo}`,
+        "-f",
+        `expression=${expression}`,
+      );
+
+      const result = yield* Command.string(graphqlCmd);
+      const data = yield* parseJsonPreserve(GraphQLBlobResponseSchema)(result);
+      const obj = data.data.repository.object;
+      if (!obj || obj.__typename !== "Blob") return null;
+
+      return {
+        text: obj.isBinary ? null : (obj.text ?? ""),
+        isBinary: obj.isBinary ?? false,
+        byteSize: obj.byteSize ?? 0,
+      };
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getBlobText", cause })),
+      Effect.withSpan("GhService.getBlobText", { attributes: { owner, repo } }),
       Effect.provide(BunContext.layer),
     ),
 
