@@ -8,11 +8,9 @@ import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "sol
 
 import { renderAiAnnotation } from "../components/AiAnnotationInline";
 import { renderCommentThread, renderPendingCommentForm } from "../components/CommentView";
-import { usePrContext } from "../context/PrContext";
 import { CheckIcon } from "../icons/check-icon";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CircleIcon } from "../icons/circle-icon";
-import { trpc } from "../lib/trpc";
 import type { Annotation } from "../utils/parseReviewTokens";
 import {
   type DiffSettings,
@@ -24,8 +22,6 @@ import {
 
 // Large file thresholds
 const LARGE_FILE_LINE_THRESHOLD = 2000;
-const CONTEXT_EXPANSION_LINE_COUNT = 100;
-
 // Patterns for generated/lock files that are rarely useful to review
 const GENERATED_FILE_PATTERNS = [
   /package-lock\.json$/,
@@ -87,8 +83,6 @@ function groupCommentsIntoThreads(comments: PRComment[]) {
 }
 
 export function FileDiffView(props: FileDiffViewProps) {
-  const { prUrl } = usePrContext();
-
   let _containerRef: HTMLDivElement | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let instance: any;
@@ -112,14 +106,6 @@ export function FileDiffView(props: FileDiffViewProps) {
     startLine: number;
     endLine: number;
     side: "LEFT" | "RIGHT";
-  } | null>(null);
-
-  const [contextEnabled, setContextEnabled] = createSignal(false);
-  const [loadingContext, setLoadingContext] = createSignal(false);
-  const [contextError, setContextError] = createSignal<string | null>(null);
-  const [fullFiles, setFullFiles] = createSignal<{
-    oldFile: { name: string; contents: string; cacheKey?: string };
-    newFile: { name: string; contents: string; cacheKey?: string };
   } | null>(null);
 
   // GitHub context for markdown link resolution
@@ -194,22 +180,6 @@ export function FileDiffView(props: FileDiffViewProps) {
   const renderCurrent = (forceRender: boolean) => {
     if (!instance) return;
 
-    const ff = fullFiles();
-    if (contextEnabled() && ff) {
-      instance.setOptions({
-        ...instance.options,
-        expandUnchanged: false,
-        expansionLineCount: CONTEXT_EXPANSION_LINE_COUNT,
-      });
-      instance.render({
-        oldFile: ff.oldFile,
-        newFile: ff.newFile,
-        lineAnnotations: lineAnnotations(),
-        forceRender,
-      });
-      return;
-    }
-
     instance.setOptions({ ...instance.options, expandUnchanged: false });
     instance.render({
       fileDiff: props.file,
@@ -222,65 +192,6 @@ export function FileDiffView(props: FileDiffViewProps) {
     if (instance && _containerRef) {
       renderCurrent(true);
     }
-  };
-
-  const loadContextIfNeeded = async () => {
-    const url = prUrl();
-    if (!url) {
-      setContextError("No PR loaded");
-      return false;
-    }
-
-    if (fullFiles()) return true;
-
-    try {
-      setLoadingContext(true);
-      const res = await trpc.pr.fileContents.query({
-        url,
-        path: props.file.name,
-        prevPath: props.file.prevName ?? undefined,
-      });
-
-      if ((res.base.found && res.base.isBinary) || (res.head.found && res.head.isBinary)) {
-        setContextError("Binary file");
-        return false;
-      }
-
-      const oldContents = res.base.found ? (res.base.text ?? "") : "";
-      const newContents = res.head.found ? (res.head.text ?? "") : "";
-
-      setFullFiles({
-        oldFile: { name: res.base.path, contents: oldContents, cacheKey: res.base.sha },
-        newFile: { name: res.head.path, contents: newContents, cacheKey: res.head.sha },
-      });
-
-      return true;
-    } catch (err) {
-      setContextError(err instanceof Error ? err.message : "Failed to load file contents");
-      return false;
-    } finally {
-      setLoadingContext(false);
-    }
-  };
-
-  const ensureContextAndExpand = async (hunkIndex: number, direction: "up" | "down" | "both") => {
-    setContextError(null);
-
-    if (collapsed()) {
-      setCollapsed(false);
-    }
-
-    setContextEnabled(true);
-
-    const ok = await loadContextIfNeeded();
-    if (!ok) {
-      setContextEnabled(false);
-      return;
-    }
-
-    // Ensure the component is in "context-enabled" render mode before expanding.
-    renderCurrent(true);
-    instance?.expandHunk?.(hunkIndex, direction);
   };
 
   // Re-render when comments change (length or content)
@@ -382,7 +293,6 @@ export function FileDiffView(props: FileDiffViewProps) {
       theme: props.settings.theme,
       lineDiffType: props.settings.lineDiffType,
       hunkSeparators: "line-info",
-      expansionLineCount: CONTEXT_EXPANSION_LINE_COUNT,
       disableFileHeader: true,
       enableLineSelection: true,
       unsafeCSS: getCustomCSS(),
@@ -456,67 +366,12 @@ export function FileDiffView(props: FileDiffViewProps) {
       },
     });
 
-    const ff = fullFiles();
-    if (contextEnabled() && ff) {
-      instance.setOptions({
-        ...instance.options,
-        expandUnchanged: false,
-        expansionLineCount: CONTEXT_EXPANSION_LINE_COUNT,
-      });
-      instance.render({
-        oldFile: ff.oldFile,
-        newFile: ff.newFile,
-        containerWrapper: el,
-        lineAnnotations: lineAnnotations(),
-      });
-    } else {
-      instance.setOptions({ ...instance.options, expandUnchanged: false });
-      instance.render({
-        fileDiff: props.file,
-        containerWrapper: el,
-        lineAnnotations: lineAnnotations(),
-      });
-    }
-
-    // If user clicks the "unmodified lines" expand controls before we have context,
-    // intercept, lazily fetch base/head file contents, then expand.
-    const container = instance.getFileContainer?.() as HTMLElement | undefined;
-    const shadowRoot = container?.shadowRoot;
-    if (shadowRoot) {
-      const onShadowClick = (evt: MouseEvent) => {
-        const target = evt.target as Element | null;
-        if (!target) return;
-
-        const expandButton = target.closest?.("[data-expand-button]") as HTMLElement | null;
-        const unmodifiedLabel = target.closest?.("[data-unmodified-lines]") as HTMLElement | null;
-
-        const clickedExpand = expandButton ?? unmodifiedLabel;
-        if (!clickedExpand) return;
-
-        const sep = clickedExpand.closest?.("[data-expand-index]") as HTMLElement | null;
-        const idxRaw = sep?.getAttribute("data-expand-index");
-        if (!idxRaw) return;
-        const hunkIndex = Number.parseInt(idxRaw, 10);
-        if (!Number.isFinite(hunkIndex)) return;
-
-        const direction =
-          unmodifiedLabel !== null || expandButton?.hasAttribute("data-expand-both")
-            ? "both"
-            : expandButton?.hasAttribute("data-expand-up")
-              ? "up"
-              : "down";
-
-        // If context is already loaded, let the component handle it normally.
-        if (fullFiles()) return;
-
-        evt.preventDefault();
-        evt.stopPropagation();
-        void ensureContextAndExpand(hunkIndex, direction);
-      };
-
-      shadowRoot.addEventListener("click", onShadowClick, true);
-      disposeList.push(() => shadowRoot.removeEventListener("click", onShadowClick, true));
-    }
+    instance.setOptions({ ...instance.options, expandUnchanged: false });
+    instance.render({
+      fileDiff: props.file,
+      containerWrapper: el,
+      lineAnnotations: lineAnnotations(),
+    });
   };
 
   const renderDiff = (el: HTMLDivElement) => {
@@ -543,31 +398,6 @@ export function FileDiffView(props: FileDiffViewProps) {
   const handleToggleRead = (e: MouseEvent) => {
     e.stopPropagation();
     props.onToggleRead?.();
-  };
-
-  const handleToggleContext = async (e: MouseEvent) => {
-    e.stopPropagation();
-    setContextError(null);
-
-    if (collapsed()) {
-      setCollapsed(false);
-    }
-
-    if (contextEnabled()) {
-      setContextEnabled(false);
-      setTimeout(rerender, 0);
-      return;
-    }
-
-    setContextEnabled(true);
-
-    const ok = await loadContextIfNeeded();
-    if (!ok) {
-      setContextEnabled(false);
-      return;
-    }
-
-    setTimeout(rerender, 0);
   };
 
   return (
@@ -607,27 +437,6 @@ export function FileDiffView(props: FileDiffViewProps) {
         <Show when={props.comments.length > 0}>
           <span class="text-sm text-accent">{props.comments.length}</span>
         </Show>
-
-        {/* Enable expandable context (loads base/head file contents) */}
-        <span
-          onClick={handleToggleContext}
-          class="text-xs px-2 py-0.5 rounded border border-border bg-bg hover:bg-bg-surface text-text-muted transition-colors"
-          classList={{
-            "opacity-50 pointer-events-none": !prUrl(),
-            "bg-bg-surface text-text": contextEnabled(),
-          }}
-          title={
-            contextError()
-              ? `Context unavailable: ${contextError()}`
-              : contextEnabled()
-                ? `Context enabled. Use the expand controls in the diff to load ~${CONTEXT_EXPANSION_LINE_COUNT} unchanged lines up/down. Click to disable.`
-                : `Enable expandable context (loads base/head file contents, then you can expand hunks by ~${CONTEXT_EXPANSION_LINE_COUNT} lines)`
-          }
-        >
-          <Show when={loadingContext()} fallback={contextEnabled() ? "context" : "more"}>
-            loading
-          </Show>
-        </span>
 
         {/* Mark as read button */}
         <Show when={props.onToggleRead}>

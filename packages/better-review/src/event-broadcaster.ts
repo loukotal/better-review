@@ -107,6 +107,9 @@ export class EventBroadcaster extends Effect.Service<EventBroadcaster>()("EventB
         ),
         Stream.runDrain,
       );
+
+      // If the stream completes normally, treat it as an error to trigger retry
+      yield* Effect.fail(new Error("SSE stream ended"));
     }).pipe(
       Effect.tapError((error) =>
         Effect.log(`[EventBroadcaster] Connection error: ${error.message}`),
