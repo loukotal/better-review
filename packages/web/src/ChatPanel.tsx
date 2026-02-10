@@ -734,7 +734,12 @@ export function ChatPanel(props: ChatPanelProps) {
       </div>
 
       {/* Messages */}
-      <div ref={_messagesContainer} class="flex-1 overflow-y-auto px-3 py-2 space-y-3">
+      <div
+        ref={(el) => {
+          _messagesContainer = el;
+        }}
+        class="flex-1 overflow-y-auto px-3 py-2 space-y-3"
+      >
         <Show when={!props.prUrl}>
           <div class="text-center py-8">
             <div class="text-text-faint text-sm">Load a PR to start chatting</div>

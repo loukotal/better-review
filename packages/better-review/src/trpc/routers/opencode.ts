@@ -267,18 +267,38 @@ export const opencodeRouter = router({
 
     yield { type: "connected" };
 
+    const pingIntervalMs = 15000;
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let nextPingAt = Date.now() + pingIntervalMs;
+
     // Convert Effect Stream to async iterable using our runtime
     // This properly handles cleanup when the iterator is returned
     const asyncIterable = Stream.toAsyncIterableRuntime(rt)(stream);
     const iterator = asyncIterable[Symbol.asyncIterator]();
 
     try {
+      let nextPromise = iterator.next();
+
       while (true) {
-        const result = await iterator.next();
+        const timeoutMs = Math.max(0, nextPingAt - Date.now());
+        const result = await Promise.race([
+          nextPromise,
+          sleep(timeoutMs).then(() => ({ __ping: true as const })),
+        ]);
+
+        if ("__ping" in result) {
+          yield { type: "ping" };
+          nextPingAt = Date.now() + pingIntervalMs;
+          continue;
+        }
+
         if (result.done) {
           break;
         }
+
         yield result.value;
+        nextPingAt = Date.now() + pingIntervalMs;
+        nextPromise = iterator.next();
       }
     } finally {
       console.log(`[SSE] Cleaning up subscription`);

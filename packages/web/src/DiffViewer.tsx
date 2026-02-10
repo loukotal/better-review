@@ -67,13 +67,26 @@ export function DiffViewer(props: Props) {
     });
   });
 
-  const commentsForFile = (fileName: string) => {
-    return props.comments.filter((c) => c.path === fileName);
-  };
+  const commentsByFile = createMemo(() => {
+    const map = new Map<string, PRComment[]>();
+    for (const c of props.comments) {
+      const list = map.get(c.path);
+      if (list) list.push(c);
+      else map.set(c.path, [c]);
+    }
+    return map;
+  });
 
-  const aiAnnotationsForFile = (fileName: string) => {
-    return props.aiAnnotations?.filter((a) => a.file === fileName) ?? [];
-  };
+  const aiAnnotationsByFile = createMemo(() => {
+    const map = new Map<string, Annotation[]>();
+    const list = props.aiAnnotations ?? [];
+    for (const a of list) {
+      const existing = map.get(a.file);
+      if (existing) existing.push(a);
+      else map.set(a.file, [a]);
+    }
+    return map;
+  });
 
   return (
     <div class="pt-3">
@@ -108,8 +121,8 @@ export function DiffViewer(props: Props) {
               <div id={getFileElementId(file.name)}>
                 <FileDiffView
                   file={file}
-                  comments={commentsForFile(file.name)}
-                  aiAnnotations={aiAnnotationsForFile(file.name)}
+                  comments={commentsByFile().get(file.name) ?? []}
+                  aiAnnotations={aiAnnotationsByFile().get(file.name) ?? []}
                   onAddComment={(line, side, body) =>
                     props.onAddComment(file.name, line, side, body)
                   }

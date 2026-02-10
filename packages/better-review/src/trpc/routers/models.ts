@@ -16,57 +16,54 @@ interface ModelEntry {
   modelId: string;
 }
 
-// Load providers from JSON file
-const providerData: ModelEntry[] = await Bun.file("./provider.json").json();
-console.log(`[models] Loaded ${providerData.length} model entries`);
-
-// Index models by provider for quick filtering
-const modelsByProvider = new Map<string, ModelEntry[]>();
-for (const entry of providerData) {
-  const list = modelsByProvider.get(entry.providerId);
-  if (list) list.push(entry);
-  else modelsByProvider.set(entry.providerId, [entry]);
+interface ProviderCatalog {
+  providers: Array<{ id: string; models: string[] }>;
+  connected: Set<string>;
 }
 
-// Connected providers cache (in-memory) to avoid calling OpenCode on every keystroke.
-const CONNECTED_PROVIDERS_TTL_MS = 60_000;
-let connectedProvidersCache:
+// Provider catalog cache (in-memory) to avoid calling OpenCode on every keystroke.
+const PROVIDER_CATALOG_TTL_MS = 60_000;
+let providerCatalogCache:
   | {
       expiresAt: number;
-      providers: Set<string>;
+      catalog: ProviderCatalog;
     }
   | undefined;
 
-async function fetchConnectedProviders(opencodeClient: OpencodeClient): Promise<Set<string>> {
+async function fetchProviderCatalog(opencodeClient: OpencodeClient): Promise<ProviderCatalog> {
   try {
     const res = await opencodeClient.provider.list();
-    const connected = res.data?.connected ?? [];
-    return new Set(connected);
+    const connected = new Set(res.data?.connected ?? []);
+    const providers = (res.data?.all ?? []).map((provider) => ({
+      id: provider.id,
+      models: Object.keys(provider.models ?? {}),
+    }));
+    return { providers, connected };
   } catch (err) {
-    console.error("[models] Failed to load connected providers from OpenCode:", err);
-    return new Set();
+    console.error("[models] Failed to load providers from OpenCode:", err);
+    return { providers: [], connected: new Set() };
   }
 }
 
-async function getConnectedProviders(): Promise<Set<string>> {
+async function getProviderCatalog(): Promise<ProviderCatalog> {
   const now = Date.now();
-  if (connectedProvidersCache && connectedProvidersCache.expiresAt > now) {
-    return connectedProvidersCache.providers;
+  if (providerCatalogCache && providerCatalogCache.expiresAt > now) {
+    return providerCatalogCache.catalog;
   }
 
-  const providers = await runtime.runPromise(
+  const catalog = await runtime.runPromise(
     Effect.gen(function* () {
       const opencode = yield* OpencodeService;
-      return yield* Effect.tryPromise(() => fetchConnectedProviders(opencode.client));
+      return yield* Effect.tryPromise(() => fetchProviderCatalog(opencode.client));
     }),
   );
 
-  connectedProvidersCache = {
-    providers,
-    expiresAt: now + CONNECTED_PROVIDERS_TTL_MS,
+  providerCatalogCache = {
+    catalog,
+    expiresAt: now + PROVIDER_CATALOG_TTL_MS,
   };
 
-  return providers;
+  return catalog;
 }
 
 // Current model selection (in-memory, no persistence for now)
@@ -87,25 +84,24 @@ export const modelsRouter = router({
   search: publicProcedure.input(z.object({ q: z.string().optional() })).query(async ({ input }) => {
     const query = (input.q || "").toLowerCase().trim();
 
-    const connectedProviders = await getConnectedProviders();
-    if (connectedProviders.size === 0) {
+    const catalog = await getProviderCatalog();
+    if (catalog.connected.size === 0) {
       return { models: [], connectedProvidersCount: 0 };
     }
 
-    // Limit candidates to connected providers only
     const candidates: ModelEntry[] = [];
-    for (const providerId of connectedProviders) {
-      const list = modelsByProvider.get(providerId);
-      if (list) candidates.push(...list);
+    for (const provider of catalog.providers) {
+      if (!catalog.connected.has(provider.id)) continue;
+      for (const modelId of provider.models) {
+        candidates.push({ providerId: provider.id, modelId });
+      }
     }
 
     let results: ModelEntry[];
 
     if (!query) {
-      // Return first 50 models if no query
       results = candidates.slice(0, 50);
     } else {
-      // Case-insensitive substring search on both providerId and modelId
       results = candidates
         .filter(
           (m) =>
@@ -114,7 +110,7 @@ export const modelsRouter = router({
         .slice(0, 50);
     }
 
-    return { models: results, connectedProvidersCount: connectedProviders.size };
+    return { models: results, connectedProvidersCount: catalog.connected.size };
   }),
 
   /**
@@ -136,18 +132,16 @@ export const modelsRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
-      const connectedProviders = await getConnectedProviders();
-      if (!connectedProviders.has(input.providerId)) {
+      const catalog = await getProviderCatalog();
+      if (!catalog.connected.has(input.providerId)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Provider not connected: ${input.providerId}`,
         });
       }
 
-      // Validate that this model exists in our data
-      const exists = providerData.some(
-        (m) => m.providerId === input.providerId && m.modelId === input.modelId,
-      );
+      const provider = catalog.providers.find((p) => p.id === input.providerId);
+      const exists = provider?.models.includes(input.modelId) ?? false;
 
       if (!exists) {
         throw new TRPCError({

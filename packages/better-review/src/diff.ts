@@ -74,26 +74,10 @@ export function filterDiffByLineRange(diff: string, startLine?: number, endLine?
   }> = [];
   let hunkOldStart = 0;
   let hunkNewStart = 0;
+  let scanNewLine = 0;
 
   const flushHunk = () => {
     if (currentHunkLines.length === 0) return;
-
-    // Filter lines to only those within range
-    const filteredLines = currentHunkLines.filter(({ newLineNum }) => {
-      // Always include deleted lines if they're near the range (context)
-      if (newLineNum === null) return true;
-      const afterStart = startLine === undefined || newLineNum >= startLine;
-      const beforeEnd = endLine === undefined || newLineNum <= endLine;
-      return afterStart && beforeEnd;
-    });
-
-    // Also filter out deleted lines that aren't adjacent to kept lines
-    // by checking if any non-deleted lines were kept
-    const hasKeptLines = filteredLines.some((l) => l.newLineNum !== null);
-    if (!hasKeptLines) {
-      currentHunkLines = [];
-      return;
-    }
 
     // Recalculate hunk header based on filtered lines
     let newOldCount = 0;
@@ -102,7 +86,9 @@ export function filterDiffByLineRange(diff: string, startLine?: number, endLine?
     let newNewStart = hunkNewStart;
     let foundFirst = false;
 
-    // Track current line numbers as we iterate
+    // Track current line numbers as we iterate.
+    // We do not rely on the precomputed newLineNum field for correctness;
+    // it's only a helper for range checks.
     let currentOldLine = hunkOldStart;
     let currentNewLine = hunkNewStart;
 
@@ -179,22 +165,22 @@ export function filterDiffByLineRange(diff: string, startLine?: number, endLine?
       // Start new hunk tracking
       hunkOldStart = parseInt(hunkMatch[1], 10);
       hunkNewStart = parseInt(hunkMatch[3], 10);
+      scanNewLine = hunkNewStart;
       currentHunkLines = [];
     } else {
-      // Track each line with its new file line number
+      // Track each line with its new file line number.
+      // Keep this O(1) by tracking line numbers incrementally per hunk.
       if (line.startsWith("-")) {
         // Deleted line - no new line number
         currentHunkLines.push({ line, newLineNum: null });
       } else if (line.startsWith("+")) {
         // Added line
-        const newLineNum =
-          currentHunkLines.filter((e) => !e.line.startsWith("-")).length + hunkNewStart;
-        currentHunkLines.push({ line, newLineNum });
+        currentHunkLines.push({ line, newLineNum: scanNewLine });
+        scanNewLine++;
       } else {
         // Context line
-        const newLineNum =
-          currentHunkLines.filter((e) => !e.line.startsWith("-")).length + hunkNewStart;
-        currentHunkLines.push({ line, newLineNum });
+        currentHunkLines.push({ line, newLineNum: scanNewLine });
+        scanNewLine++;
       }
     }
   }

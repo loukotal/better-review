@@ -22,7 +22,6 @@ import {
 
 // Large file thresholds
 const LARGE_FILE_LINE_THRESHOLD = 2000;
-
 // Patterns for generated/lock files that are rarely useful to review
 const GENERATED_FILE_PATTERNS = [
   /package-lock\.json$/,
@@ -128,16 +127,14 @@ export function FileDiffView(props: FileDiffViewProps) {
     `;
   };
 
-  const annotations = () => {
-    const result: {
-      side: AnnotationSide;
-      lineNumber: number;
-      metadata: AnnotationMetadata;
-    }[] = [];
-    const threads = groupCommentsIntoThreads(props.comments);
+  const threads = createMemo(() => groupCommentsIntoThreads(props.comments));
+
+  const lineAnnotations = createMemo(() => {
+    const result: { side: AnnotationSide; lineNumber: number; metadata: AnnotationMetadata }[] = [];
+    const threadMap = threads();
 
     // Add threads as annotations
-    Array.from(threads.values()).forEach(({ root, replies }) => {
+    Array.from(threadMap.values()).forEach(({ root, replies }) => {
       // Use line if available, otherwise fall back to original_line for outdated comments
       const lineNumber = root.line ?? root.original_line;
       // Skip comments without any line information
@@ -178,15 +175,22 @@ export function FileDiffView(props: FileDiffViewProps) {
     }
 
     return result;
+  });
+
+  const renderCurrent = (forceRender: boolean) => {
+    if (!instance) return;
+
+    instance.setOptions({ ...instance.options, expandUnchanged: false });
+    instance.render({
+      fileDiff: props.file,
+      lineAnnotations: lineAnnotations(),
+      forceRender,
+    });
   };
 
   const rerender = () => {
     if (instance && _containerRef) {
-      instance.render({
-        fileDiff: props.file,
-        lineAnnotations: annotations(),
-        forceRender: true,
-      });
+      renderCurrent(true);
     }
   };
 
@@ -362,10 +366,11 @@ export function FileDiffView(props: FileDiffViewProps) {
       },
     });
 
+    instance.setOptions({ ...instance.options, expandUnchanged: false });
     instance.render({
       fileDiff: props.file,
       containerWrapper: el,
-      lineAnnotations: annotations(),
+      lineAnnotations: lineAnnotations(),
     });
   };
 

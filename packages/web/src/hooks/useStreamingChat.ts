@@ -49,7 +49,8 @@ export type StreamEvent =
   | { type: "status"; sessionId: string; status: "busy" | "idle" | "retry"; message?: string }
   | { type: "error"; sessionId: string; code: string; message: string }
   | { type: "done"; sessionId: string; messageId: string }
-  | { type: "connected" };
+  | { type: "connected" }
+  | { type: "ping" };
 
 export interface ToolCall {
   id: string;
@@ -93,16 +94,46 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   const [currentMessageId, setCurrentMessageId] = createSignal<string | null>(null);
 
   let unsubscribe: (() => void) | null = null;
+  let allowAssistantParts = false;
+  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  let reconnectAttempt = 0;
+  let isDisposed = false;
+  let isConnecting = false;
 
-  // Single SSE connection - subscribe once on mount, filter by sessionId client-side
-  // This avoids the cleanup issues with per-session subscriptions
-  createEffect(() => {
-    // Only subscribe once
-    if (unsubscribe) return;
+  const clearReconnect = () => {
+    if (reconnectTimeout) {
+      clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+    }
+  };
+
+  const scheduleReconnect = (reason: string) => {
+    if (isDisposed || reconnectTimeout || unsubscribe || isConnecting) return;
+
+    const delay = Math.min(1000 * 2 ** reconnectAttempt, 30000);
+    reconnectAttempt += 1;
+
+    console.warn(`[useStreamingChat] Reconnecting in ${delay}ms (${reason})`);
+    reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null;
+      startSubscription();
+    }, delay);
+  };
+
+  const cleanupSubscription = () => {
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
+    }
+    isConnecting = false;
+  };
+
+  const startSubscription = () => {
+    if (isDisposed || unsubscribe || isConnecting) return;
 
     console.log("[useStreamingChat] Connecting to event stream");
+    isConnecting = true;
 
-    // Subscribe to ALL events (no session filter)
     const subscription = trpc.opencode.events.subscribe(undefined, {
       onStarted: () => {
         console.log("[useStreamingChat] Subscription started");
@@ -115,18 +146,33 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         setIsConnected(false);
         setError("Connection lost");
         options.onError?.("Connection lost");
+        cleanupSubscription();
+        scheduleReconnect("error");
       },
       onComplete: () => {
         console.log("[useStreamingChat] Subscription completed");
         setIsConnected(false);
+        setError("Connection closed");
+        options.onError?.("Connection closed");
+        cleanupSubscription();
+        scheduleReconnect("complete");
       },
     });
 
     unsubscribe = subscription.unsubscribe;
+    isConnecting = false;
+  };
+
+  // Single SSE connection - subscribe once on mount, filter by sessionId client-side
+  // This avoids the cleanup issues with per-session subscriptions
+  createEffect(() => {
+    startSubscription();
   });
 
   // Cleanup on unmount
   onCleanup(() => {
+    isDisposed = true;
+    clearReconnect();
     if (unsubscribe) {
       console.log("[useStreamingChat] Disconnecting from event stream");
       unsubscribe();
@@ -145,14 +191,17 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setCurrentMessageId(null);
       setIsStreaming(false);
     });
+    allowAssistantParts = false;
   });
 
   function handleEvent(event: StreamEvent) {
     // Handle global events (no sessionId filtering needed)
-    if (event.type === "connected") {
+    if (event.type === "connected" || event.type === "ping") {
       console.log("[useStreamingChat] Connected to event stream");
       setIsConnected(true);
       setError(null);
+      reconnectAttempt = 0;
+      clearReconnect();
       return;
     }
 
@@ -167,6 +216,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
     switch (event.type) {
       case "text":
+        if (!allowAssistantParts) return;
         // Append streaming text
         setStreamingContent((prev) => prev + event.delta);
         if (!currentMessageId()) {
@@ -175,11 +225,13 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "reasoning":
+        if (!allowAssistantParts) return;
         // Append reasoning text
         setStreamingReasoning((prev) => prev + event.delta);
         break;
 
       case "tool-start":
+        if (!allowAssistantParts) return;
         setActiveTools((prev) => [
           ...prev,
           {
@@ -193,6 +245,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-running":
+        if (!allowAssistantParts) return;
         setActiveTools((prev) =>
           prev.map((t) =>
             t.callId === event.callId
@@ -203,6 +256,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-done":
+        if (!allowAssistantParts) return;
         setActiveTools((prev) =>
           prev.map((t) =>
             t.callId === event.callId
@@ -218,6 +272,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-error":
+        if (!allowAssistantParts) return;
         setActiveTools((prev) =>
           prev.map((t) =>
             t.callId === event.callId ? { ...t, status: "error" as const, error: event.error } : t,
@@ -228,12 +283,15 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       case "status":
         if (event.status === "busy") {
           setIsStreaming(true);
+          allowAssistantParts = true;
         } else if (event.status === "idle") {
+          allowAssistantParts = false;
           finalizeMessage();
         }
         break;
 
       case "done":
+        allowAssistantParts = false;
         // Message completed - finalize it
         finalizeMessage();
         break;
@@ -242,6 +300,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         setError(event.message);
         options.onError?.(event.message);
         setIsStreaming(false);
+        allowAssistantParts = false;
         break;
     }
   }
@@ -331,6 +390,8 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     setError(null);
 
     try {
+      allowAssistantParts = false;
+
       await trpc.opencode.promptStart.mutate({
         sessionId,
         message,

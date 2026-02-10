@@ -67,7 +67,29 @@ export type StreamEvent =
     }
   | { type: "error"; sessionId: string; code: string; message: string }
   | { type: "done"; sessionId: string; messageId: string }
-  | { type: "connected" };
+  | { type: "connected" }
+  | { type: "ping" };
+
+// =============================================================================
+// Delta Helpers
+// =============================================================================
+
+const lastPartText = new Map<string, string>();
+const messageRoles = new Map<string, "user" | "assistant">();
+
+function getDeltaFromFullText(partId: string, text: string): string | null {
+  const previous = lastPartText.get(partId) ?? "";
+
+  if (text.startsWith(previous)) {
+    const delta = text.slice(previous.length);
+    if (!delta) return null;
+    lastPartText.set(partId, text);
+    return delta;
+  }
+
+  lastPartText.set(partId, text);
+  return text || null;
+}
 
 // =============================================================================
 // Event Transformation
@@ -168,23 +190,48 @@ export function transformEvent(event: OpenCodeEvent): StreamEvent | null {
       // Skip events without sessionId (shouldn't happen for message events)
       if (!sessionId) return null;
 
+      const role = messageRoles.get(part.messageID);
+
+      // Skip user message parts (we only stream assistant output)
+      if (role === "user") {
+        return null;
+      }
+
       // Handle text parts with delta (streaming content)
-      if (part.type === "text" && delta) {
+      if (part.type === "text") {
+        if (role !== "assistant" && role !== undefined) {
+          return null;
+        }
+        const textDelta = delta ?? getDeltaFromFullText(part.id, part.text);
+        if (delta && typeof part.text === "string") {
+          lastPartText.set(part.id, part.text);
+        }
+
+        if (!textDelta) return null;
         return {
           type: "text",
           sessionId,
-          delta,
+          delta: textDelta,
           messageId: part.messageID,
           partId: part.id,
         };
       }
 
       // Handle reasoning parts
-      if (part.type === "reasoning" && delta) {
+      if (part.type === "reasoning") {
+        if (role !== "assistant" && role !== undefined) {
+          return null;
+        }
+        const textDelta = delta ?? getDeltaFromFullText(part.id, part.text);
+        if (delta && typeof part.text === "string") {
+          lastPartText.set(part.id, part.text);
+        }
+
+        if (!textDelta) return null;
         return {
           type: "reasoning",
           sessionId,
-          delta,
+          delta: textDelta,
           messageId: part.messageID,
           partId: part.id,
         };
@@ -260,9 +307,30 @@ export function transformEvent(event: OpenCodeEvent): StreamEvent | null {
     case "message.updated": {
       if (!sessionId) return null;
       const { info } = event.properties;
+
+      if (info?.id && (info.role === "assistant" || info.role === "user")) {
+        messageRoles.set(info.id, info.role);
+      }
+
       // When message is completed
       if (info.role === "assistant" && info.time.completed) {
         return { type: "done", sessionId, messageId: info.id };
+      }
+      return null;
+    }
+
+    case "message.removed": {
+      const { messageID } = event.properties;
+      if (typeof messageID === "string") {
+        messageRoles.delete(messageID);
+      }
+      return null;
+    }
+
+    case "message.part.removed": {
+      const { partID } = event.properties;
+      if (typeof partID === "string") {
+        lastPartText.delete(partID);
       }
       return null;
     }

@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Effect, Fiber } from "effect";
 
@@ -14,18 +16,37 @@ import { appRouter } from "./trpc/routers";
 // =============================================================================
 
 const isProduction = process.env.NODE_ENV === "production";
-const staticDir = import.meta.dir + "/../../web/dist";
+const staticDir = path.resolve(import.meta.dir, "../../web/dist");
 
 if (isProduction) {
   console.log(`[static] Production mode enabled, serving from: ${staticDir}`);
 }
 
-async function serveStatic(pathname: string): Promise<Response> {
-  const filePath = `${staticDir}${pathname}`;
-  const file = Bun.file(filePath);
+function resolveStaticFilePath(urlPathname: string): string | null {
+  // Treat the pathname as a URL path, normalize it, and ensure it stays within staticDir.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(urlPathname);
+  } catch {
+    return null;
+  }
 
-  if (await file.exists()) {
-    return new Response(file);
+  const normalized = path.posix.normalize(decoded);
+  const rel = normalized.replace(/^\/+/, "");
+  const abs = path.resolve(staticDir, rel);
+  const staticDirWithSep = staticDir.endsWith(path.sep) ? staticDir : staticDir + path.sep;
+  if (abs !== staticDir && !abs.startsWith(staticDirWithSep)) return null;
+  return abs;
+}
+
+async function serveStatic(pathname: string): Promise<Response> {
+  const resolved = resolveStaticFilePath(pathname);
+  if (resolved) {
+    const file = Bun.file(resolved);
+
+    if (await file.exists()) {
+      return new Response(file);
+    }
   }
 
   return new Response(Bun.file(`${staticDir}/index.html`), {
@@ -37,6 +58,14 @@ async function serveStatic(pathname: string): Promise<Response> {
 // Route Handlers
 // =============================================================================
 
+function parseOptionalPositiveInt(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  if (value.trim() === "") return undefined;
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
+}
+
 type RouteServices = {
   gh: Effect.Effect.Success<typeof GhService>;
   diffCache: Effect.Effect.Success<typeof DiffCacheService>;
@@ -44,6 +73,55 @@ type RouteServices = {
 };
 
 const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
+  // Proxy for GitHub assets (images/videos in PR descriptions)
+  // This bypasses CORS/ORB issues by fetching through the server with auth
+  "/api/github-asset/*": {
+    GET: async (req: Request) => {
+      const url = new URL(req.url);
+      // Extract the asset ID from the path: /api/github-asset/{asset-id}
+      const assetId = url.pathname.replace("/api/github-asset/", "");
+
+      if (!assetId) {
+        return new Response("Missing asset ID", { status: 400 });
+      }
+
+      const githubUrl = `https://github.com/user-attachments/assets/${assetId}`;
+
+      try {
+        // Get GitHub token using gh CLI
+        const token = await Bun.$`gh auth token`.text().then((t) => t.trim());
+
+        const response = await fetch(githubUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "*/*",
+          },
+          redirect: "follow",
+        });
+
+        if (!response.ok) {
+          return new Response(`Failed to fetch asset: ${response.status}`, {
+            status: response.status,
+          });
+        }
+
+        // Forward the response with proper content-type
+        const contentType = response.headers.get("content-type") || "application/octet-stream";
+        const body = await response.arrayBuffer();
+
+        return new Response(body, {
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=31536000, immutable",
+          },
+        });
+      } catch (error) {
+        console.error("Failed to proxy GitHub asset:", error);
+        return new Response("Failed to fetch asset", { status: 500 });
+      }
+    },
+  },
+
   // tRPC endpoint
   "/api/trpc/*": (req: Request) =>
     fetchRequestHandler({
@@ -59,11 +137,29 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
       const url = new URL(req.url);
       const sessionId = url.searchParams.get("sessionId");
       const file = url.searchParams.get("file");
-      const startLine = url.searchParams.get("startLine");
-      const endLine = url.searchParams.get("endLine");
+      const startLineRaw = url.searchParams.get("startLine");
+      const endLineRaw = url.searchParams.get("endLine");
 
       if (!sessionId || !file) {
         return Response.json({ error: "Missing sessionId or file" }, { status: 400 });
+      }
+
+      const startLine = parseOptionalPositiveInt(startLineRaw);
+      const endLine = parseOptionalPositiveInt(endLineRaw);
+      if (startLineRaw !== null && startLine === undefined) {
+        return Response.json({ error: "Invalid startLine" }, { status: 400 });
+      }
+      if (endLineRaw !== null && endLine === undefined) {
+        return Response.json({ error: "Invalid endLine" }, { status: 400 });
+      }
+      if (
+        startLine !== undefined &&
+        endLine !== undefined &&
+        Number.isFinite(startLine) &&
+        Number.isFinite(endLine) &&
+        startLine > endLine
+      ) {
+        return Response.json({ error: "startLine must be <= endLine" }, { status: 400 });
       }
 
       try {
@@ -88,12 +184,8 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
         }
 
         let diffOutput = fileMeta.diff;
-        if (startLine !== null || endLine !== null) {
-          diffOutput = filterDiffByLineRange(
-            diffOutput,
-            startLine ? parseInt(startLine, 10) : undefined,
-            endLine ? parseInt(endLine, 10) : undefined,
-          );
+        if (startLine !== undefined || endLine !== undefined) {
+          diffOutput = filterDiffByLineRange(diffOutput, startLine, endLine);
         }
 
         return Response.json({ diff: diffOutput });
@@ -188,6 +280,8 @@ const main = Effect.gen(function* () {
   const routes = createRoutes({ gh, diffCache, prContext });
 
   const server = Bun.serve({
+    // Local-first: avoid exposing an API that can shell out to `gh` on the LAN by default.
+    hostname: process.env.API_HOST ?? "127.0.0.1",
     port: Number(process.env.API_PORT ?? 3001),
     routes,
     idleTimeout: 255,
@@ -195,7 +289,8 @@ const main = Effect.gen(function* () {
     fetch: isProduction ? (req) => serveStatic(new URL(req.url).pathname) : undefined,
   });
 
-  yield* Effect.log(`API server running at http://localhost:${server.port}`);
+  const host = process.env.API_HOST ?? "127.0.0.1";
+  yield* Effect.log(`API server running at http://${host}:${server.port}`);
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {

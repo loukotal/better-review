@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "bun run --cwd packages/better-review dev & bun run --cwd packages/web dev",
     "start": "bun run --cwd packages/web build && bun run --cwd packages/better-review start",
-    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist bun.lockb && bun install",
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist && bun install",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
@@ -23,7 +23,5 @@
     "oxfmt": "^0.23.0",
     "oxlint": "^1.38.0"
   },
-  "peerDependencies": {
-    "typescript": "^5"
-  }
+  "peerDependencies": {}
 }
