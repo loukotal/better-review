@@ -33,6 +33,7 @@ export interface DiffSettings {
   theme: DiffTheme;
   lineDiffType: LineDiffType;
   fontFamily: FontFamily;
+  collapseReadFiles: boolean;
 }
 
 export const DEFAULT_DIFF_SETTINGS: DiffSettings = {
@@ -40,6 +41,7 @@ export const DEFAULT_DIFF_SETTINGS: DiffSettings = {
   theme: "vesper",
   lineDiffType: "word",
   fontFamily: "system",
+  collapseReadFiles: true,
 };
 
 // ============ Font Configuration ============

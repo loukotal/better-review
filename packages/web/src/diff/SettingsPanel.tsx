@@ -135,6 +135,34 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 </For>
               </select>
             </div>
+
+            {/* Collapse Read Files */}
+            <div class="flex flex-col gap-1.5">
+              <label class="text-base text-text-faint">Review</label>
+              <button
+                type="button"
+                onClick={() => update("collapseReadFiles", !props.settings.collapseReadFiles)}
+                class="flex items-center gap-2 px-2 py-1.5 text-sm text-text-muted hover:text-text transition-colors"
+              >
+                <span
+                  class="w-4 h-4 border border-border flex items-center justify-center"
+                  classList={{ "bg-accent border-accent": props.settings.collapseReadFiles }}
+                >
+                  <Show when={props.settings.collapseReadFiles}>
+                    <svg
+                      class="w-3 h-3 text-black"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="3"
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  </Show>
+                </span>
+                <span>Collapse read files</span>
+              </button>
+            </div>
           </div>
         </div>
       </Show>
