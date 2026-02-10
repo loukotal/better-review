@@ -35,3 +35,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Runtime PR context for custom tools
 .opencode/.current-pr.json
+
+# Custom reviewer personality (local only)
+personality.md

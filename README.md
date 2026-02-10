@@ -18,7 +18,26 @@ Better code review experience for GitHub PRs. Runs locally with your github logi
 
 - Agent proposes order in which to review files
 - Special rendered blocks with info/warning/critical hints
+- Custom personality/instructions via `personality.md` file
 - [future] there could be some "knowledge-base" the agent could use for the review
+
+### Custom Reviewer Personality
+
+You can customize how the AI reviewer behaves by creating a `personality.md` file in the project root. This file can contain custom instructions, tone preferences, or specific things to look for during review.
+
+Example `personality.md`:
+
+```markdown
+You are a strict code reviewer. Focus on:
+
+- Security vulnerabilities and edge cases
+- Performance implications
+- API contract consistency
+
+Be concise and direct. Use examples when explaining issues.
+```
+
+The custom instructions are loaded automatically when starting a review session and take priority over the default instructions.
 
 ## Prerequisites
 
