@@ -73,6 +73,55 @@ type RouteServices = {
 };
 
 const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
+  // Proxy for GitHub assets (images/videos in PR descriptions)
+  // This bypasses CORS/ORB issues by fetching through the server with auth
+  "/api/github-asset/*": {
+    GET: async (req: Request) => {
+      const url = new URL(req.url);
+      // Extract the asset ID from the path: /api/github-asset/{asset-id}
+      const assetId = url.pathname.replace("/api/github-asset/", "");
+
+      if (!assetId) {
+        return new Response("Missing asset ID", { status: 400 });
+      }
+
+      const githubUrl = `https://github.com/user-attachments/assets/${assetId}`;
+
+      try {
+        // Get GitHub token using gh CLI
+        const token = await Bun.$`gh auth token`.text().then((t) => t.trim());
+
+        const response = await fetch(githubUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "*/*",
+          },
+          redirect: "follow",
+        });
+
+        if (!response.ok) {
+          return new Response(`Failed to fetch asset: ${response.status}`, {
+            status: response.status,
+          });
+        }
+
+        // Forward the response with proper content-type
+        const contentType = response.headers.get("content-type") || "application/octet-stream";
+        const body = await response.arrayBuffer();
+
+        return new Response(body, {
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=31536000, immutable",
+          },
+        });
+      } catch (error) {
+        console.error("Failed to proxy GitHub asset:", error);
+        return new Response("Failed to fetch asset", { status: 500 });
+      }
+    },
+  },
+
   // tRPC endpoint
   "/api/trpc/*": (req: Request) =>
     fetchRequestHandler({
