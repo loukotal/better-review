@@ -37,7 +37,6 @@ interface Props {
   repoName?: string | null;
   readFiles?: Set<string>;
   onToggleRead?: (fileName: string) => void;
-  collapseReadFiles?: boolean;
 }
 
 export function DiffViewer(props: Props) {
@@ -139,7 +138,6 @@ export function DiffViewer(props: Props) {
                   onToggleRead={
                     props.onToggleRead ? () => props.onToggleRead!(file.name) : undefined
                   }
-                  collapseIfRead={props.collapseReadFiles}
                 />
               </div>
             );

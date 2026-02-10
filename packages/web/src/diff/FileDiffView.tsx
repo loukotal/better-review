@@ -49,7 +49,6 @@ interface FileDiffViewProps {
   repoName?: string | null;
   isRead?: boolean;
   onToggleRead?: () => void;
-  collapseIfRead?: boolean;
 }
 
 // Group comments into threads by their root comment
@@ -100,9 +99,7 @@ export function FileDiffView(props: FileDiffViewProps) {
   const isGeneratedFile = createMemo(() =>
     GENERATED_FILE_PATTERNS.some((p) => p.test(props.file.name)),
   );
-  const shouldAutoCollapse = createMemo(
-    () => isLargeFile() || isGeneratedFile() || (props.collapseIfRead && props.isRead),
-  );
+  const shouldAutoCollapse = createMemo(() => isLargeFile() || isGeneratedFile() || props.isRead);
 
   const [collapsed, setCollapsed] = createSignal(shouldAutoCollapse());
   const [pendingComment, setPendingComment] = createSignal<{
@@ -111,14 +108,13 @@ export function FileDiffView(props: FileDiffViewProps) {
     side: "LEFT" | "RIGHT";
   } | null>(null);
 
-  // Collapse file when marked as read (if setting is enabled)
+  // Collapse file when marked as read
   createEffect(
     on(
-      () => [props.isRead, props.collapseIfRead] as const,
-      ([isRead, collapseIfRead], prev) => {
-        const [prevIsRead] = prev ?? [false];
+      () => props.isRead,
+      (isRead, prevIsRead) => {
         // Only collapse when transitioning from unread to read
-        if (isRead && !prevIsRead && collapseIfRead) {
+        if (isRead && !prevIsRead) {
           setCollapsed(true);
         }
       },

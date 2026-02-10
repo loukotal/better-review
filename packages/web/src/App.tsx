@@ -900,7 +900,6 @@ const AppContent: Component = () => {
                   highlightedLine={highlightedLine()}
                   readFiles={readFiles()}
                   onToggleRead={toggleFileRead}
-                  collapseReadFiles={settings().collapseReadFiles}
                 />
               </Show>
             </div>
