@@ -21,7 +21,8 @@ const PERSONALITY_FILE = "personality.md";
  * Returns the file content or null if the file doesn't exist.
  */
 export async function loadPersonality(): Promise<string | null> {
-  const filePath = join(process.cwd(), PERSONALITY_FILE);
+  // Look for personality.md in the monorepo root (3 levels up from src/response.ts)
+  const filePath = join(import.meta.dir, "..", "..", "..", PERSONALITY_FILE);
   const file = Bun.file(filePath);
 
   if (!(await file.exists())) {
@@ -140,7 +141,7 @@ Get the diff for a specific file. Supports optional line range filtering.
 - \`pr_diff(file="src/index.ts", startLine=100, endLine=200)\` - get only lines 100-200 (new file line numbers)
 
 For large files, use the hunk ranges from \`pr_metadata\` to request specific portions.
-${personalitySection}
+
 ---
 
 **Your role:**
@@ -149,5 +150,6 @@ ${personalitySection}
 - Explain what the changes do
 - Identify potential issues or bugs
 - Suggest improvements
-- Answer questions about the code`;
+- Answer questions about the code
+${personalitySection}`;
 }
