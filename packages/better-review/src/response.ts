@@ -2,7 +2,36 @@
 // HTTP Response Helpers
 // =============================================================================
 
+import { join } from "node:path";
+
 import { SYSTEM_CONTEXT_MARKER } from "@better-review/shared";
+
+// =============================================================================
+// Custom Personality
+// =============================================================================
+
+/**
+ * Path to the custom personality file in the project root.
+ * Users can create this file to customize the reviewer's behavior.
+ */
+const PERSONALITY_FILE = "personality.md";
+
+/**
+ * Load custom reviewer personality from personality.md in the project root.
+ * Returns the file content or null if the file doesn't exist.
+ */
+export async function loadPersonality(): Promise<string | null> {
+  // Look for personality.md in the monorepo root (3 levels up from src/response.ts)
+  const filePath = join(import.meta.dir, "..", "..", "..", PERSONALITY_FILE);
+  const file = Bun.file(filePath);
+
+  if (!(await file.exists())) {
+    return null;
+  }
+
+  const content = (await file.text()).trim();
+  return content || null;
+}
 
 /**
  * Extract a human-readable error message from various error types
@@ -57,18 +86,33 @@ const IGNORE_PATTERNS = [
 ];
 
 /**
- * Build the initial context message for a PR review session
+ * Build the initial context message for a PR review session.
+ * Automatically loads and includes custom personality from personality.md if present.
  */
-export function buildReviewContext(params: {
+export async function buildReviewContext(params: {
   prUrl: string;
   prNumber: number;
   repoOwner: string;
   repoName: string;
   files: string[];
-}): string {
+}): Promise<string> {
   const relevantFiles = params.files.filter(
     (file) => !IGNORE_PATTERNS.some((pattern) => pattern.test(file)),
   );
+
+  const personality = await loadPersonality();
+  const personalitySection = personality
+    ? `
+
+## Custom Reviewer Instructions
+
+The user has provided the following custom instructions for how you should behave as a reviewer. Follow these instructions in addition to (and with higher priority than) the default instructions above:
+
+${personality}
+
+---
+`
+    : "";
 
   return `${SYSTEM_CONTEXT_MARKER}
 You are reviewing PR #${params.prNumber} in ${params.repoOwner}/${params.repoName}.
@@ -106,5 +150,6 @@ For large files, use the hunk ranges from \`pr_metadata\` to request specific po
 - Explain what the changes do
 - Identify potential issues or bugs
 - Suggest improvements
-- Answer questions about the code`;
+- Answer questions about the code
+${personalitySection}`;
 }
