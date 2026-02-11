@@ -48,6 +48,7 @@ import type { Annotation } from "./utils/parseReviewTokens";
 
 const SETTINGS_STORAGE_KEY = "diff-settings";
 const PANELS_STORAGE_KEY = "panel-visibility";
+const FOCUS_MODE_STORAGE_KEY = "focus-mode";
 
 // Valid theme keys for validation
 const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
@@ -142,6 +143,16 @@ const AppContent: Component = () => {
     };
     setPanelVisibility(newVisibility);
     savePanelVisibility(newVisibility);
+  };
+
+  // Focus mode - hides header and chat, maximizes diff area
+  const [focusMode, setFocusMode] = createSignal(
+    localStorage.getItem(FOCUS_MODE_STORAGE_KEY) === "true",
+  );
+  const toggleFocusMode = () => {
+    const next = !focusMode();
+    setFocusMode(next);
+    localStorage.setItem(FOCUS_MODE_STORAGE_KEY, String(next));
   };
 
   // Commit mode state
@@ -323,6 +334,26 @@ const AppContent: Component = () => {
     }
   };
 
+  // Keyboard shortcut for focus mode
+  onMount(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Don't trigger in input/textarea/contenteditable
+      const tag = (e.target as HTMLElement)?.tagName;
+      const isEditable = (e.target as HTMLElement)?.isContentEditable;
+      if (tag === "INPUT" || tag === "TEXTAREA" || isEditable) return;
+      if (e.key === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        toggleFocusMode();
+      }
+      if (e.key === "Escape" && focusMode()) {
+        e.preventDefault();
+        toggleFocusMode();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    // Cleanup on unmount would go here if needed
+  });
+
   // Fetch PR queue on mount
   onMount(async () => {
     try {
@@ -350,12 +381,9 @@ const AppContent: Component = () => {
     if (prUrlValue && !initialLoadTriggered()) {
       setPrUrl(prUrlValue);
       setInitialLoadTriggered(true);
-      // Trigger load after state is set
+      // Call loadPr directly instead of relying on form DOM element
       setTimeout(() => {
-        const form = document.querySelector("form");
-        if (form) {
-          form.requestSubmit();
-        }
+        loadPr(new Event("submit"));
       }, 0);
     }
   });
@@ -716,122 +744,145 @@ const AppContent: Component = () => {
 
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
-      {/* Header Bar */}
-      <header class="border-b border-border bg-bg-surface">
-        {/* Main Header */}
-        <div class="px-4 py-3">
-          <div class="flex items-center justify-between mb-3">
-            <A href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
-              <span class="text-accent text-base">●</span>
-              <h1 class="text-base text-text">better-review</h1>
-            </A>
-            <div class="flex items-center gap-4">
-              <div class="flex items-center gap-1 border-r border-border pr-4">
-                <button
-                  onClick={() => togglePanel("chat")}
-                  class={`px-2 py-1 text-base border transition-colors ${
-                    panelVisibility().chat
-                      ? "border-accent/50 text-accent"
-                      : "border-border text-text-faint hover:text-text"
-                  }`}
-                  title="Toggle chat panel"
-                >
-                  Chat
-                </button>
-                <button
-                  onClick={() => togglePanel("files")}
-                  class={`px-2 py-1 text-base border transition-colors ${
-                    panelVisibility().files
-                      ? "border-accent/50 text-accent"
-                      : "border-border text-text-faint hover:text-text"
-                  }`}
-                  title="Toggle file tree panel"
-                >
-                  Files
-                </button>
-              </div>
-              <A href="/" class="text-base text-text-faint hover:text-text transition-colors">
-                Browse PRs
+      {/* Header Bar - hidden in focus mode */}
+      <Show when={!focusMode()}>
+        <header class="border-b border-border bg-bg-surface">
+          {/* Main Header */}
+          <div class="px-4 py-3">
+            <div class="flex items-center justify-between mb-3">
+              <A href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
+                <span class="text-accent text-base">●</span>
+                <h1 class="text-base text-text">better-review</h1>
               </A>
-              <SettingsPanel settings={settings()} onChange={setSettings} />
-            </div>
-          </div>
-
-          <form onSubmit={loadPr} class="flex gap-2">
-            <div class="flex-1">
-              <input
-                type="text"
-                value={prUrl()}
-                onInput={(e) => setPrUrl(e.currentTarget.value)}
-                placeholder="github.com/owner/repo/pull/123"
-                class="w-full px-3 py-2 bg-bg border border-border text-text text-base placeholder:text-text-faint hover:border-text-faint focus:border-accent"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={loading() || !prUrl()}
-              class="px-4 py-2 bg-accent text-black font-medium hover:bg-accent-bright active:bg-accent disabled:opacity-30 disabled:cursor-not-allowed text-base"
-            >
-              {loading() ? "..." : "Load"}
-            </button>
-            <Show when={nextPr()}>
-              {(next) => (
-                <A
-                  href={`/review?prUrl=${encodeURIComponent(next().url)}`}
-                  class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-base flex items-center gap-1"
-                  title={`Next: ${next().title}`}
+              <div class="flex items-center gap-4">
+                <div class="flex items-center gap-1 border-r border-border pr-4">
+                  <button
+                    onClick={() => togglePanel("chat")}
+                    class={`px-2 py-1 text-base border transition-colors ${
+                      panelVisibility().chat
+                        ? "border-accent/50 text-accent"
+                        : "border-border text-text-faint hover:text-text"
+                    }`}
+                    title="Toggle chat panel"
+                  >
+                    Chat
+                  </button>
+                  <button
+                    onClick={() => togglePanel("files")}
+                    class={`px-2 py-1 text-base border transition-colors ${
+                      panelVisibility().files
+                        ? "border-accent/50 text-accent"
+                        : "border-border text-text-faint hover:text-text"
+                    }`}
+                    title="Toggle file tree panel"
+                  >
+                    Files
+                  </button>
+                </div>
+                <button
+                  onClick={toggleFocusMode}
+                  class="text-base text-text-faint hover:text-text transition-colors"
+                  title="Enter focus mode (F)"
                 >
-                  Next PR <span class="text-accent">→</span>
+                  Focus
+                </button>
+                <A href="/" class="text-base text-text-faint hover:text-text transition-colors">
+                  Browse PRs
                 </A>
-              )}
-            </Show>
-          </form>
+                <SettingsPanel settings={settings()} onChange={setSettings} />
+              </div>
+            </div>
 
-          {error() && (
-            <div class="mt-3 px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-base">
-              {error()}
-            </div>
-          )}
-        </div>
+            <form onSubmit={loadPr} class="flex gap-2">
+              <div class="flex-1">
+                <input
+                  type="text"
+                  value={prUrl()}
+                  onInput={(e) => setPrUrl(e.currentTarget.value)}
+                  placeholder="github.com/owner/repo/pull/123"
+                  class="w-full px-3 py-2 bg-bg border border-border text-text text-base placeholder:text-text-faint hover:border-text-faint focus:border-accent"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading() || !prUrl()}
+                class="px-4 py-2 bg-accent text-black font-medium hover:bg-accent-bright active:bg-accent disabled:opacity-30 disabled:cursor-not-allowed text-base"
+              >
+                {loading() ? "..." : "Load"}
+              </button>
+              <Show when={nextPr()}>
+                {(next) => (
+                  <A
+                    href={`/review?prUrl=${encodeURIComponent(next().url)}`}
+                    class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-base flex items-center gap-1"
+                    title={`Next: ${next().title}`}
+                  >
+                    Next PR <span class="text-accent">→</span>
+                  </A>
+                )}
+              </Show>
+            </form>
 
-        {/* PR Status Bar */}
-        <Show when={loadedPrUrl()}>
-          <div class="px-4 py-2 border-t border-border bg-bg flex items-start justify-between gap-4 relative">
-            <div class="flex-1 min-w-0">
-              <PrStatusBar
-                status={prStatus()}
-                loading={loadingStatus()}
-                repoOwner={prInfo()?.owner}
-                repoName={prInfo()?.repo}
-              />
-            </div>
-            <div class="flex items-center gap-2 flex-shrink-0">
-              <ReviewModeToggle
-                mode={reviewMode()}
-                onModeChange={handleModeChange}
-                commitCount={commits().length}
-                disabled={loading()}
-              />
-              <ApproveButton />
-            </div>
+            {error() && (
+              <div class="mt-3 px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-base">
+                {error()}
+              </div>
+            )}
           </div>
-          {/* PR Comments (top-level conversation) */}
-          <PrCommentsPanel
-            comments={issueComments()}
-            loading={loadingComments()}
-            repoOwner={prInfo()?.owner}
-            repoName={prInfo()?.repo}
-            onAddComment={addIssueComment}
-            onEditComment={editIssueComment}
-            onDeleteComment={deleteIssueComment}
-          />
-        </Show>
-      </header>
+
+          {/* PR Status Bar */}
+          <Show when={loadedPrUrl()}>
+            <div class="px-4 py-2 border-t border-border bg-bg flex items-start justify-between gap-4 relative">
+              <div class="flex-1 min-w-0">
+                <PrStatusBar
+                  status={prStatus()}
+                  loading={loadingStatus()}
+                  repoOwner={prInfo()?.owner}
+                  repoName={prInfo()?.repo}
+                />
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <ReviewModeToggle
+                  mode={reviewMode()}
+                  onModeChange={handleModeChange}
+                  commitCount={commits().length}
+                  disabled={loading()}
+                />
+                <ApproveButton />
+              </div>
+            </div>
+            {/* PR Comments (top-level conversation) */}
+            <PrCommentsPanel
+              comments={issueComments()}
+              loading={loadingComments()}
+              repoOwner={prInfo()?.owner}
+              repoName={prInfo()?.repo}
+              onAddComment={addIssueComment}
+              onEditComment={editIssueComment}
+              onDeleteComment={deleteIssueComment}
+            />
+          </Show>
+        </header>
+      </Show>
+
+      {/* Focus mode exit bar */}
+      <Show when={focusMode()}>
+        <div class="flex items-center justify-between px-3 py-1 bg-bg-surface border-b border-border">
+          <span class="text-text-faint text-xs">Focus mode</span>
+          <button
+            onClick={toggleFocusMode}
+            class="text-xs text-text-faint hover:text-text transition-colors"
+            title="Exit focus mode (F or Esc)"
+          >
+            Exit <span class="text-text-faint/50 ml-1">F</span>
+          </button>
+        </div>
+      </Show>
 
       {/* Main content */}
       <div class="flex-1 flex overflow-hidden">
-        {/* Chat panel (left) */}
-        <Show when={panelVisibility().chat}>
+        {/* Chat panel (left) - hidden in focus mode */}
+        <Show when={panelVisibility().chat && !focusMode()}>
           <ChatPanel
             prUrl={loadedPrUrl()}
             prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
@@ -873,7 +924,7 @@ const AppContent: Component = () => {
             </Show>
 
             {/* Diff content */}
-            <div class="flex-1 overflow-y-auto px-4 pb-3">
+            <div class={`flex-1 overflow-y-auto pb-3 ${focusMode() ? "px-1" : "px-4"}`}>
               <Show
                 when={activeDiff()}
                 fallback={
