@@ -108,14 +108,17 @@ export function FileDiffView(props: FileDiffViewProps) {
     side: "LEFT" | "RIGHT";
   } | null>(null);
 
-  // Collapse file when marked as read
+  // Collapse file when marked as read, expand when marked as unread
   createEffect(
     on(
       () => props.isRead,
       (isRead, prevIsRead) => {
-        // Only collapse when transitioning from unread to read
         if (isRead && !prevIsRead) {
+          // Collapse when transitioning from unread to read
           setCollapsed(true);
+        } else if (!isRead && prevIsRead) {
+          // Expand when transitioning from read to unread
+          setCollapsed(false);
         }
       },
     ),
@@ -413,10 +416,32 @@ export function FileDiffView(props: FileDiffViewProps) {
     props.onToggleRead?.();
   };
 
+  let headerRef: HTMLButtonElement | undefined;
+
+  // Scroll collapsed file header into view when it would be off-screen
+  createEffect(
+    on(
+      () => collapsed(),
+      (isCollapsed, wasCollapsed) => {
+        if (isCollapsed && !wasCollapsed && headerRef) {
+          // After collapsing, ensure the header is visible
+          requestAnimationFrame(() => {
+            if (!headerRef) return;
+            const rect = headerRef.getBoundingClientRect();
+            if (rect.top < 0 || rect.bottom > window.innerHeight) {
+              headerRef.scrollIntoView({ behavior: "instant", block: "nearest" });
+            }
+          });
+        }
+      },
+    ),
+  );
+
   return (
     <div>
       {/* File Header - sticky */}
       <button
+        ref={headerRef}
         type="button"
         onClick={() => setCollapsed(!collapsed())}
         class="w-full flex items-center gap-2 px-3 py-1.5 bg-bg-elevated hover:bg-bg-surface text-left group sticky top-0 z-10 border border-border rounded-t-sm"
