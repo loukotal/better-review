@@ -140,12 +140,12 @@ export const CommentView: Component<CommentViewProps> = (props) => {
               <span class="text-sm text-accent">editing</span>
             </div>
             <textarea
+              ref={(el) => setTimeout(() => el.focus(), 0)}
               value={editBody()}
               onInput={(e) => setEditBody(e.currentTarget.value)}
               onKeyDown={handleKeyDown}
               class="w-full px-2 py-1.5 bg-bg border border-accent text-text focus:border-accent resize-y min-h-[60px] text-sm"
               disabled={isSubmitting()}
-              autofocus
             />
             <div class="flex gap-2 mt-1.5">
               <button
@@ -308,13 +308,13 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
   return (
     <div class="ml-3 pl-3 border-l border-accent mt-2">
       <textarea
+        ref={(el) => setTimeout(() => el.focus(), 0)}
         value={body()}
         onInput={(e) => setBody(e.currentTarget.value)}
         onKeyDown={handleKeyDown}
         placeholder="Write a reply..."
         class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[50px] text-sm"
         disabled={isSubmitting()}
-        autofocus
       />
       <div class="flex gap-2 mt-1.5">
         <button
@@ -507,13 +507,13 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
     <div>
       <div class="text-sm text-accent mb-2">{lineLabel()}</div>
       <textarea
+        ref={(el) => setTimeout(() => el.focus(), 0)}
         value={body()}
         onInput={(e) => setBody(e.currentTarget.value)}
         onKeyDown={handleKeyDown}
         placeholder="Write a comment..."
         class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[60px] text-sm"
         disabled={isSubmitting()}
-        autofocus
       />
       <div class="flex gap-2 mt-2">
         <button
