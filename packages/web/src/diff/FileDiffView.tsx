@@ -390,8 +390,15 @@ export function FileDiffView(props: FileDiffViewProps) {
     fileDiffInstance: FileDiff<AnnotationMetadata>,
   ): HTMLElement => {
     const container = document.createElement("div");
-    container.className =
-      "flex items-center justify-center gap-2 py-1 px-3 text-xs text-text-faint bg-bg-surface border-y border-border cursor-pointer hover:bg-bg-elevated hover:text-text-muted transition-colors select-none";
+    container.className = "hunk-sep";
+    container.style.cssText =
+      "display:flex;align-items:center;justify-content:center;gap:6px;padding:2px 0;font-size:11px;opacity:0.4;cursor:pointer;user-select:none;transition:opacity 0.15s";
+    container.onmouseenter = () => {
+      container.style.opacity = "0.7";
+    };
+    container.onmouseleave = () => {
+      container.style.opacity = "0.4";
+    };
 
     // Only show expand controls if there are collapsed lines
     if (hunk.lines > 0) {
@@ -403,7 +410,9 @@ export function FileDiffView(props: FileDiffViewProps) {
       if (isChunked && canUp && canDown) {
         // Separate up/down buttons for large regions
         const upBtn = document.createElement("button");
-        upBtn.className = "hover:text-accent transition-colors px-1";
+        upBtn.className = "hunk-arrow";
+        upBtn.style.cssText =
+          "padding:0 2px;background:none;border:none;cursor:pointer;color:inherit;font-size:inherit";
         upBtn.textContent = "↑";
         upBtn.title = "Expand up";
         upBtn.onclick = (e) => {
@@ -412,10 +421,12 @@ export function FileDiffView(props: FileDiffViewProps) {
         };
 
         const label = document.createElement("span");
-        label.textContent = `${hunk.lines} unchanged lines`;
+        label.textContent = `⋯ ${hunk.lines} lines`;
 
         const downBtn = document.createElement("button");
-        downBtn.className = "hover:text-accent transition-colors px-1";
+        downBtn.className = "hunk-arrow";
+        downBtn.style.cssText =
+          "padding:0 2px;background:none;border:none;cursor:pointer;color:inherit;font-size:inherit";
         downBtn.textContent = "↓";
         downBtn.title = "Expand down";
         downBtn.onclick = (e) => {
@@ -429,7 +440,7 @@ export function FileDiffView(props: FileDiffViewProps) {
       } else {
         // Single expand-all button
         const label = document.createElement("span");
-        label.textContent = `${hunk.lines} unchanged lines`;
+        label.textContent = `⋯ ${hunk.lines} lines`;
         container.appendChild(label);
       }
 
