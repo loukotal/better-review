@@ -236,6 +236,51 @@ export const prRouter = router({
     ),
   ),
 
+  /** Fetch full file contents (old + new) for expanding unchanged lines in the diff viewer */
+  fileContent: publicProcedure
+    .input(
+      z.object({
+        url: z.string(),
+        path: z.string(),
+        /** For renamed files, the old path (before rename) */
+        prevPath: z.string().optional(),
+      }),
+    )
+    .query(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const gh = yield* GhService;
+          const { owner, repo } = yield* gh.getPrInfo(input.url);
+
+          const [baseSha, headSha] = yield* Effect.all(
+            [gh.getBaseSha(input.url), gh.getHeadSha(input.url)],
+            { concurrency: 2 },
+          );
+
+          // For renamed files, fetch old content from prevPath
+          const oldPath = input.prevPath ?? input.path;
+
+          const [oldContent, newContent] = yield* Effect.all(
+            [
+              gh
+                .getFileContent({ owner, repo, path: oldPath, ref: baseSha })
+                .pipe(Effect.catchAll(() => Effect.succeed(null))),
+              gh
+                .getFileContent({ owner, repo, path: input.path, ref: headSha })
+                .pipe(Effect.catchAll(() => Effect.succeed(null))),
+            ],
+            { concurrency: 2 },
+          );
+
+          yield* Effect.log(
+            `[fileContent] ${input.path} old=${oldContent ? oldContent.length : "null"}b new=${newContent ? newContent.length : "null"}b`,
+          );
+
+          return { oldContent, newContent };
+        }),
+      ),
+    ),
+
   // File diff endpoint for the pr_diff tool
   fileDiff: publicProcedure
     .input(

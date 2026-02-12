@@ -286,6 +286,14 @@ interface GhCli {
   }) => Effect.Effect<string, GhError, never>;
   getPrCiStatus: (prUrl: string) => Effect.Effect<CiStatus | null, GhError, never>;
   getHeadSha: (prUrl: string) => Effect.Effect<string, GhError, never>;
+  getBaseSha: (prUrl: string) => Effect.Effect<string, GhError, never>;
+  /** Fetch raw file content at a specific git ref. Returns null if file doesn't exist at that ref. */
+  getFileContent: (params: {
+    owner: string;
+    repo: string;
+    path: string;
+    ref: string;
+  }) => Effect.Effect<string | null, GhError, never>;
 }
 
 export class GhService extends Context.Tag("GHService")<GhService, GhCli>() {}
@@ -1004,6 +1012,38 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getHeadSha", cause })),
       Effect.withSpan("GhService.getHeadSha", { attributes: { prUrl } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getBaseSha: (prUrl: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(prUrl);
+      const cmd = Command.make(
+        "gh",
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}`,
+        "--jq",
+        ".base.sha",
+      );
+      const sha = (yield* Command.string(cmd)).trim();
+      return sha;
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getBaseSha", cause })),
+      Effect.withSpan("GhService.getBaseSha", { attributes: { prUrl } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getFileContent: (params: { owner: string; repo: string; path: string; ref: string }) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.tryPromise(() =>
+        Bun.$`gh api repos/${params.owner}/${params.repo}/contents/${params.path}?ref=${params.ref} -H "Accept: application/vnd.github.raw+json"`.text(),
+      ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+      return result;
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getFileContent", cause })),
+      Effect.withSpan("GhService.getFileContent", {
+        attributes: { path: params.path, ref: params.ref },
+      }),
       Effect.provide(BunContext.layer),
     ),
 });

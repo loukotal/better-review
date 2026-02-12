@@ -38,6 +38,8 @@ interface Props {
   repoName?: string | null;
   readFiles?: Set<string>;
   onToggleRead?: (fileName: string) => void;
+  /** PR URL for fetching full file contents (expand unchanged lines) */
+  prUrl?: string | null;
 }
 
 export function DiffViewer(props: Props) {
@@ -140,6 +142,7 @@ export function DiffViewer(props: Props) {
                   onToggleRead={
                     props.onToggleRead ? () => props.onToggleRead!(file.name) : undefined
                   }
+                  prUrl={props.prUrl}
                 />
               </div>
             );

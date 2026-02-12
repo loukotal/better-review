@@ -3,6 +3,8 @@ import {
   type FileDiffMetadata,
   type AnnotationSide,
   type SelectedLineRange,
+  type HunkData,
+  type ExpansionDirections,
 } from "@pierre/diffs";
 import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "solid-js";
 
@@ -11,6 +13,7 @@ import { renderCommentThread, renderPendingCommentForm } from "../components/Com
 import { CheckIcon } from "../icons/check-icon";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CircleIcon } from "../icons/circle-icon";
+import { fetchFileContentCached } from "../lib/query";
 import type { Annotation } from "../utils/parseReviewTokens";
 import {
   type DiffSettings,
@@ -19,6 +22,9 @@ import {
   FONT_FAMILY_MAP,
   THEME_SELECTION_COLORS,
 } from "./types";
+
+/** Regex to split file content preserving newlines (matches @pierre/diffs internals) */
+const SPLIT_WITH_NEWLINES = /(?<=\n)/;
 
 // Large file thresholds
 const LARGE_FILE_LINE_THRESHOLD = 2000;
@@ -50,6 +56,8 @@ interface FileDiffViewProps {
   repoName?: string | null;
   isRead?: boolean;
   onToggleRead?: () => void;
+  /** PR URL needed for fetching full file contents (for expanding unchanged lines) */
+  prUrl?: string | null;
 }
 
 // Group comments into threads by their root comment
@@ -197,9 +205,8 @@ export function FileDiffView(props: FileDiffViewProps) {
   const renderCurrent = (forceRender: boolean) => {
     if (!instance) return;
 
-    instance.setOptions({ ...instance.options, expandUnchanged: false });
     instance.render({
-      fileDiff: props.file,
+      fileDiff: currentFile(),
       lineAnnotations: lineAnnotations(),
       forceRender,
     });
@@ -240,6 +247,7 @@ export function FileDiffView(props: FileDiffViewProps) {
       () => {
         if (instance && _containerRef) {
           // Clean up and recreate with new settings
+          // Note: fileContentLoaded is preserved since oldLines/newLines are on the file object
           instance.cleanUp();
           _containerRef.innerHTML = "";
           createInstance(_containerRef);
@@ -304,12 +312,142 @@ export function FileDiffView(props: FileDiffViewProps) {
   // Track dispose functions for rendered components
   const disposeList: (() => void)[] = [];
 
+  // Track whether full file content has been loaded for expanding unchanged lines
+  let fileContentLoaded = false;
+  let fileContentLoading = false;
+
+  // Store the enriched file diff (with oldLines/newLines populated)
+  let enrichedFile: FileDiffMetadata | null = null;
+
+  /**
+   * Fetch full file contents and populate oldLines/newLines on a cloned FileDiffMetadata.
+   * A new object reference is needed to invalidate the @pierre/diffs render cache,
+   * which skips re-highlighting when it sees the same diff reference.
+   */
+  const ensureFileContent = async (): Promise<boolean> => {
+    if (fileContentLoaded) return true;
+    if (fileContentLoading) return false;
+    if (!props.prUrl) return false;
+
+    fileContentLoading = true;
+    try {
+      const { oldContent, newContent } = await fetchFileContentCached(
+        props.prUrl,
+        props.file.name,
+        props.file.prevName ?? undefined,
+      );
+
+      // Clone the FileDiffMetadata so the renderer sees a new reference and
+      // invalidates its render cache (which was built without oldLines/newLines).
+      enrichedFile = {
+        ...props.file,
+        oldLines: oldContent ? oldContent.split(SPLIT_WITH_NEWLINES) : [],
+        newLines: newContent ? newContent.split(SPLIT_WITH_NEWLINES) : [],
+      };
+      fileContentLoaded = true;
+      return true;
+    } catch (e) {
+      console.error(`Failed to fetch file content for ${props.file.name}:`, e);
+      return false;
+    } finally {
+      fileContentLoading = false;
+    }
+  };
+
+  /** Get the current file diff — enriched with full content if loaded, otherwise the original. */
+  const currentFile = () => enrichedFile ?? props.file;
+
+  /**
+   * Handle expand click from a custom hunk separator.
+   * Lazily loads file content on first expand, then delegates to the FileDiff instance.
+   */
+  const handleExpandClick = async (hunkIndex: number, direction: ExpansionDirections) => {
+    const loaded = await ensureFileContent();
+    if (!loaded || !instance) return;
+
+    // Step 1: Re-render with the enriched file diff (which has oldLines/newLines).
+    // The enriched file is a new object reference, so the renderer's internal cache
+    // is invalidated, forcing it to re-highlight in "full file" mode. This also
+    // updates instance.fileDiff to the enriched reference.
+    instance.render({
+      fileDiff: currentFile(),
+      lineAnnotations: lineAnnotations(),
+      forceRender: true,
+    });
+
+    // Step 2: Expand the requested hunk. This updates the expandedHunks map in the
+    // renderer, then calls rerender() which uses the now-stored enriched fileDiff.
+    instance.expandHunk(hunkIndex, direction);
+  };
+
+  /**
+   * Custom hunk separator renderer.
+   * Always shows expand buttons (even before file content is loaded).
+   * On click, lazily loads file content then expands.
+   */
+  const renderHunkSeparator = (
+    hunk: HunkData,
+    fileDiffInstance: FileDiff<AnnotationMetadata>,
+  ): HTMLElement => {
+    const container = document.createElement("div");
+    container.className =
+      "flex items-center justify-center gap-2 py-1 px-3 text-xs text-text-faint bg-bg-surface border-y border-border cursor-pointer hover:bg-bg-elevated hover:text-text-muted transition-colors select-none";
+
+    // Only show expand controls if there are collapsed lines
+    if (hunk.lines > 0) {
+      // If the collapsed region is large enough for separate up/down controls
+      const isChunked = hunk.expandable?.chunked ?? hunk.lines > 100;
+      const canUp = hunk.expandable?.up ?? true;
+      const canDown = hunk.expandable?.down ?? true;
+
+      if (isChunked && canUp && canDown) {
+        // Separate up/down buttons for large regions
+        const upBtn = document.createElement("button");
+        upBtn.className = "hover:text-accent transition-colors px-1";
+        upBtn.textContent = "↑";
+        upBtn.title = "Expand up";
+        upBtn.onclick = (e) => {
+          e.stopPropagation();
+          handleExpandClick(hunk.hunkIndex, "up");
+        };
+
+        const label = document.createElement("span");
+        label.textContent = `${hunk.lines} unchanged lines`;
+
+        const downBtn = document.createElement("button");
+        downBtn.className = "hover:text-accent transition-colors px-1";
+        downBtn.textContent = "↓";
+        downBtn.title = "Expand down";
+        downBtn.onclick = (e) => {
+          e.stopPropagation();
+          handleExpandClick(hunk.hunkIndex, "down");
+        };
+
+        container.appendChild(upBtn);
+        container.appendChild(label);
+        container.appendChild(downBtn);
+      } else {
+        // Single expand-all button
+        const label = document.createElement("span");
+        label.textContent = `${hunk.lines} unchanged lines`;
+        container.appendChild(label);
+      }
+
+      // Click on the whole separator expands in both directions
+      container.onclick = () => {
+        handleExpandClick(hunk.hunkIndex, "both");
+      };
+    }
+
+    return container;
+  };
+
   const createInstance = (el: HTMLDivElement) => {
     instance = new FileDiff({
       diffStyle: props.settings.diffStyle,
       theme: props.settings.theme,
       lineDiffType: props.settings.lineDiffType,
-      hunkSeparators: "line-info",
+      hunkSeparators: renderHunkSeparator,
       disableFileHeader: true,
       enableLineSelection: true,
       unsafeCSS: getCustomCSS(),
@@ -389,9 +527,8 @@ export function FileDiffView(props: FileDiffViewProps) {
       },
     });
 
-    instance.setOptions({ ...instance.options, expandUnchanged: false });
     instance.render({
-      fileDiff: props.file,
+      fileDiff: currentFile(),
       containerWrapper: el,
       lineAnnotations: lineAnnotations(),
     });

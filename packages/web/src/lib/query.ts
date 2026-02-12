@@ -72,6 +72,7 @@ export const queryKeys = {
     ciStatus: (url: string) => ["pr", "ci-status", url] as const,
     ciStatusBatch: (urls: string[]) =>
       ["pr", "ci-status-batch", urls.toSorted().join(",")] as const,
+    fileContent: (url: string, path: string) => ["pr", "fileContent", url, path] as const,
   },
   prs: {
     list: ["prs", "list"] as const,
@@ -159,6 +160,14 @@ export const api = {
   ): Promise<Record<string, string | null>> {
     const result = await trpc.pr.commitDiffsBatch.query({ url });
     return result.diffs ?? {};
+  },
+
+  async fetchFileContent(
+    url: string,
+    path: string,
+    prevPath?: string,
+  ): Promise<{ oldContent: string | null; newContent: string | null }> {
+    return await trpc.pr.fileContent.query({ url, path, prevPath });
   },
 
   async fetchCurrentUser(_signal?: AbortSignal): Promise<string | null> {
@@ -269,6 +278,35 @@ export async function prefetchCiStatuses(urls: string[]): Promise<void> {
   } catch (e) {
     console.error("Failed to prefetch CI statuses:", e);
   }
+}
+
+/**
+ * Fetch file content with caching via queryClient.
+ * Returns cached content if available, otherwise fetches from the server.
+ * Used by FileDiffView to lazily load full file contents for expanding unchanged lines.
+ */
+export async function fetchFileContentCached(
+  prUrl: string,
+  path: string,
+  prevPath?: string,
+): Promise<{ oldContent: string | null; newContent: string | null }> {
+  const key = queryKeys.pr.fileContent(prUrl, path);
+
+  // Check if already cached
+  const existing = queryClient.getQueryData<{
+    oldContent: string | null;
+    newContent: string | null;
+  }>(key);
+  if (existing) return existing;
+
+  // Fetch and cache
+  const result = await queryClient.fetchQuery({
+    queryKey: key,
+    queryFn: () => api.fetchFileContent(prUrl, path, prevPath),
+    staleTime: Infinity, // File content at a specific SHA never changes
+  });
+
+  return result;
 }
 
 // Re-export shared types for convenience

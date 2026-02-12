@@ -975,6 +975,7 @@ const AppContent: Component = () => {
                   highlightedLine={highlightedLine()}
                   readFiles={readFiles()}
                   onToggleRead={toggleFileRead}
+                  prUrl={loadedPrUrl()}
                 />
               </Show>
             </div>
