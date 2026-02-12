@@ -88,14 +88,28 @@ export const prRouter = router({
     runEffect(
       Effect.gen(function* () {
         const gh = yield* GhService;
-        const [comments, currentUser] = yield* Effect.all([
+        const [comments, currentUser, threads] = yield* Effect.all([
           gh.listComments(input.url),
           gh.getCurrentUser(),
+          gh.getReviewThreads(input.url),
         ]);
+
+        // Build maps from comment node_id -> isResolved and threadId
+        const resolvedByNodeId = new Map<string, boolean>();
+        const threadIdByNodeId = new Map<string, string>();
+        for (const thread of threads) {
+          for (const nodeId of thread.commentNodeIds) {
+            resolvedByNodeId.set(nodeId, thread.isResolved);
+            threadIdByNodeId.set(nodeId, thread.threadId);
+          }
+        }
+
         return {
           comments: comments.map((c) => ({
             ...c,
             canEdit: c.user.login === currentUser,
+            isResolved: resolvedByNodeId.get(c.node_id) ?? false,
+            threadId: threadIdByNodeId.get(c.node_id),
           })),
         };
       }),
@@ -129,7 +143,7 @@ export const prRouter = router({
         const gh = yield* GhService;
 
         // Fetch all data in parallel with individual timing
-        const [diff, info, commits, comments, issueComments, status, currentUser] =
+        const [diff, info, commits, comments, issueComments, status, currentUser, threads] =
           yield* Effect.all(
             [
               gh
@@ -177,17 +191,41 @@ export const prRouter = router({
                   ),
                 ),
               gh.getCurrentUser(),
+              gh
+                .getReviewThreads(input.url)
+                .pipe(
+                  Effect.tap(() =>
+                    Effect.log(
+                      `[pr.batch] getReviewThreads completed in ${Date.now() - startTime}ms`,
+                    ),
+                  ),
+                ),
             ],
             { concurrency: "unbounded" },
           );
 
         yield* Effect.log(`[pr.batch] DONE total=${Date.now() - startTime}ms`);
 
+        // Build maps from comment node_id -> isResolved and threadId
+        const resolvedByNodeId = new Map<string, boolean>();
+        const threadIdByNodeId = new Map<string, string>();
+        for (const thread of threads) {
+          for (const nodeId of thread.commentNodeIds) {
+            resolvedByNodeId.set(nodeId, thread.isResolved);
+            threadIdByNodeId.set(nodeId, thread.threadId);
+          }
+        }
+
         return {
           diff,
           info,
           commits,
-          comments: comments.map((c) => ({ ...c, canEdit: c.user.login === currentUser })),
+          comments: comments.map((c) => ({
+            ...c,
+            canEdit: c.user.login === currentUser,
+            isResolved: resolvedByNodeId.get(c.node_id) ?? false,
+            threadId: threadIdByNodeId.get(c.node_id),
+          })),
           issueComments: issueComments.map((c) => ({
             ...c,
             canEdit: c.user.login === currentUser,
@@ -432,6 +470,46 @@ ${fileStats.join("\n")}`;
           yield* gh.deleteComment({
             prUrl: input.prUrl,
             commentId: input.commentId,
+          });
+          return { success: true };
+        }),
+      ),
+    ),
+
+  resolveThread: publicProcedure
+    .input(
+      z.object({
+        prUrl: z.string(),
+        threadId: z.string(),
+      }),
+    )
+    .mutation(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const gh = yield* GhService;
+          yield* gh.resolveThread({
+            prUrl: input.prUrl,
+            threadNodeId: input.threadId,
+          });
+          return { success: true };
+        }),
+      ),
+    ),
+
+  unresolveThread: publicProcedure
+    .input(
+      z.object({
+        prUrl: z.string(),
+        threadId: z.string(),
+      }),
+    )
+    .mutation(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const gh = yield* GhService;
+          yield* gh.unresolveThread({
+            prUrl: input.prUrl,
+            threadNodeId: input.threadId,
           });
           return { success: true };
         }),

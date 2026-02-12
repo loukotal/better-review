@@ -671,6 +671,29 @@ const AppContent: Component = () => {
     }
   };
 
+  const resolveThread = async (threadId: string, resolved: boolean) => {
+    const url = loadedPrUrl();
+    if (!url) return;
+    try {
+      if (resolved) {
+        await trpc.pr.resolveThread.mutate({ prUrl: url, threadId });
+      } else {
+        await trpc.pr.unresolveThread.mutate({ prUrl: url, threadId });
+      }
+      // Update local state: mark all comments in this thread as resolved/unresolved
+      const newComments = comments().map((c) =>
+        c.threadId === threadId ? { ...c, isResolved: resolved } : c,
+      );
+      updateCommentsCache(url, newComments);
+      return { success: true };
+    } catch (err) {
+      console.error("Failed to resolve/unresolve thread:", err);
+      return {
+        error: err instanceof Error ? err.message : "Failed to resolve thread",
+      };
+    }
+  };
+
   // Helper to update issue comments in both local state and TanStack Query cache
   const updateIssueCommentsCache = (
     url: string,
@@ -942,6 +965,7 @@ const AppContent: Component = () => {
                   onReplyToComment={replyToComment}
                   onEditComment={editComment}
                   onDeleteComment={deleteComment}
+                  onResolveThread={resolveThread}
                   onDismissAiAnnotation={dismissAiAnnotation}
                   settings={settings()}
                   onFilesLoaded={setFiles}

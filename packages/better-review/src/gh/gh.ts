@@ -49,6 +49,7 @@ const UserSchema = Schema.Struct({
 // Raw comment from GitHub API (without canEdit which is added by the router)
 const PRCommentSchema = Schema.Struct({
   id: Schema.Number,
+  node_id: Schema.String,
   path: Schema.String,
   line: Schema.NullOr(Schema.Number),
   original_line: Schema.NullOr(Schema.Number),
@@ -237,6 +238,12 @@ const GraphQLSearchResponseSchema = Schema.Struct({
   }),
 });
 
+export interface ResolveThreadParams {
+  prUrl: string;
+  /** The GraphQL node_id of a comment in the thread */
+  threadNodeId: string;
+}
+
 export interface AddIssueCommentParams {
   prUrl: string;
   body: string;
@@ -259,6 +266,16 @@ interface GhCli {
   deleteComment: (params: DeleteCommentParams) => Effect.Effect<void, GhError, never>;
   deleteIssueComment: (params: DeleteCommentParams) => Effect.Effect<void, GhError, never>;
   getCurrentUser: () => Effect.Effect<string, GhError, never>;
+  /** Get review thread node IDs and resolution state for a PR */
+  getReviewThreads: (
+    prUrl: string,
+  ) => Effect.Effect<
+    readonly { threadId: string; isResolved: boolean; commentNodeIds: string[] }[],
+    GhError,
+    never
+  >;
+  resolveThread: (params: ResolveThreadParams) => Effect.Effect<void, GhError, never>;
+  unresolveThread: (params: ResolveThreadParams) => Effect.Effect<void, GhError, never>;
   approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError, never>;
   searchReviewRequested: () => Effect.Effect<readonly SearchedPr[], GhError, never>;
   listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError, never>;
@@ -597,6 +614,104 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getCurrentUser", cause })),
       Effect.withSpan("GhService.getCurrentUser"),
+      Effect.provide(BunContext.layer),
+    ),
+
+  getReviewThreads: (prUrl: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(prUrl);
+
+      // GraphQL query to fetch all review threads with their comment node IDs and resolution state
+      const query = `
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviewThreads(first: 100) {
+                nodes {
+                  id
+                  isResolved
+                  comments(first: 100) {
+                    nodes {
+                      id
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const graphqlCmd = Command.make(
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        `query=${query}`,
+        "-F",
+        `owner=${owner}`,
+        "-F",
+        `repo=${repo}`,
+        "-F",
+        `number=${number}`,
+      );
+      const result = yield* Command.string(graphqlCmd);
+      const data = yield* Effect.try(() => JSON.parse(result));
+
+      const threads = data?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+
+      return threads.map(
+        (t: { id: string; isResolved: boolean; comments: { nodes: { id: string }[] } }) => ({
+          threadId: t.id,
+          isResolved: t.isResolved,
+          commentNodeIds: t.comments.nodes.map((c: { id: string }) => c.id),
+        }),
+      );
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getReviewThreads", cause })),
+      Effect.withSpan("GhService.getReviewThreads", { attributes: { prUrl } }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  resolveThread: (params: ResolveThreadParams) =>
+    Effect.gen(function* () {
+      const mutation = `
+        mutation($threadId: ID!) {
+          resolveReviewThread(input: { threadId: $threadId }) {
+            thread { id isResolved }
+          }
+        }
+      `;
+
+      yield* Effect.tryPromise(() =>
+        Bun.$`gh api graphql -f query=${mutation} -f threadId=${params.threadNodeId}`.text(),
+      );
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "resolveThread", cause })),
+      Effect.withSpan("GhService.resolveThread", {
+        attributes: { threadNodeId: params.threadNodeId },
+      }),
+      Effect.provide(BunContext.layer),
+    ),
+
+  unresolveThread: (params: ResolveThreadParams) =>
+    Effect.gen(function* () {
+      const mutation = `
+        mutation($threadId: ID!) {
+          unresolveReviewThread(input: { threadId: $threadId }) {
+            thread { id isResolved }
+          }
+        }
+      `;
+
+      yield* Effect.tryPromise(() =>
+        Bun.$`gh api graphql -f query=${mutation} -f threadId=${params.threadNodeId}`.text(),
+      );
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "unresolveThread", cause })),
+      Effect.withSpan("GhService.unresolveThread", {
+        attributes: { threadNodeId: params.threadNodeId },
+      }),
       Effect.provide(BunContext.layer),
     ),
 

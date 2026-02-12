@@ -28,6 +28,7 @@ interface Props {
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
+  onResolveThread?: (threadId: string, resolved: boolean) => Promise<unknown>;
   onDismissAiAnnotation?: (annotationId: string) => void;
   settings: DiffSettings;
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
@@ -129,6 +130,7 @@ export function DiffViewer(props: Props) {
                   onReplyToComment={props.onReplyToComment}
                   onEditComment={props.onEditComment}
                   onDeleteComment={props.onDeleteComment}
+                  onResolveThread={props.onResolveThread}
                   onDismissAiAnnotation={props.onDismissAiAnnotation}
                   settings={props.settings}
                   highlightedLine={highlightLine()}

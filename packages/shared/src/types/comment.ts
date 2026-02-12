@@ -11,6 +11,7 @@ export interface GhUser {
  */
 export interface PRComment {
   id: number;
+  node_id: string;
   path: string;
   line: number | null;
   original_line: number | null;
@@ -22,6 +23,10 @@ export interface PRComment {
   in_reply_to_id?: number;
   /** Whether the current user can edit/delete this comment */
   canEdit: boolean;
+  /** Whether the thread this comment belongs to is resolved */
+  isResolved?: boolean;
+  /** GraphQL thread node ID (for resolve/unresolve operations) */
+  threadId?: string;
 }
 
 /**

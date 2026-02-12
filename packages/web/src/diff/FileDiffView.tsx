@@ -42,6 +42,7 @@ interface FileDiffViewProps {
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
+  onResolveThread?: (threadId: string, resolved: boolean) => Promise<unknown>;
   onDismissAiAnnotation?: (annotationId: string) => void;
   settings: DiffSettings;
   highlightedLine?: number;
@@ -347,6 +348,12 @@ export function FileDiffView(props: FileDiffViewProps) {
             onReply: async (body) => {
               await props.onReplyToComment(rootComment.id, body);
             },
+            isResolved: rootComment.isResolved,
+            onResolve: rootComment.threadId
+              ? async (resolved) => {
+                  await props.onResolveThread?.(rootComment.threadId!, resolved);
+                }
+              : undefined,
           });
           disposeList.push(dispose);
         } else if (metadata.type === "ai-annotation") {

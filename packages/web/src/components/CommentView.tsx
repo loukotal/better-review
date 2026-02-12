@@ -345,6 +345,10 @@ export interface CommentThreadProps {
   onEdit: (commentId: number, body: string) => Promise<void>;
   onDelete: (commentId: number) => Promise<void>;
   onReply: (body: string) => Promise<void>;
+  /** Whether this thread is resolved */
+  isResolved?: boolean;
+  /** Callback to resolve or unresolve the thread */
+  onResolve?: (resolved: boolean) => Promise<void>;
 }
 
 /**
@@ -353,12 +357,25 @@ export interface CommentThreadProps {
 export const CommentThread: Component<CommentThreadProps> = (props) => {
   const [showAllReplies, setShowAllReplies] = createSignal(false);
   const [isReplying, setIsReplying] = createSignal(false);
+  const [isResolving, setIsResolving] = createSignal(false);
 
   const shouldCollapse = () => props.replies.length >= 3;
   const hiddenCount = () => props.replies.length - 2;
 
+  const handleResolveToggle = async () => {
+    if (!props.onResolve || isResolving()) return;
+    setIsResolving(true);
+    try {
+      await props.onResolve(!props.isResolved);
+    } catch (err) {
+      console.error("Failed to resolve/unresolve thread:", err);
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
   return (
-    <div class="space-y-2">
+    <div class="space-y-2" classList={{ "opacity-60": props.isResolved }}>
       {/* Root comment */}
       <CommentView
         comment={props.rootComment}
@@ -422,27 +439,44 @@ export const CommentThread: Component<CommentThreadProps> = (props) => {
         </For>
       </Show>
 
-      {/* Reply form or button */}
-      <Show
-        when={isReplying()}
-        fallback={
+      {/* Thread actions: reply + resolve */}
+      <div class="flex items-center gap-3 mt-2">
+        <Show
+          when={isReplying()}
+          fallback={
+            <button
+              type="button"
+              onClick={() => setIsReplying(true)}
+              class="text-xs text-text-faint hover:text-accent transition-colors cursor-pointer"
+            >
+              Reply
+            </button>
+          }
+        >
+          <ReplyForm
+            onSubmit={async (body) => {
+              await props.onReply(body);
+              setIsReplying(false);
+            }}
+            onCancel={() => setIsReplying(false)}
+          />
+        </Show>
+
+        <Show when={props.onResolve && !isReplying()}>
           <button
             type="button"
-            onClick={() => setIsReplying(true)}
-            class="mt-2 text-xs text-text-faint hover:text-accent transition-colors cursor-pointer"
+            onClick={handleResolveToggle}
+            disabled={isResolving()}
+            class="text-xs transition-colors cursor-pointer disabled:opacity-50"
+            classList={{
+              "text-success hover:text-text-faint": props.isResolved,
+              "text-text-faint hover:text-success": !props.isResolved,
+            }}
           >
-            Reply
+            {isResolving() ? "..." : props.isResolved ? "Unresolve" : "Resolve"}
           </button>
-        }
-      >
-        <ReplyForm
-          onSubmit={async (body) => {
-            await props.onReply(body);
-            setIsReplying(false);
-          }}
-          onCancel={() => setIsReplying(false)}
-        />
-      </Show>
+        </Show>
+      </div>
     </div>
   );
 };
