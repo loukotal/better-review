@@ -210,8 +210,17 @@ function getAllFolderPaths(nodes: TreeNode[]): string[] {
 }
 
 export function FileTreePanel(props: FileTreePanelProps) {
+  const [collapsed, setCollapsed] = createSignal(
+    localStorage.getItem("fileTreeCollapsed") === "true",
+  );
   const [searchQuery, setSearchQuery] = createSignal("");
   const [manuallyCollapsed, setManuallyCollapsed] = createSignal<Set<string>>(new Set());
+
+  const toggleCollapsed = () => {
+    const next = !collapsed();
+    setCollapsed(next);
+    localStorage.setItem("fileTreeCollapsed", String(next));
+  };
 
   const tree = createMemo(() => buildTree(props.files));
 
@@ -268,57 +277,85 @@ export function FileTreePanel(props: FileTreePanelProps) {
   };
 
   return (
-    <div class="w-[220px] border-l border-border flex flex-col bg-bg-surface">
-      {/* Panel Header */}
-      <div class="px-2 py-2 border-b border-border">
-        <input
-          type="text"
-          value={searchQuery()}
-          onInput={(e) => setSearchQuery(e.currentTarget.value)}
-          placeholder="Filter..."
-          class="w-full px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent"
-        />
-      </div>
-
-      {/* AI Order indicator */}
-      <Show when={props.reviewOrder && props.reviewOrder.length > 0}>
-        <div class="px-2 py-1.5 border-b border-accent/30 bg-accent/5">
-          <div class="flex items-center gap-1.5 text-base text-accent">
-            <ListOrderIcon size={10} />
-            <span>AI review order applied</span>
-          </div>
-        </div>
-      </Show>
-
-      {/* File Tree */}
-      <div class="flex-1 overflow-y-auto py-1">
-        <For each={tree()}>
-          {(node) => (
-            <TreeNodeView
-              node={node}
-              depth={0}
-              expandedFolders={effectiveExpandedFolders()}
-              onToggleFolder={toggleFolder}
-              onFileSelect={props.onFileSelect}
-              matchingPaths={matchingPaths()}
-              readFiles={props.readFiles}
-              onToggleRead={props.onToggleRead}
-            />
-          )}
-        </For>
-      </div>
-
-      {/* Footer Stats */}
-      <div class="px-3 py-1.5 border-t border-border text-xs text-text-faint flex items-center justify-between">
-        <span>
-          {props.files.length} file{props.files.length !== 1 ? "s" : ""}
-        </span>
-        <Show when={props.readFiles && props.readFiles.size > 0}>
-          <span class="text-success">
-            {props.readFiles!.size}/{props.files.length} read
+    <Show
+      when={!collapsed()}
+      fallback={
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          class="w-8 border-l border-border bg-bg-surface flex flex-col items-center py-2 gap-2 hover:bg-bg-elevated transition-colors group"
+          title="Expand file tree"
+        >
+          <span class="text-text-faint group-hover:text-text text-[10px]">◀</span>
+          <span
+            class="text-[10px] text-text-faint group-hover:text-text-muted"
+            style={{ "writing-mode": "vertical-lr" }}
+          >
+            Files ({props.files.length})
           </span>
+        </button>
+      }
+    >
+      <div class="w-[220px] border-l border-border flex flex-col bg-bg-surface">
+        {/* Panel Header */}
+        <div class="px-2 py-2 border-b border-border flex items-center gap-1.5">
+          <input
+            type="text"
+            value={searchQuery()}
+            onInput={(e) => setSearchQuery(e.currentTarget.value)}
+            placeholder="Filter..."
+            class="flex-1 min-w-0 px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent"
+          />
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            class="w-5 h-5 flex items-center justify-center text-text-faint hover:text-text transition-colors flex-shrink-0"
+            title="Collapse file tree"
+          >
+            <span class="text-[10px]">▶</span>
+          </button>
+        </div>
+
+        {/* AI Order indicator */}
+        <Show when={props.reviewOrder && props.reviewOrder.length > 0}>
+          <div class="px-2 py-1.5 border-b border-accent/30 bg-accent/5">
+            <div class="flex items-center gap-1.5 text-base text-accent">
+              <ListOrderIcon size={10} />
+              <span>AI review order applied</span>
+            </div>
+          </div>
         </Show>
+
+        {/* File Tree */}
+        <div class="flex-1 overflow-y-auto py-1">
+          <For each={tree()}>
+            {(node) => (
+              <TreeNodeView
+                node={node}
+                depth={0}
+                expandedFolders={effectiveExpandedFolders()}
+                onToggleFolder={toggleFolder}
+                onFileSelect={props.onFileSelect}
+                matchingPaths={matchingPaths()}
+                readFiles={props.readFiles}
+                onToggleRead={props.onToggleRead}
+              />
+            )}
+          </For>
+        </div>
+
+        {/* Footer Stats */}
+        <div class="px-3 py-1.5 border-t border-border text-xs text-text-faint flex items-center justify-between">
+          <span>
+            {props.files.length} file{props.files.length !== 1 ? "s" : ""}
+          </span>
+          <Show when={props.readFiles && props.readFiles.size > 0}>
+            <span class="text-success">
+              {props.readFiles!.size}/{props.files.length} read
+            </span>
+          </Show>
+        </div>
       </div>
-    </div>
+    </Show>
   );
 }

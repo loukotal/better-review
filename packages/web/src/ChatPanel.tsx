@@ -47,6 +47,7 @@ interface ChatPanelProps {
 }
 
 const CHAT_WIDTH_KEY = "chat-panel-width";
+const CHAT_COLLAPSED_KEY = "chat-panel-collapsed";
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 600;
@@ -71,6 +72,15 @@ export function ChatPanel(props: ChatPanelProps) {
   const [sessionId, setSessionId] = createSignal<string | null>(null);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [initializing, setInitializing] = createSignal(false);
+  const [collapsed, setCollapsed] = createSignal(
+    localStorage.getItem(CHAT_COLLAPSED_KEY) === "true",
+  );
+
+  const toggleCollapsed = () => {
+    const next = !collapsed();
+    setCollapsed(next);
+    localStorage.setItem(CHAT_COLLAPSED_KEY, String(next));
+  };
 
   // Session management state
   const [sessions, setSessions] = createSignal<StoredSession[]>([]);
@@ -650,300 +660,333 @@ export function ChatPanel(props: ChatPanelProps) {
   });
 
   return (
-    <div
-      class="border-r border-border flex flex-col bg-bg-surface relative"
-      style={{
-        width: `${width()}px`,
-        "min-width": `${MIN_WIDTH}px`,
-        "max-width": `${MAX_WIDTH}px`,
-      }}
-    >
-      {/* Resize handle */}
-      <div
-        class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-accent/50 transition-colors z-10"
-        classList={{ "bg-accent": isResizing() }}
-        onMouseDown={handleMouseDown}
-      />
-
-      {/* Header */}
-      <div class="px-3 py-2 border-b border-border">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="text-accent text-sm shrink-0">AI</span>
-            <h2 class="text-sm text-text font-medium truncate">Review Assistant</h2>
-          </div>
-          <div class="flex items-center gap-1 shrink-0">
-            <Show when={sessionId() && !chat.isStreaming()}>
-              <button
-                type="button"
-                onClick={startReview}
-                class="px-1.5 py-0.5 text-xs bg-accent text-black hover:bg-accent-bright transition-colors whitespace-nowrap"
-              >
-                {width() < 300 ? "Review" : "Start Review"}
-              </button>
-            </Show>
-            <Show when={chat.isStreaming()}>
-              <button
-                type="button"
-                onClick={handleAbort}
-                class="px-1.5 py-0.5 text-xs bg-error text-white hover:bg-error/80 transition-colors"
-              >
-                Stop
-              </button>
-            </Show>
-          </div>
-        </div>
-        {/* Session selector row - show when we have a session */}
-        <Show when={sessionId()}>
-          <div
-            class="mt-1.5 gap-1.5"
-            classList={{
-              "flex flex-col": width() < 300,
-              "flex items-center justify-between": width() >= 300,
-            }}
-          >
-            <div class="flex items-center gap-1.5 min-w-0">
-              <SessionSelector
-                sessions={sessions()}
-                activeSessionId={sessionId()}
-                currentHeadSha={currentHeadSha() || undefined}
-                disabled={chat.isStreaming() || initializing()}
-                onSelect={handleSessionSwitch}
-                onNewSession={handleNewSession}
-                onHide={handleHideSession}
-              />
-              <button
-                type="button"
-                onClick={handleNewSession}
-                disabled={chat.isStreaming() || initializing()}
-                class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                title="Create new session"
-              >
-                {width() < 300 ? "+New" : "+ New"}
-              </button>
-            </div>
-            <ModelSelector disabled={chat.isStreaming()} />
-          </div>
-        </Show>
-        {/* Model selector when no session yet */}
-        <Show when={!sessionId() && props.prUrl}>
-          <div class="flex items-center justify-end mt-1.5">
-            <ModelSelector disabled={chat.isStreaming()} />
-          </div>
-        </Show>
-      </div>
-
-      {/* Messages */}
-      <div
-        ref={(el) => {
-          _messagesContainer = el;
-        }}
-        class="flex-1 overflow-y-auto px-3 py-2 space-y-3"
-      >
-        <Show when={!props.prUrl}>
-          <div class="text-center py-8">
-            <div class="text-text-faint text-sm">Load a PR to start chatting</div>
-          </div>
-        </Show>
-
-        <Show when={props.prUrl && !initializing() && !sessionId() && sessionError()}>
-          <div class="text-center py-8">
-            <div class="text-error text-sm mb-2">{sessionError()}</div>
-            <button
-              type="button"
-              onClick={initSession}
-              class="text-sm text-accent hover:text-accent-bright"
-            >
-              Retry
-            </button>
-          </div>
-        </Show>
-
-        <Show
-          when={
-            props.prUrl &&
-            (initializing() || (sessionId() && chat.messages().length === 0 && !chat.isStreaming()))
-          }
+    <Show
+      when={!collapsed()}
+      fallback={
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          class="w-8 border-r border-border bg-bg-surface flex flex-col items-center py-2 gap-2 hover:bg-bg-elevated transition-colors group"
+          title="Expand chat panel"
         >
-          <div class="text-center py-4">
-            <Show
-              when={!initializing()}
-              fallback={
-                <div class="flex items-center justify-center gap-2 text-text-faint text-sm mb-3">
-                  <SpinnerIcon size={14} class="animate-spin" />
-                  <span>Initializing session...</span>
-                </div>
-              }
-            >
-              <div class="text-text-faint text-sm mb-3">
-                Click "Start Review" for a structured review, or ask questions about this PR
-              </div>
-            </Show>
-            <div class="flex flex-wrap gap-1.5 justify-center">
-              <For each={quickPrompts}>
-                {(qp) => (
-                  <button
-                    type="button"
-                    onClick={() => handleQuickPrompt(qp.prompt)}
-                    disabled={initializing()}
-                    class="px-2 py-1 text-sm border border-border text-text-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    classList={{
-                      "hover:border-accent hover:text-accent": !initializing(),
-                    }}
-                  >
-                    {qp.label}
-                  </button>
-                )}
-              </For>
-            </div>
-          </div>
-        </Show>
+          <span class="text-text-faint group-hover:text-text text-[10px]">▶</span>
+          <span
+            class="text-[10px] text-text-faint group-hover:text-text-muted"
+            style={{ "writing-mode": "vertical-lr" }}
+          >
+            Chat
+          </span>
+        </button>
+      }
+    >
+      <div
+        class="border-r border-border flex flex-col bg-bg-surface relative"
+        style={{
+          width: `${width()}px`,
+          "min-width": `${MIN_WIDTH}px`,
+          "max-width": `${MAX_WIDTH}px`,
+        }}
+      >
+        {/* Resize handle */}
+        <div
+          class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-accent/50 transition-colors z-10"
+          classList={{ "bg-accent": isResizing() }}
+          onMouseDown={handleMouseDown}
+        />
 
-        {/* Completed messages */}
-        <For each={chat.messages()}>
-          {(msg) => (
-            <div class={`text-sm ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
-              <div
-                class={`px-2.5 py-2 ${
-                  msg.role === "user"
-                    ? "bg-accent/10 border border-accent/20"
-                    : "bg-bg-elevated border border-border"
-                }`}
-              >
-                <div class="text-sm text-text-faint mb-1">
-                  {msg.role === "user" ? "You" : "Assistant"}
-                </div>
-
-                {/* Show tool calls for assistant messages */}
-                <Show when={msg.role === "assistant" && msg.toolCalls.length > 0}>
-                  <div class="mb-2">
-                    <For each={msg.toolCalls}>{(tool) => <ToolCallView tool={tool} />}</For>
-                  </div>
-                </Show>
-
-                <div class="text-text wrap-break-word leading-relaxed text-sm">
-                  <MessageContent role={msg.role} content={msg.content} />
-                </div>
-              </div>
-            </div>
-          )}
-        </For>
-
-        {/* Streaming message */}
-        <Show when={chat.isStreaming() || chat.streamingContent() || chat.activeTools().length > 0}>
-          <div class="mr-2">
-            <div class="px-2.5 py-2 bg-bg-elevated border border-border">
-              <div class="text-sm text-text-faint mb-1">Assistant</div>
-
-              {/* Active tool calls */}
-              <Show when={chat.activeTools().length > 0}>
-                <div class="mb-2">
-                  <For each={chat.activeTools()}>{(tool) => <ToolCallView tool={tool} />}</For>
-                </div>
-              </Show>
-
-              {/* Streaming content - render markdown with remend for incomplete blocks */}
-              <Show when={chat.streamingContent()}>
-                <div class="text-sm text-text wrap-break-word leading-relaxed">
-                  <MarkdownText content={chat.streamingContent()!} streaming={true} />
-                </div>
-              </Show>
-
-              {/* Show cursor when actively streaming with no content yet */}
-              <Show
-                when={
-                  chat.isStreaming() && !chat.streamingContent() && chat.activeTools().length === 0
-                }
-              >
-                <div class="text-text-muted text-sm">
-                  <span class="inline-block animate-pulse">Thinking...</span>
-                </div>
-              </Show>
-            </div>
-          </div>
-        </Show>
-      </div>
-
-      {/* Error display */}
-      <Show when={displayError()}>
-        <div class="px-3 py-2 bg-error/10 border-t border-error/20">
-          <div class="text-error text-sm">{displayError()}</div>
-        </div>
-      </Show>
-
-      {/* Input */}
-      <div class="border-t border-border p-2">
-        <form onSubmit={(e) => sendMessage(e, false)}>
-          <div class="flex flex-col gap-2">
-            <textarea
-              value={input()}
-              onInput={(e) => setInput(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage(e, false);
-                }
-              }}
-              placeholder={
-                sessionId()
-                  ? "Ask about this PR..."
-                  : props.prUrl
-                    ? initializing()
-                      ? "Initializing..."
-                      : sessionError()
-                        ? "Session failed - retry above"
-                        : "Connecting..."
-                    : "Load a PR first"
-              }
-              disabled={!sessionId() || chat.isStreaming()}
-              class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent resize-none disabled:opacity-50 disabled:cursor-not-allowed"
-              rows={2}
-            />
-            <div class="flex justify-between items-center">
-              <div class="flex items-center gap-2">
-                {/* Connection status */}
-                <div class="flex items-center gap-1">
-                  <div
-                    class="w-1.5 h-1.5 rounded-full"
-                    classList={{
-                      "bg-success": chat.isConnected(),
-                      "bg-warning": !!sessionId() && !chat.isConnected(),
-                      "bg-text-faint": !sessionId(),
-                    }}
-                  />
-                  <span class="text-[9px] text-text-faint">
-                    {chat.isConnected() ? "Connected" : sessionId() ? "Reconnecting" : "Offline"}
-                  </span>
-                </div>
-                {/* Quick prompts */}
-                <Show when={chat.messages().length > 0}>
-                  <div class="flex gap-1">
-                    <For each={quickPrompts}>
-                      {(qp) => (
-                        <button
-                          type="button"
-                          onClick={() => handleQuickPrompt(qp.prompt)}
-                          disabled={!sessionId() || chat.isStreaming()}
-                          class="px-1.5 py-0.5 text-[9px] border border-border text-text-faint hover:border-accent hover:text-accent transition-colors disabled:opacity-30"
-                        >
-                          {qp.label}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-              </div>
+        {/* Header */}
+        <div class="px-3 py-2 border-b border-border">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2 min-w-0">
               <button
-                type="submit"
-                disabled={!sessionId() || chat.isStreaming() || !input().trim()}
-                class="px-3 py-1 bg-accent text-black text-sm font-medium hover:bg-accent-bright disabled:opacity-30 disabled:cursor-not-allowed"
+                type="button"
+                onClick={toggleCollapsed}
+                class="text-text-faint hover:text-text transition-colors shrink-0"
+                title="Collapse chat panel"
               >
-                {chat.isStreaming() ? "..." : "Send"}
+                <span class="text-[10px]">◀</span>
+              </button>
+              <span class="text-accent text-sm shrink-0">AI</span>
+              <h2 class="text-sm text-text font-medium truncate">Review Assistant</h2>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              <Show when={sessionId() && !chat.isStreaming()}>
+                <button
+                  type="button"
+                  onClick={startReview}
+                  class="px-1.5 py-0.5 text-xs bg-accent text-black hover:bg-accent-bright transition-colors whitespace-nowrap"
+                >
+                  {width() < 300 ? "Review" : "Start Review"}
+                </button>
+              </Show>
+              <Show when={chat.isStreaming()}>
+                <button
+                  type="button"
+                  onClick={handleAbort}
+                  class="px-1.5 py-0.5 text-xs bg-error text-white hover:bg-error/80 transition-colors"
+                >
+                  Stop
+                </button>
+              </Show>
+            </div>
+          </div>
+          {/* Session selector row - show when we have a session */}
+          <Show when={sessionId()}>
+            <div
+              class="mt-1.5 gap-1.5"
+              classList={{
+                "flex flex-col": width() < 300,
+                "flex items-center justify-between": width() >= 300,
+              }}
+            >
+              <div class="flex items-center gap-1.5 min-w-0">
+                <SessionSelector
+                  sessions={sessions()}
+                  activeSessionId={sessionId()}
+                  currentHeadSha={currentHeadSha() || undefined}
+                  disabled={chat.isStreaming() || initializing()}
+                  onSelect={handleSessionSwitch}
+                  onNewSession={handleNewSession}
+                  onHide={handleHideSession}
+                />
+                <button
+                  type="button"
+                  onClick={handleNewSession}
+                  disabled={chat.isStreaming() || initializing()}
+                  class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                  title="Create new session"
+                >
+                  {width() < 300 ? "+New" : "+ New"}
+                </button>
+              </div>
+              <ModelSelector disabled={chat.isStreaming()} />
+            </div>
+          </Show>
+          {/* Model selector when no session yet */}
+          <Show when={!sessionId() && props.prUrl}>
+            <div class="flex items-center justify-end mt-1.5">
+              <ModelSelector disabled={chat.isStreaming()} />
+            </div>
+          </Show>
+        </div>
+
+        {/* Messages */}
+        <div
+          ref={(el) => {
+            _messagesContainer = el;
+          }}
+          class="flex-1 overflow-y-auto px-3 py-2 space-y-3"
+        >
+          <Show when={!props.prUrl}>
+            <div class="text-center py-8">
+              <div class="text-text-faint text-sm">Load a PR to start chatting</div>
+            </div>
+          </Show>
+
+          <Show when={props.prUrl && !initializing() && !sessionId() && sessionError()}>
+            <div class="text-center py-8">
+              <div class="text-error text-sm mb-2">{sessionError()}</div>
+              <button
+                type="button"
+                onClick={initSession}
+                class="text-sm text-accent hover:text-accent-bright"
+              >
+                Retry
               </button>
             </div>
+          </Show>
+
+          <Show
+            when={
+              props.prUrl &&
+              (initializing() ||
+                (sessionId() && chat.messages().length === 0 && !chat.isStreaming()))
+            }
+          >
+            <div class="text-center py-4">
+              <Show
+                when={!initializing()}
+                fallback={
+                  <div class="flex items-center justify-center gap-2 text-text-faint text-sm mb-3">
+                    <SpinnerIcon size={14} class="animate-spin" />
+                    <span>Initializing session...</span>
+                  </div>
+                }
+              >
+                <div class="text-text-faint text-sm mb-3">
+                  Click "Start Review" for a structured review, or ask questions about this PR
+                </div>
+              </Show>
+              <div class="flex flex-wrap gap-1.5 justify-center">
+                <For each={quickPrompts}>
+                  {(qp) => (
+                    <button
+                      type="button"
+                      onClick={() => handleQuickPrompt(qp.prompt)}
+                      disabled={initializing()}
+                      class="px-2 py-1 text-sm border border-border text-text-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      classList={{
+                        "hover:border-accent hover:text-accent": !initializing(),
+                      }}
+                    >
+                      {qp.label}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
+
+          {/* Completed messages */}
+          <For each={chat.messages()}>
+            {(msg) => (
+              <div class={`text-sm ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
+                <div
+                  class={`px-2.5 py-2 ${
+                    msg.role === "user"
+                      ? "bg-accent/10 border border-accent/20"
+                      : "bg-bg-elevated border border-border"
+                  }`}
+                >
+                  <div class="text-sm text-text-faint mb-1">
+                    {msg.role === "user" ? "You" : "Assistant"}
+                  </div>
+
+                  {/* Show tool calls for assistant messages */}
+                  <Show when={msg.role === "assistant" && msg.toolCalls.length > 0}>
+                    <div class="mb-2">
+                      <For each={msg.toolCalls}>{(tool) => <ToolCallView tool={tool} />}</For>
+                    </div>
+                  </Show>
+
+                  <div class="text-text wrap-break-word leading-relaxed text-sm">
+                    <MessageContent role={msg.role} content={msg.content} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </For>
+
+          {/* Streaming message */}
+          <Show
+            when={chat.isStreaming() || chat.streamingContent() || chat.activeTools().length > 0}
+          >
+            <div class="mr-2">
+              <div class="px-2.5 py-2 bg-bg-elevated border border-border">
+                <div class="text-sm text-text-faint mb-1">Assistant</div>
+
+                {/* Active tool calls */}
+                <Show when={chat.activeTools().length > 0}>
+                  <div class="mb-2">
+                    <For each={chat.activeTools()}>{(tool) => <ToolCallView tool={tool} />}</For>
+                  </div>
+                </Show>
+
+                {/* Streaming content - render markdown with remend for incomplete blocks */}
+                <Show when={chat.streamingContent()}>
+                  <div class="text-sm text-text wrap-break-word leading-relaxed">
+                    <MarkdownText content={chat.streamingContent()!} streaming={true} />
+                  </div>
+                </Show>
+
+                {/* Show cursor when actively streaming with no content yet */}
+                <Show
+                  when={
+                    chat.isStreaming() &&
+                    !chat.streamingContent() &&
+                    chat.activeTools().length === 0
+                  }
+                >
+                  <div class="text-text-muted text-sm">
+                    <span class="inline-block animate-pulse">Thinking...</span>
+                  </div>
+                </Show>
+              </div>
+            </div>
+          </Show>
+        </div>
+
+        {/* Error display */}
+        <Show when={displayError()}>
+          <div class="px-3 py-2 bg-error/10 border-t border-error/20">
+            <div class="text-error text-sm">{displayError()}</div>
           </div>
-        </form>
+        </Show>
+
+        {/* Input */}
+        <div class="border-t border-border p-2">
+          <form onSubmit={(e) => sendMessage(e, false)}>
+            <div class="flex flex-col gap-2">
+              <textarea
+                value={input()}
+                onInput={(e) => setInput(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage(e, false);
+                  }
+                }}
+                placeholder={
+                  sessionId()
+                    ? "Ask about this PR..."
+                    : props.prUrl
+                      ? initializing()
+                        ? "Initializing..."
+                        : sessionError()
+                          ? "Session failed - retry above"
+                          : "Connecting..."
+                      : "Load a PR first"
+                }
+                disabled={!sessionId() || chat.isStreaming()}
+                class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent resize-none disabled:opacity-50 disabled:cursor-not-allowed"
+                rows={2}
+              />
+              <div class="flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                  {/* Connection status */}
+                  <div class="flex items-center gap-1">
+                    <div
+                      class="w-1.5 h-1.5 rounded-full"
+                      classList={{
+                        "bg-success": chat.isConnected(),
+                        "bg-warning": !!sessionId() && !chat.isConnected(),
+                        "bg-text-faint": !sessionId(),
+                      }}
+                    />
+                    <span class="text-[9px] text-text-faint">
+                      {chat.isConnected() ? "Connected" : sessionId() ? "Reconnecting" : "Offline"}
+                    </span>
+                  </div>
+                  {/* Quick prompts */}
+                  <Show when={chat.messages().length > 0}>
+                    <div class="flex gap-1">
+                      <For each={quickPrompts}>
+                        {(qp) => (
+                          <button
+                            type="button"
+                            onClick={() => handleQuickPrompt(qp.prompt)}
+                            disabled={!sessionId() || chat.isStreaming()}
+                            class="px-1.5 py-0.5 text-[9px] border border-border text-text-faint hover:border-accent hover:text-accent transition-colors disabled:opacity-30"
+                          >
+                            {qp.label}
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                </div>
+                <button
+                  type="submit"
+                  disabled={!sessionId() || chat.isStreaming() || !input().trim()}
+                  class="px-3 py-1 bg-accent text-black text-sm font-medium hover:bg-accent-bright disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  {chat.isStreaming() ? "..." : "Send"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
       </div>
-    </div>
+    </Show>
   );
 }
