@@ -136,9 +136,23 @@ export const api = {
     return result;
   },
 
-  async fetchPrList(_signal?: AbortSignal): Promise<SearchedPr[]> {
+  async fetchPrList(
+    _signal?: AbortSignal,
+  ): Promise<{ prs: SearchedPr[]; fetchedAt: number | null }> {
     const result = await trpc.prs.list.query();
-    return [...(result.prs ?? [])];
+    return {
+      prs: [...(result.prs ?? [])],
+      fetchedAt: (result as { fetchedAt?: number }).fetchedAt ?? null,
+    };
+  },
+
+  /** Hard refresh — bypasses backend cache, waits for fresh GitHub data */
+  async refreshPrList(): Promise<{ prs: SearchedPr[]; fetchedAt: number | null }> {
+    const result = await trpc.prs.refresh.mutate();
+    return {
+      prs: [...(result.prs ?? [])],
+      fetchedAt: (result as { fetchedAt?: number }).fetchedAt ?? null,
+    };
   },
 
   async fetchPrCiStatus(prUrl: string, _signal?: AbortSignal): Promise<CiStatus | null> {

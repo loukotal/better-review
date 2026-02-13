@@ -7,7 +7,7 @@ import { Layer, ManagedRuntime } from "effect";
 import { EventBroadcaster } from "./event-broadcaster";
 import { GhServiceLive } from "./gh/gh";
 import { OpencodeService } from "./opencode";
-import { DiffCacheService, PrContextService } from "./state";
+import { DiffCacheService, PrContextService, PrListCacheService } from "./state";
 
 // Single shared layer with all services
 export const layers = Layer.mergeAll(
@@ -15,6 +15,7 @@ export const layers = Layer.mergeAll(
   OpencodeService.Default,
   DiffCacheService.Default,
   PrContextService.Default,
+  PrListCacheService.Default,
   EventBroadcaster.Default,
 );
 

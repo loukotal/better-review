@@ -1,4 +1,4 @@
-import { createSignal, For } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 
 import { GearIcon } from "../icons/gear-icon";
 import {

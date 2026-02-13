@@ -101,6 +101,58 @@ const PrListPage: Component = () => {
     refetchIntervalInBackground: true,
   }));
 
+  // Convenience accessor: extract the PR list from the query result
+  const prs = () => prsQuery.data?.prs ?? [];
+
+  // If the backend returned stale cached data (fetchedAt older than 30s),
+  // trigger an immediate hard refetch so fresh data arrives quickly.
+  // The backend's getAndRefresh kicks off a background refresh, so the
+  // second request should get fresh data.
+  const STALE_THRESHOLD_MS = 30 * 1000;
+  let staleRefetchDone = false;
+  createEffect(() => {
+    const data = prsQuery.data;
+    if (!data?.fetchedAt || prsQuery.isFetching || staleRefetchDone) return;
+    const age = Date.now() - data.fetchedAt;
+    if (age > STALE_THRESHOLD_MS) {
+      staleRefetchDone = true;
+      prsQuery.refetch();
+    }
+  });
+
+  // Auto-updating "last updated" display — ticks every 15s
+  const [now, setNow] = createSignal(Date.now());
+  const nowInterval = setInterval(() => setNow(Date.now()), 15_000);
+  onCleanup(() => clearInterval(nowInterval));
+
+  const lastUpdatedText = () => {
+    const fetchedAt = prsQuery.data?.fetchedAt;
+    if (!fetchedAt) return null;
+    const ageMs = now() - fetchedAt;
+    const seconds = Math.floor(ageMs / 1000);
+    if (seconds < 10) return "just now";
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ago`;
+  };
+
+  // Hard refresh: bypasses backend cache, fetches live from GitHub
+  const [hardRefreshing, setHardRefreshing] = createSignal(false);
+  const hardRefresh = async () => {
+    setHardRefreshing(true);
+    try {
+      const fresh = await api.refreshPrList();
+      // Update the query cache with the fresh data so the UI updates immediately
+      queryClient.setQueryData(queryKeys.prs.list, fresh);
+    } catch (e) {
+      console.error("Hard refresh failed:", e);
+    } finally {
+      setHardRefreshing(false);
+    }
+  };
+
   // CI statuses fetched via batch
   const [ciStatuses, setCiStatuses] = createSignal<Record<string, CiStatus | null>>({});
 
@@ -118,13 +170,13 @@ const PrListPage: Component = () => {
 
   // Get unique repos from PR list
   const uniqueRepos = () => {
-    const repos = (prsQuery.data ?? []).map((pr: SearchedPr) => pr.repository.nameWithOwner);
+    const repos = prs().map((pr: SearchedPr) => pr.repository.nameWithOwner);
     return [...new Set(repos)].sort();
   };
 
   // Filtered PR list
   const filteredPrs = () => {
-    let result = prsQuery.data ?? [];
+    let result = prs();
 
     if (showMyPrs()) {
       result = result.filter((pr: SearchedPr) => pr.isAuthor);
@@ -215,16 +267,21 @@ const PrListPage: Component = () => {
                 PRs where you're requested as a reviewer or have already reviewed
               </p>
             </div>
-            <button
-              onClick={() => prsQuery.refetch()}
-              disabled={prsQuery.isFetching}
-              class="px-3 py-1.5 text-base border border-border hover:border-text-faint transition-colors disabled:opacity-50 flex items-center gap-1.5"
-            >
-              <Show when={prsQuery.isFetching}>
-                <SpinnerIcon size={12} class="animate-spin" />
+            <div class="flex items-center gap-3 flex-shrink-0 whitespace-nowrap">
+              <Show when={lastUpdatedText()}>
+                <span class="text-sm text-text-faint">Updated {lastUpdatedText()}</span>
               </Show>
-              {prsQuery.isFetching ? "Refreshing" : "Refresh"}
-            </button>
+              <button
+                onClick={hardRefresh}
+                disabled={hardRefreshing() || prsQuery.isFetching}
+                class="px-3 py-1.5 text-base border border-border hover:border-text-faint transition-colors disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Show when={hardRefreshing() || prsQuery.isFetching}>
+                  <SpinnerIcon size={12} class="animate-spin" />
+                </Show>
+                {hardRefreshing() || prsQuery.isFetching ? "Refreshing" : "Refresh"}
+              </button>
+            </div>
           </div>
 
           {/* Filter chips */}

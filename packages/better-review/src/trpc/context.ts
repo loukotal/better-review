@@ -2,13 +2,18 @@ import type { Effect } from "effect";
 
 import type { GhService } from "../gh/gh";
 import type { OpencodeService } from "../opencode";
-import type { DiffCacheService, PrContextService } from "../state";
+import type { DiffCacheService, PrContextService, PrListCacheService } from "../state";
 
 // Re-export the shared runtime for use in tRPC procedures
 export { runtime } from "../runtime";
 
 // Type representing all services provided by the runtime
-export type RuntimeContext = GhService | OpencodeService | DiffCacheService | PrContextService;
+export type RuntimeContext =
+  | GhService
+  | OpencodeService
+  | DiffCacheService
+  | PrContextService
+  | PrListCacheService;
 
 // Context type for tRPC procedures
 export interface TRPCContext {

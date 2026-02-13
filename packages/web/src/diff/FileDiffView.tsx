@@ -315,6 +315,8 @@ export function FileDiffView(props: FileDiffViewProps) {
   // Track whether full file content has been loaded for expanding unchanged lines
   let fileContentLoaded = false;
   let fileContentLoading = false;
+  // Track loading state per hunk separator element so we can show spinners
+  const loadingHunkSeparators = new Set<HTMLElement>();
 
   // Store the enriched file diff (with oldLines/newLines populated)
   let enrichedFile: FileDiffMetadata | null = null;
@@ -360,10 +362,46 @@ export function FileDiffView(props: FileDiffViewProps) {
   /**
    * Handle expand click from a custom hunk separator.
    * Lazily loads file content on first expand, then delegates to the FileDiff instance.
+   * Shows a loading spinner on the separator element while fetching.
    */
-  const handleExpandClick = async (hunkIndex: number, direction: ExpansionDirections) => {
-    const loaded = await ensureFileContent();
-    if (!loaded || !instance) return;
+  const handleExpandClick = async (
+    hunkIndex: number,
+    direction: ExpansionDirections,
+    separatorEl?: HTMLElement,
+  ) => {
+    // Show loading state on the separator
+    if (separatorEl) {
+      loadingHunkSeparators.add(separatorEl);
+      separatorEl.classList.add("hunk-loading");
+      // Replace content with spinner
+      const originalContent = separatorEl.innerHTML;
+      separatorEl.innerHTML =
+        '<span class="hunk-spinner" style="display:inline-block;width:12px;height:12px;border:1.5px solid currentColor;border-top-color:transparent;border-radius:50%;animation:hunk-spin 0.6s linear infinite"></span><span style="margin-left:4px">Loading…</span>';
+      separatorEl.style.pointerEvents = "none";
+
+      // Ensure spinner animation is available
+      if (!document.getElementById("hunk-spin-style")) {
+        const style = document.createElement("style");
+        style.id = "hunk-spin-style";
+        style.textContent = "@keyframes hunk-spin { to { transform: rotate(360deg) } }";
+        document.head.appendChild(style);
+      }
+
+      const loaded = await ensureFileContent();
+      if (!loaded || !instance) {
+        // Restore original content on failure
+        separatorEl.innerHTML = originalContent;
+        separatorEl.style.pointerEvents = "";
+        separatorEl.classList.remove("hunk-loading");
+        loadingHunkSeparators.delete(separatorEl);
+        return;
+      }
+
+      loadingHunkSeparators.delete(separatorEl);
+    } else {
+      const loaded = await ensureFileContent();
+      if (!loaded || !instance) return;
+    }
 
     // Step 1: Re-render with the enriched file diff (which has oldLines/newLines).
     // The enriched file is a new object reference, so the renderer's internal cache
@@ -417,7 +455,7 @@ export function FileDiffView(props: FileDiffViewProps) {
         upBtn.title = "Expand up";
         upBtn.onclick = (e) => {
           e.stopPropagation();
-          handleExpandClick(hunk.hunkIndex, "up");
+          handleExpandClick(hunk.hunkIndex, "up", container);
         };
 
         const label = document.createElement("span");
@@ -431,7 +469,7 @@ export function FileDiffView(props: FileDiffViewProps) {
         downBtn.title = "Expand down";
         downBtn.onclick = (e) => {
           e.stopPropagation();
-          handleExpandClick(hunk.hunkIndex, "down");
+          handleExpandClick(hunk.hunkIndex, "down", container);
         };
 
         container.appendChild(upBtn);
@@ -446,7 +484,7 @@ export function FileDiffView(props: FileDiffViewProps) {
 
       // Click on the whole separator expands in both directions
       container.onclick = () => {
-        handleExpandClick(hunk.hunkIndex, "both");
+        handleExpandClick(hunk.hunkIndex, "both", container);
       };
     }
 

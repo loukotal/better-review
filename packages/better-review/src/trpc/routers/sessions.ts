@@ -89,7 +89,7 @@ export const sessionsRouter = router({
           const prData = yield* prContext.addSession(input.prUrl, session.data.id, currentHeadSha);
 
           // Inject initial context
-          const contextMessage = buildReviewContext(input);
+          const contextMessage = yield* Effect.tryPromise(() => buildReviewContext(input));
           yield* Effect.tryPromise(() =>
             opencode.client.session.prompt({
               sessionID: session.data.id,

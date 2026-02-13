@@ -7,7 +7,7 @@ import { filterDiffByLineRange } from "./diff";
 import { GhService } from "./gh/gh";
 import { getErrorMessage } from "./response";
 import { runtime } from "./runtime";
-import { DiffCacheService, PrContextService } from "./state";
+import { DiffCacheService, PrContextService, PrListCacheService } from "./state";
 import { createContext } from "./trpc/context";
 import { appRouter } from "./trpc/routers";
 
@@ -276,6 +276,13 @@ const main = Effect.gen(function* () {
   const gh = yield* GhService;
   const diffCache = yield* DiffCacheService;
   const prContext = yield* PrContextService;
+  const prListCache = yield* PrListCacheService;
+
+  // Start the PR list background refresh loop (fetches every 15 min)
+  yield* prListCache.backgroundLoop.pipe(
+    Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
+    Effect.forkScoped,
+  );
 
   const routes = createRoutes({ gh, diffCache, prContext });
 
