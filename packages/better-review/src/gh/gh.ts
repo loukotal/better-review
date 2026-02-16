@@ -185,6 +185,7 @@ const PrDataResponseSchema = Schema.Struct({
   merged: Schema.Boolean,
   html_url: Schema.String,
   head_ref: Schema.String,
+  head_sha: Schema.String,
 });
 
 // Schema for raw commit from listCommits API
@@ -370,7 +371,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "api",
         `repos/${owner}/${repo}/pulls/${number}`,
         "--jq",
-        "{ state, draft, mergeable, title, body, author: .user.login, merged: .merged, html_url, head_ref: .head.ref }",
+        "{ state, draft, mergeable, title, body, author: .user.login, merged: .merged, html_url, head_ref: .head.ref, head_sha: .head.sha }",
       );
       const prResult = (yield* Command.string(prCmd)).trim();
       if (!prResult) {
@@ -378,15 +379,11 @@ export const GhServiceLive = Layer.succeed(GhService, {
       }
       const prData = yield* parseJsonPreserve(PrDataResponseSchema)(prResult);
 
-      // Get check runs for the PR's head commit
+      // Get check runs for the PR's head commit (using head_sha from PR data above)
       const checksCmd = Command.make(
         "gh",
         "api",
-        `repos/${owner}/${repo}/commits/${yield* Effect.tryPromise(() =>
-          Bun.$`gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha'`
-            .text()
-            .then((s) => s.trim()),
-        )}/check-runs`,
+        `repos/${owner}/${repo}/commits/${prData.head_sha}/check-runs`,
         "--jq",
         ".check_runs | map({ name, status, conclusion })",
       );

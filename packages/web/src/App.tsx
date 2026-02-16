@@ -30,6 +30,7 @@ import {
   DEFAULT_DIFF_SETTINGS,
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
+import { SpinnerIcon } from "./icons/spinner-icon";
 import {
   queryKeys,
   api,
@@ -923,13 +924,19 @@ const AppContent: Component = () => {
         <Show
           when={diff()}
           fallback={
-            <Show when={!loading()}>
-              <div class="flex-1 flex items-center justify-center">
-                <div class="text-center">
+            <div class="flex-1 flex items-center justify-center">
+              <Show
+                when={loading()}
+                fallback={
                   <div class="text-text-faint text-base">Enter a GitHub PR URL to start</div>
+                }
+              >
+                <div class="flex items-center gap-3">
+                  <SpinnerIcon class="animate-spin text-accent" size={20} />
+                  <span class="text-text-faint text-base">Loading PR...</span>
                 </div>
-              </div>
-            </Show>
+              </Show>
+            </div>
           }
         >
           {/* Diff viewer (center) */}
