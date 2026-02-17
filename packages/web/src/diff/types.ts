@@ -110,7 +110,13 @@ import type { Annotation } from "../utils/parseReviewTokens";
 
 export type AnnotationMetadata =
   | { type: "thread"; rootComment: PRComment; replies: PRComment[] }
-  | { type: "pending"; startLine: number; endLine: number; side: "LEFT" | "RIGHT" }
+  | {
+      type: "pending";
+      startLine: number;
+      endLine: number;
+      side: "LEFT" | "RIGHT";
+      initialBody?: string;
+    }
   | {
       type: "pending-reply";
       rootCommentId: number;

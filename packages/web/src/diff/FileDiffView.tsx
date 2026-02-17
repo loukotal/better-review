@@ -115,6 +115,7 @@ export function FileDiffView(props: FileDiffViewProps) {
     startLine: number;
     endLine: number;
     side: "LEFT" | "RIGHT";
+    initialBody?: string;
   } | null>(null);
 
   // Collapse file when marked as read, expand when marked as unread
@@ -195,6 +196,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           startLine: pending.startLine,
           endLine: pending.endLine,
           side: pending.side,
+          initialBody: pending.initialBody,
         },
       });
     }
@@ -550,6 +552,16 @@ export function FileDiffView(props: FileDiffViewProps) {
           const dispose = renderAiAnnotation(div, {
             annotation: metadata.annotation,
             onDismiss: props.onDismissAiAnnotation,
+            onCreateComment: (annotation) => {
+              const body = `[AI]: ${annotation.message}`;
+              setPendingComment({
+                startLine: annotation.line,
+                endLine: annotation.line,
+                side: "RIGHT",
+                initialBody: body,
+              });
+              setTimeout(rerender, 0);
+            },
           });
           disposeList.push(dispose);
         } else if (metadata.type === "pending") {
@@ -559,6 +571,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           const dispose = renderPendingCommentForm(div, {
             startLine: metadata.startLine,
             endLine: metadata.endLine,
+            initialBody: metadata.initialBody,
             onSubmit: async (body) => {
               await props.onAddComment(metadata.endLine, metadata.side, body);
               setPendingComment(null);

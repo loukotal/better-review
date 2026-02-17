@@ -6,6 +6,7 @@ import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens"
 export interface AiAnnotationInlineProps {
   annotation: Annotation;
   onDismiss?: (annotationId: string) => void;
+  onCreateComment?: (annotation: Annotation) => void;
 }
 
 const severityConfig: Record<
@@ -54,6 +55,14 @@ function CheckIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
       <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
+    </svg>
+  );
+}
+
+function CommentIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l-2.573 2.573A1.458 1.458 0 0 1 4 13.543V12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h4.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
     </svg>
   );
 }
@@ -109,6 +118,10 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
     props.onDismiss?.(props.annotation.id);
   };
 
+  const handleCreateComment = () => {
+    props.onCreateComment?.(props.annotation);
+  };
+
   return (
     <div
       class={`
@@ -150,6 +163,19 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
             {copied() ? <CheckIcon /> : <CopyIcon />}
             <span>{copied() ? "Copied" : "Copy"}</span>
           </button>
+          <Show when={props.onCreateComment}>
+            <button
+              type="button"
+              onClick={handleCreateComment}
+              class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 
+                     text-text-faint hover:text-accent
+                     transition-colors duration-150"
+              title="Create PR comment from this suggestion"
+            >
+              <CommentIcon />
+              <span>Comment</span>
+            </button>
+          </Show>
           <Show when={props.onDismiss}>
             <button
               type="button"

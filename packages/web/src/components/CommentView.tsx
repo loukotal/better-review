@@ -495,6 +495,7 @@ export function renderCommentThread(container: HTMLElement, props: CommentThread
 export interface PendingCommentFormProps {
   startLine: number;
   endLine: number;
+  initialBody?: string;
   onSubmit: (body: string) => Promise<void>;
   onCancel: () => void;
 }
@@ -503,7 +504,7 @@ export interface PendingCommentFormProps {
  * Form for adding a new comment on a line selection.
  */
 export const PendingCommentForm: Component<PendingCommentFormProps> = (props) => {
-  const [body, setBody] = createSignal("");
+  const [body, setBody] = createSignal(props.initialBody ?? "");
   const [isSubmitting, setIsSubmitting] = createSignal(false);
 
   const lineLabel = () =>
