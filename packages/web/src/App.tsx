@@ -914,6 +914,7 @@ const AppContent: Component = () => {
             repoName={prInfo()?.repo ?? null}
             files={fileNames()}
             theme={settings().theme}
+            aiAnnotations={aiAnnotations()}
             onScrollToFile={scrollToFile}
             onApplyReviewOrder={applyReviewOrder}
             onAnnotationsReceived={addNewAiAnnotations}
