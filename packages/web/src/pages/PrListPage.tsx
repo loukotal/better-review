@@ -337,9 +337,12 @@ const PrListPage: Component = () => {
           </div>
 
           {/* Loading state */}
-          <Show when={prsQuery.isPending}>
+          <Show when={prsQuery.isPending || (prsQuery.isFetching && filteredPrs().length === 0)}>
             <div class="text-center py-12">
-              <div class="text-text-faint text-base">Loading PRs...</div>
+              <div class="flex items-center justify-center gap-2 text-text-faint text-base">
+                <SpinnerIcon size={14} class="animate-spin" />
+                Loading PRs...
+              </div>
             </div>
           </Show>
 
@@ -351,7 +354,13 @@ const PrListPage: Component = () => {
           </Show>
 
           {/* Empty state */}
-          <Show when={prsQuery.isSuccess && filteredPrs().length === 0}>
+          <Show
+            when={
+              prsQuery.isSuccess &&
+              filteredPrs().length === 0 &&
+              !(prsQuery.isPending || prsQuery.isFetching)
+            }
+          >
             <div class="text-center py-12 border border-border">
               <div class="text-text-faint text-base">No PRs match your filters</div>
               <p class="text-base text-text-faint mt-2">Try adjusting your filter settings</p>
