@@ -67,8 +67,14 @@ export type StreamEvent =
     }
   | { type: "error"; sessionId: string; code: string; message: string }
   | { type: "done"; sessionId: string; messageId: string }
-  | { type: "connected" }
-  | { type: "ping" };
+  | { type: "connected"; serverTime: number }
+  | {
+      type: "ping";
+      serverTime: number;
+      sequence: number;
+      upstream: "Disconnected" | "Connecting" | "Connected" | "Reconnecting" | "Error";
+      subscribers: number;
+    };
 
 // =============================================================================
 // Delta Helpers
@@ -76,6 +82,7 @@ export type StreamEvent =
 
 const lastPartText = new Map<string, string>();
 const messageRoles = new Map<string, "user" | "assistant">();
+const partKinds = new Map<string, string>();
 
 function getDeltaFromFullText(partId: string, text: string): string | null {
   const previous = lastPartText.get(partId) ?? "";
@@ -181,11 +188,50 @@ function extractSessionId(event: OpenCodeEvent): string | undefined {
  * Events now include sessionId so frontend can filter by session.
  */
 export function transformEvent(event: OpenCodeEvent): StreamEvent | null {
+  if ((event as { type: string }).type === "message.part.delta") {
+    const deltaEvent = event as unknown as {
+      properties: {
+        sessionID: string;
+        messageID: string;
+        partID: string;
+        field: string;
+        delta: string;
+      };
+    };
+    const { sessionID, messageID, partID, field, delta } = deltaEvent.properties;
+    if (!sessionID || !delta) return null;
+    if (field !== "text") return null;
+
+    const role = messageRoles.get(messageID);
+    if (role === "user") return null;
+    if (role !== "assistant" && role !== undefined) return null;
+
+    const partKind = partKinds.get(partID);
+    if (partKind === "reasoning") {
+      return {
+        type: "reasoning",
+        sessionId: sessionID,
+        delta,
+        messageId: messageID,
+        partId: partID,
+      };
+    }
+
+    return {
+      type: "text",
+      sessionId: sessionID,
+      delta,
+      messageId: messageID,
+      partId: partID,
+    };
+  }
+
   const sessionId = extractSessionId(event);
 
   switch (event.type) {
     case "message.part.updated": {
       const { part, delta } = event.properties;
+      partKinds.set(part.id, part.type);
 
       // Skip events without sessionId (shouldn't happen for message events)
       if (!sessionId) return null;
@@ -331,12 +377,13 @@ export function transformEvent(event: OpenCodeEvent): StreamEvent | null {
       const { partID } = event.properties;
       if (typeof partID === "string") {
         lastPartText.delete(partID);
+        partKinds.delete(partID);
       }
       return null;
     }
 
     case "server.connected": {
-      return { type: "connected" };
+      return { type: "connected", serverTime: Date.now() };
     }
 
     default:

@@ -49,8 +49,14 @@ export type StreamEvent =
   | { type: "status"; sessionId: string; status: "busy" | "idle" | "retry"; message?: string }
   | { type: "error"; sessionId: string; code: string; message: string }
   | { type: "done"; sessionId: string; messageId: string }
-  | { type: "connected" }
-  | { type: "ping" };
+  | { type: "connected"; serverTime: number }
+  | {
+      type: "ping";
+      serverTime: number;
+      sequence: number;
+      upstream: "Disconnected" | "Connecting" | "Connected" | "Reconnecting" | "Error";
+      subscribers: number;
+    };
 
 export interface ToolCall {
   id: string;
@@ -86,6 +92,14 @@ export interface UseStreamingChatOptions {
 export function useStreamingChat(options: UseStreamingChatOptions) {
   const [messages, setMessages] = createSignal<StreamingMessage[]>([]);
   const [isConnected, setIsConnected] = createSignal(false);
+  const [connectionStatus, setConnectionStatus] = createSignal<
+    "offline" | "connecting" | "connected" | "degraded" | "reconnecting"
+  >("connecting");
+  const [lastHeartbeatAt, setLastHeartbeatAt] = createSignal<number | null>(null);
+  const [upstreamStatus, setUpstreamStatus] = createSignal<
+    "Disconnected" | "Connecting" | "Connected" | "Reconnecting" | "Error" | null
+  >(null);
+  const [subscriberCount, setSubscriberCount] = createSignal<number>(0);
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [streamingContent, setStreamingContent] = createSignal("");
@@ -99,12 +113,40 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   let reconnectAttempt = 0;
   let isDisposed = false;
   let isConnecting = false;
+  let heartbeatWatcher: ReturnType<typeof setInterval> | null = null;
+  let awaitingAssistantResponse = false;
 
   const clearReconnect = () => {
     if (reconnectTimeout) {
       clearTimeout(reconnectTimeout);
       reconnectTimeout = null;
     }
+  };
+
+  const clearHeartbeatWatcher = () => {
+    if (heartbeatWatcher) {
+      clearInterval(heartbeatWatcher);
+      heartbeatWatcher = null;
+    }
+  };
+
+  const startHeartbeatWatcher = () => {
+    if (heartbeatWatcher) return;
+    heartbeatWatcher = setInterval(() => {
+      const last = lastHeartbeatAt();
+      if (!last) return;
+
+      const elapsedMs = Date.now() - last;
+      if (elapsedMs > 60000) {
+        console.warn("[useStreamingChat] No heartbeat for 60s, reconnecting");
+        setIsConnected(false);
+        setConnectionStatus("reconnecting");
+        cleanupSubscription();
+        scheduleReconnect("heartbeat-timeout");
+      } else if (elapsedMs > 30000 && connectionStatus() === "connected") {
+        setConnectionStatus("degraded");
+      }
+    }, 1000);
   };
 
   const scheduleReconnect = (reason: string) => {
@@ -133,6 +175,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
     console.log("[useStreamingChat] Connecting to event stream");
     isConnecting = true;
+    setConnectionStatus(reconnectAttempt > 0 ? "reconnecting" : "connecting");
 
     const subscription = trpc.opencode.events.subscribe(undefined, {
       onStarted: () => {
@@ -144,6 +187,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       onError: (err) => {
         console.error("[useStreamingChat] Subscription error:", err);
         setIsConnected(false);
+        setConnectionStatus("reconnecting");
         setError("Connection lost");
         options.onError?.("Connection lost");
         cleanupSubscription();
@@ -152,6 +196,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       onComplete: () => {
         console.log("[useStreamingChat] Subscription completed");
         setIsConnected(false);
+        setConnectionStatus("reconnecting");
         setError("Connection closed");
         options.onError?.("Connection closed");
         cleanupSubscription();
@@ -173,6 +218,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   onCleanup(() => {
     isDisposed = true;
     clearReconnect();
+    clearHeartbeatWatcher();
     if (unsubscribe) {
       console.log("[useStreamingChat] Disconnecting from event stream");
       unsubscribe();
@@ -192,6 +238,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setIsStreaming(false);
     });
     allowAssistantParts = false;
+    awaitingAssistantResponse = false;
   });
 
   function handleEvent(event: StreamEvent) {
@@ -199,9 +246,20 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     if (event.type === "connected" || event.type === "ping") {
       console.log("[useStreamingChat] Connected to event stream");
       setIsConnected(true);
+      setConnectionStatus("connected");
       setError(null);
+      setLastHeartbeatAt(Date.now());
       reconnectAttempt = 0;
       clearReconnect();
+      startHeartbeatWatcher();
+
+      if (event.type === "ping") {
+        setUpstreamStatus(event.upstream);
+        setSubscriberCount(event.subscribers);
+        if (event.upstream === "Reconnecting" || event.upstream === "Error") {
+          setConnectionStatus("degraded");
+        }
+      }
       return;
     }
 
@@ -216,6 +274,10 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
     switch (event.type) {
       case "text":
+        if (!allowAssistantParts && awaitingAssistantResponse) {
+          allowAssistantParts = true;
+          setIsStreaming(true);
+        }
         if (!allowAssistantParts) return;
         // Append streaming text
         setStreamingContent((prev) => prev + event.delta);
@@ -225,12 +287,20 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "reasoning":
+        if (!allowAssistantParts && awaitingAssistantResponse) {
+          allowAssistantParts = true;
+          setIsStreaming(true);
+        }
         if (!allowAssistantParts) return;
         // Append reasoning text
         setStreamingReasoning((prev) => prev + event.delta);
         break;
 
       case "tool-start":
+        if (!allowAssistantParts && awaitingAssistantResponse) {
+          allowAssistantParts = true;
+          setIsStreaming(true);
+        }
         if (!allowAssistantParts) return;
         setActiveTools((prev) => [
           ...prev,
@@ -245,6 +315,10 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-running":
+        if (!allowAssistantParts && awaitingAssistantResponse) {
+          allowAssistantParts = true;
+          setIsStreaming(true);
+        }
         if (!allowAssistantParts) return;
         setActiveTools((prev) =>
           prev.map((t) =>
@@ -256,6 +330,10 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-done":
+        if (!allowAssistantParts && awaitingAssistantResponse) {
+          allowAssistantParts = true;
+          setIsStreaming(true);
+        }
         if (!allowAssistantParts) return;
         setActiveTools((prev) =>
           prev.map((t) =>
@@ -272,6 +350,10 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-error":
+        if (!allowAssistantParts && awaitingAssistantResponse) {
+          allowAssistantParts = true;
+          setIsStreaming(true);
+        }
         if (!allowAssistantParts) return;
         setActiveTools((prev) =>
           prev.map((t) =>
@@ -284,14 +366,17 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         if (event.status === "busy") {
           setIsStreaming(true);
           allowAssistantParts = true;
+          awaitingAssistantResponse = true;
         } else if (event.status === "idle") {
           allowAssistantParts = false;
+          awaitingAssistantResponse = false;
           finalizeMessage();
         }
         break;
 
       case "done":
         allowAssistantParts = false;
+        awaitingAssistantResponse = false;
         // Message completed - finalize it
         finalizeMessage();
         break;
@@ -301,6 +386,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         options.onError?.(event.message);
         setIsStreaming(false);
         allowAssistantParts = false;
+        awaitingAssistantResponse = false;
         break;
     }
   }
@@ -388,6 +474,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     setMessages((prev) => [...prev, userMessage]);
     setIsStreaming(true);
     setError(null);
+    awaitingAssistantResponse = true;
 
     try {
       allowAssistantParts = false;
@@ -404,6 +491,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       const errorMsg = err instanceof Error ? err.message : "Failed to send message";
       setError(errorMsg);
       setIsStreaming(false);
+      awaitingAssistantResponse = false;
       options.onError?.(errorMsg);
       return false;
     }
@@ -427,6 +515,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     setActiveTools([]);
     setCurrentMessageId(null);
     setError(null);
+    awaitingAssistantResponse = false;
   }
 
   /**
@@ -441,12 +530,17 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setCurrentMessageId(null);
       setError(null);
     });
+    awaitingAssistantResponse = false;
   }
 
   return {
     // State
     messages,
     isConnected,
+    connectionStatus,
+    lastHeartbeatAt,
+    upstreamStatus,
+    subscriberCount,
     isStreaming,
     error,
     streamingContent,

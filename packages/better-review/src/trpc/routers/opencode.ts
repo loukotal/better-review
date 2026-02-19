@@ -258,20 +258,25 @@ export const opencodeRouter = router({
     // Get the runtime and subscribe to events
     const services = await runtime.services();
 
-    const stream = await runtime.runPromise(
+    const { stream, getState, getSubscriberCount } = await runtime.runPromise(
       Effect.gen(function* () {
         const broadcaster = yield* EventBroadcaster;
-        return yield* broadcaster.subscribe();
+        return {
+          stream: yield* broadcaster.subscribe(),
+          getState: broadcaster.getState,
+          getSubscriberCount: broadcaster.getSubscriberCount,
+        };
       }),
     );
 
     console.log(`[SSE] Subscription established`);
 
-    yield { type: "connected" };
+    yield { type: "connected", serverTime: Date.now() };
 
     const pingIntervalMs = 15000;
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     let nextPingAt = Date.now() + pingIntervalMs;
+    let pingSequence = 0;
 
     // Convert Effect Stream to async iterable using our runtime
     // This properly handles cleanup when the iterator is returned
@@ -289,7 +294,18 @@ export const opencodeRouter = router({
         ]);
 
         if ("__ping" in result) {
-          yield { type: "ping" };
+          const [state, subscribers] = await Promise.all([
+            runtime.runPromise(getState()),
+            runtime.runPromise(getSubscriberCount()),
+          ]);
+          pingSequence += 1;
+          yield {
+            type: "ping",
+            serverTime: Date.now(),
+            sequence: pingSequence,
+            upstream: state._tag,
+            subscribers,
+          };
           nextPingAt = Date.now() + pingIntervalMs;
           continue;
         }

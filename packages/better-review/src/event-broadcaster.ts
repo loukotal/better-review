@@ -161,7 +161,18 @@ const makeEventBroadcaster = Effect.gen(function* () {
     yield* Effect.log("[EventBroadcaster] Starting connection...");
 
     // Fork the connection - it runs until interrupted
-    const fiber = yield* Effect.forkDetach(connectionWithRetry);
+    const fiber = yield* Effect.forkDetach(
+      connectionWithRetry.pipe(
+        Effect.ensuring(
+          Effect.gen(function* () {
+            const current = yield* Ref.get(connectionFiberRef);
+            if (current) {
+              yield* Ref.set(connectionFiberRef, null);
+            }
+          }),
+        ),
+      ),
+    );
     yield* Ref.set(connectionFiberRef, fiber);
   });
 

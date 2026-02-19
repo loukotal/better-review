@@ -1003,14 +1003,30 @@ export function ChatPanel(props: ChatPanelProps) {
                   <div
                     class="w-1.5 h-1.5 rounded-full"
                     classList={{
-                      "bg-success": chat.isConnected(),
-                      "bg-warning": !!sessionId() && !chat.isConnected(),
+                      "bg-success": chat.connectionStatus() === "connected",
+                      "bg-warning":
+                        chat.connectionStatus() === "degraded" ||
+                        chat.connectionStatus() === "reconnecting",
+                      "bg-accent": chat.connectionStatus() === "connecting",
                       "bg-text-faint": !sessionId(),
                     }}
                   />
                   <span class="text-[9px] text-text-faint">
-                    {chat.isConnected() ? "Connected" : sessionId() ? "Reconnecting" : "Offline"}
+                    {(() => {
+                      if (!sessionId()) return "Offline";
+                      const status = chat.connectionStatus();
+                      if (status === "connected") return "Connected";
+                      if (status === "degraded") return "Degraded";
+                      if (status === "reconnecting") return "Reconnecting";
+                      if (status === "connecting") return "Connecting";
+                      return "Offline";
+                    })()}
                   </span>
+                  <Show when={chat.upstreamStatus()}>
+                    <span class="text-[9px] text-text-faint/80">
+                      upstream: {chat.upstreamStatus()}
+                    </span>
+                  </Show>
                 </div>
                 {/* Quick prompts */}
                 <Show when={chat.messages().length > 0}>
