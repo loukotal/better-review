@@ -126,7 +126,7 @@ export const sessionsRouter = router({
           const prData = yield* prContext.hideSession(input.prUrl, input.sessionId);
           return {
             success: true,
-            sessions: prData.sessions.filter((s) => !s.hidden),
+            sessions: prData.sessions.filter((s: { hidden?: boolean }) => !s.hidden),
             activeSessionId: prData.activeSessionId,
           };
         }),

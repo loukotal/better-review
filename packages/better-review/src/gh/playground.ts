@@ -1,4 +1,3 @@
-import { BunRuntime } from "@effect/platform-bun";
 import { Effect } from "effect";
 
 import { GhService, GhServiceLive } from "./gh";
@@ -9,4 +8,4 @@ const program = Effect.gen(function* () {
   console.log({ diff });
 });
 
-BunRuntime.runMain(program.pipe(Effect.provide(GhServiceLive)));
+await Effect.runPromise(program.pipe(Effect.provide(GhServiceLive)));

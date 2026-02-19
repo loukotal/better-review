@@ -1,6 +1,4 @@
-import { Command } from "@effect/platform";
-import { BunContext } from "@effect/platform-bun";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Data, Effect, Layer, Schema, ServiceMap } from "effect";
 
 import type {
   PrInfo,
@@ -36,10 +34,10 @@ export type {
 // Schemas (for runtime validation - types come from @better-review/shared)
 // ============================================================================
 
-const parseJsonPreserve = <A, I, R>(schema: Schema.Schema<A, I, R>) =>
-  Schema.decodeUnknown(Schema.parseJson(schema), {
-    onExcessProperty: "preserve",
-  });
+const parseJsonPreserve =
+  <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
+  (json: string): Effect.Effect<Schema.Schema.Type<S>> =>
+    Effect.sync(() => Schema.decodeUnknownSync(schema)(JSON.parse(json)));
 
 const UserSchema = Schema.Struct({
   login: Schema.String,
@@ -53,7 +51,7 @@ const PRCommentSchema = Schema.Struct({
   path: Schema.String,
   line: Schema.NullOr(Schema.Number),
   original_line: Schema.NullOr(Schema.Number),
-  side: Schema.Literal("LEFT", "RIGHT"),
+  side: Schema.Literals(["LEFT", "RIGHT"]),
   body: Schema.String,
   html_url: Schema.String,
   user: UserSchema,
@@ -105,13 +103,13 @@ export interface ApprovePrParams {
   body?: string;
 }
 
-const PrStateSchema = Schema.Literal("open", "closed", "merged");
+const PrStateSchema = Schema.Literals(["open", "closed", "merged"]);
 
 const CheckRunSchema = Schema.Struct({
   name: Schema.String,
-  status: Schema.Literal("queued", "in_progress", "completed", "pending"),
+  status: Schema.Literals(["queued", "in_progress", "completed", "pending"]),
   conclusion: Schema.NullOr(
-    Schema.Literal(
+    Schema.Literals([
       "success",
       "failure",
       "neutral",
@@ -119,7 +117,7 @@ const CheckRunSchema = Schema.Struct({
       "skipped",
       "timed_out",
       "action_required",
-    ),
+    ]),
   ),
 });
 
@@ -136,7 +134,7 @@ const PrStatusSchema = Schema.Struct({
 });
 
 const ReviewStateSchema = Schema.NullOr(
-  Schema.Literal("PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"),
+  Schema.Literals(["PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]),
 );
 
 const RepositorySchema = Schema.Struct({
@@ -151,7 +149,7 @@ const AuthorSchema = Schema.Struct({
 const CiStatusSchema = Schema.Struct({
   passed: Schema.Number,
   total: Schema.Number,
-  state: Schema.Literal("SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"),
+  state: Schema.Literals(["SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"]),
 });
 
 const SearchedPrSchema = Schema.Struct({
@@ -250,7 +248,7 @@ export interface AddIssueCommentParams {
   body: string;
 }
 
-/** GhCli methods return Effect<A, GhError, never> - no requirements after construction */
+/** GhCli methods */
 interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError, never>;
   getPrInfo: (urlOrNumber: string) => Effect.Effect<PrInfo, GhError, never>;
@@ -297,7 +295,27 @@ interface GhCli {
   }) => Effect.Effect<string | null, GhError, never>;
 }
 
-export class GhService extends Context.Tag("GHService")<GhService, GhCli>() {}
+export type GhServiceApi = GhCli;
+
+const runGh = (...args: string[]) =>
+  Effect.tryPromise(async () => {
+    const process = Bun.spawn(["gh", ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+      process.exited,
+    ]);
+
+    if (code !== 0) {
+      throw new Error(stderr.trim() || stdout.trim() || `gh exited with code ${code}`);
+    }
+
+    return stdout;
+  });
 
 // Validate it's a PR number or valid PR URL (not an issue URL)
 const validatePrUrl = (url: string): Effect.Effect<void, GhError> => {
@@ -328,22 +346,20 @@ const getPrInfo = (urlOrNumber: string) =>
     }
 
     // Otherwise, use gh to get the repo info from the current directory
-    const repoCmd = Command.make(
-      "gh",
+    const repoInfo = (yield* runGh(
       "repo",
       "view",
       "--json",
       "owner,name",
       "--jq",
       '.owner.login + "/" + .name',
-    );
-    const repoInfo = (yield* Command.string(repoCmd)).trim();
+    )).trim();
     const [owner, repo] = repoInfo.split("/");
 
     return { owner, repo, number: urlOrNumber };
-  }).pipe(Effect.provide(BunContext.layer));
+  });
 
-export const GhServiceLive = Layer.succeed(GhService, {
+const ghCli: GhCli = {
   getPrInfo: (urlOrNumber: string) =>
     getPrInfo(urlOrNumber).pipe(
       Effect.mapError((cause) => new GhError({ command: "getPrInfo", cause })),
@@ -353,12 +369,10 @@ export const GhServiceLive = Layer.succeed(GhService, {
   getDiff: (urlOrNumber: string) =>
     Effect.gen(function* () {
       yield* validatePrUrl(urlOrNumber);
-      const cmd = Command.make("gh", "pr", "diff", urlOrNumber);
-      return yield* Command.string(cmd);
+      return yield* runGh("pr", "diff", urlOrNumber);
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getDiff", cause })),
       Effect.withSpan("GhService.getDiff", { attributes: { urlOrNumber } }),
-      Effect.provide(BunContext.layer),
     ),
 
   getPrStatus: (urlOrNumber: string) =>
@@ -366,36 +380,30 @@ export const GhServiceLive = Layer.succeed(GhService, {
       const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
 
       // Get PR details
-      const prCmd = Command.make(
-        "gh",
+      const prResult = (yield* runGh(
         "api",
         `repos/${owner}/${repo}/pulls/${number}`,
         "--jq",
         "{ state, draft, mergeable, title, body, author: .user.login, merged: .merged, html_url, head_ref: .head.ref, head_sha: .head.sha }",
-      );
-      const prResult = (yield* Command.string(prCmd)).trim();
+      )).trim();
       if (!prResult) {
         return yield* Effect.fail(new GhError({ command: "getPrStatus", cause: "PR not found" }));
       }
       const prData = yield* parseJsonPreserve(PrDataResponseSchema)(prResult);
 
       // Get check runs for the PR's head commit (using head_sha from PR data above)
-      const checksCmd = Command.make(
-        "gh",
+      const checksResult = yield* runGh(
         "api",
         `repos/${owner}/${repo}/commits/${prData.head_sha}/check-runs`,
         "--jq",
         ".check_runs | map({ name, status, conclusion })",
-      );
-      const checksResult = yield* Command.string(checksCmd).pipe(
-        Effect.catchAll(() => Effect.succeed("[]")),
-      );
+      ).pipe(Effect.catch(() => Effect.succeed("[]")));
       const checks = yield* parseJsonPreserve(Schema.Array(CheckRunSchema))(checksResult);
 
       // Determine actual state (open/closed/merged)
       const state = prData.merged ? "merged" : prData.state;
 
-      return yield* Schema.decodeUnknown(PrStatusSchema)({
+      return Schema.decodeUnknownSync(PrStatusSchema)({
         state,
         draft: prData.draft,
         mergeable: prData.mergeable,
@@ -409,40 +417,34 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getPrStatus", cause })),
       Effect.withSpan("GhService.getPrStatus", { attributes: { urlOrNumber } }),
-      Effect.provide(BunContext.layer),
     ),
 
   listComments: (urlOrNumber: string) =>
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
-      const cmd = Command.make(
-        "gh",
+      const result = (yield* runGh(
         "api",
         `repos/${owner}/${repo}/pulls/${number}/comments`,
         "--jq",
         ".",
-      );
-      const result = (yield* Command.string(cmd)).trim();
+      )).trim();
       if (!result) return [];
       return yield* parseJsonPreserve(Schema.Array(PRCommentSchema))(result);
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getComments", cause })),
       Effect.withSpan("GhService.getComments", { attributes: { urlOrNumber } }),
-      Effect.provide(BunContext.layer),
     ),
 
   listIssueComments: (urlOrNumber: string) =>
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
       // PRs are issues in GitHub's API, so we use the issues endpoint for top-level comments
-      const cmd = Command.make(
-        "gh",
+      const result = (yield* runGh(
         "api",
         `repos/${owner}/${repo}/issues/${number}/comments`,
         "--jq",
         ".",
-      );
-      const result = (yield* Command.string(cmd)).trim();
+      )).trim();
       if (!result) return [];
       return yield* parseJsonPreserve(Schema.Array(IssueCommentSchema))(result);
     }).pipe(
@@ -450,7 +452,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
       Effect.withSpan("GhService.getIssueComments", {
         attributes: { urlOrNumber },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   addIssueComment: (params: AddIssueCommentParams) =>
@@ -471,7 +472,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
           prUrl: params.prUrl,
         },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   addComment: (params: AddCommentParams) =>
@@ -479,14 +479,12 @@ export const GhServiceLive = Layer.succeed(GhService, {
       const { owner, repo, number } = yield* getPrInfo(params.prUrl);
 
       // Get the HEAD commit SHA
-      const shaCmd = Command.make(
-        "gh",
+      const commitSha = (yield* runGh(
         "api",
         `repos/${owner}/${repo}/pulls/${number}`,
         "--jq",
         ".head.sha",
-      );
-      const commitSha = (yield* Command.string(shaCmd)).trim();
+      )).trim();
 
       // Create the comment using raw JSON body
       const payload = JSON.stringify({
@@ -511,7 +509,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
           line: params.line,
         },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   replyToComment: (params: AddReplyParams) =>
@@ -533,7 +530,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
           commentId: params.commentId,
         },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   editComment: (params: EditCommentParams) =>
@@ -553,7 +549,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
           commentId: params.commentId,
         },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   deleteComment: (params: DeleteCommentParams) =>
@@ -571,7 +566,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
           commentId: params.commentId,
         },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   editIssueComment: (params: EditCommentParams) =>
@@ -591,7 +585,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
           commentId: params.commentId,
         },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   deleteIssueComment: (params: DeleteCommentParams) =>
@@ -609,17 +602,14 @@ export const GhServiceLive = Layer.succeed(GhService, {
           commentId: params.commentId,
         },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   getCurrentUser: () =>
     Effect.gen(function* () {
-      const cmd = Command.make("gh", "api", "user", "--jq", ".login");
-      return (yield* Command.string(cmd)).trim();
+      return (yield* runGh("api", "user", "--jq", ".login")).trim();
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getCurrentUser", cause })),
       Effect.withSpan("GhService.getCurrentUser"),
-      Effect.provide(BunContext.layer),
     ),
 
   getReviewThreads: (prUrl: string) =>
@@ -647,8 +637,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         }
       `;
 
-      const graphqlCmd = Command.make(
-        "gh",
+      const result = yield* runGh(
         "api",
         "graphql",
         "-f",
@@ -660,8 +649,22 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "-F",
         `number=${number}`,
       );
-      const result = yield* Command.string(graphqlCmd);
-      const data = yield* Effect.try(() => JSON.parse(result));
+      type ReviewThreadsPayload = {
+        data?: {
+          repository?: {
+            pullRequest?: {
+              reviewThreads?: {
+                nodes?: Array<{
+                  id: string;
+                  isResolved: boolean;
+                  comments: { nodes: Array<{ id: string }> };
+                }>;
+              };
+            };
+          };
+        };
+      };
+      const data = yield* Effect.sync(() => JSON.parse(result) as ReviewThreadsPayload);
 
       const threads = data?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
 
@@ -675,7 +678,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getReviewThreads", cause })),
       Effect.withSpan("GhService.getReviewThreads", { attributes: { prUrl } }),
-      Effect.provide(BunContext.layer),
     ),
 
   resolveThread: (params: ResolveThreadParams) =>
@@ -696,7 +698,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
       Effect.withSpan("GhService.resolveThread", {
         attributes: { threadNodeId: params.threadNodeId },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   unresolveThread: (params: ResolveThreadParams) =>
@@ -717,7 +718,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
       Effect.withSpan("GhService.unresolveThread", {
         attributes: { threadNodeId: params.threadNodeId },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   approvePr: (params: ApprovePrParams) =>
@@ -738,20 +738,17 @@ export const GhServiceLive = Layer.succeed(GhService, {
       Effect.withSpan("GhService.approvePr", {
         attributes: { prUrl: params.prUrl },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   listCommits: (prUrl: string) =>
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(prUrl);
-      const cmd = Command.make(
-        "gh",
+      const result = yield* runGh(
         "api",
         `repos/${owner}/${repo}/pulls/${number}/commits`,
         "--jq",
         ".",
       );
-      const result = yield* Command.string(cmd);
       const rawCommits = yield* parseJsonPreserve(Schema.Array(RawCommitSchema))(result);
 
       return rawCommits.map((c) => ({
@@ -766,33 +763,28 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "listCommits", cause })),
       Effect.withSpan("GhService.listCommits", { attributes: { prUrl } }),
-      Effect.provide(BunContext.layer),
     ),
 
   getCommitDiff: (params: { owner: string; repo: string; sha: string }) =>
     Effect.gen(function* () {
       // Use Accept header to get diff format
-      const cmd = Command.make(
-        "gh",
+      return yield* runGh(
         "api",
         `repos/${params.owner}/${params.repo}/commits/${params.sha}`,
         "-H",
         "Accept: application/vnd.github.diff",
       );
-      return yield* Command.string(cmd);
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getCommitDiff", cause })),
       Effect.withSpan("GhService.getCommitDiff", {
         attributes: { sha: params.sha },
       }),
-      Effect.provide(BunContext.layer),
     ),
 
   searchReviewRequested: () =>
     Effect.gen(function* () {
       // Get current user login
-      const userCmd = Command.make("gh", "api", "user", "--jq", ".login");
-      const currentUser = (yield* Command.string(userCmd)).trim();
+      const currentUser = (yield* runGh("api", "user", "--jq", ".login")).trim();
 
       // GraphQL query to get PRs with review state, CI status, and line counts
       const prFields = `
@@ -831,8 +823,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         }
       `;
 
-      const graphqlCmd = Command.make(
-        "gh",
+      const result = yield* runGh(
         "api",
         "graphql",
         "-f",
@@ -844,7 +835,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "-f",
         "authoredQuery=is:pr is:open author:@me",
       );
-      const result = yield* Command.string(graphqlCmd);
       const data = yield* parseJsonPreserve(GraphQLSearchResponseSchema)(result);
 
       type GraphQLPr = typeof GraphQLPrSchema.Type;
@@ -912,7 +902,6 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "searchReviewRequested", cause })),
       Effect.withSpan("GhService.searchReviewRequested"),
-      Effect.provide(BunContext.layer),
     ),
 
   getPrCiStatus: (prUrl: string) =>
@@ -945,8 +934,7 @@ export const GhServiceLive = Layer.succeed(GhService, {
         }
       `;
 
-      const graphqlCmd = Command.make(
-        "gh",
+      const result = yield* runGh(
         "api",
         "graphql",
         "-f",
@@ -958,8 +946,30 @@ export const GhServiceLive = Layer.succeed(GhService, {
         "-F",
         `number=${number}`,
       );
-      const result = yield* Command.string(graphqlCmd);
-      const data = yield* Effect.try(() => JSON.parse(result));
+      type CiRollupPayload = {
+        data?: {
+          repository?: {
+            pullRequest?: {
+              commits?: {
+                nodes?: Array<{
+                  commit?: {
+                    statusCheckRollup?: {
+                      state: CiStatus["state"];
+                      contexts?: {
+                        nodes?: Array<
+                          | { __typename: "StatusContext"; state: string }
+                          | { __typename: "CheckRun"; conclusion: string | null; status: string }
+                        >;
+                      };
+                    };
+                  };
+                }>;
+              };
+            };
+          };
+        };
+      };
+      const data = yield* Effect.sync(() => JSON.parse(result) as CiRollupPayload);
 
       const rollup =
         data?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup;
@@ -991,56 +1001,54 @@ export const GhServiceLive = Layer.succeed(GhService, {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getPrCiStatus", cause })),
       Effect.withSpan("GhService.getPrCiStatus", { attributes: { prUrl } }),
-      Effect.provide(BunContext.layer),
     ),
 
   getHeadSha: (prUrl: string) =>
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(prUrl);
-      const cmd = Command.make(
-        "gh",
+      const sha = (yield* runGh(
         "api",
         `repos/${owner}/${repo}/pulls/${number}`,
         "--jq",
         ".head.sha",
-      );
-      const sha = (yield* Command.string(cmd)).trim();
+      )).trim();
       return sha;
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getHeadSha", cause })),
       Effect.withSpan("GhService.getHeadSha", { attributes: { prUrl } }),
-      Effect.provide(BunContext.layer),
     ),
 
   getBaseSha: (prUrl: string) =>
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(prUrl);
-      const cmd = Command.make(
-        "gh",
+      const sha = (yield* runGh(
         "api",
         `repos/${owner}/${repo}/pulls/${number}`,
         "--jq",
         ".base.sha",
-      );
-      const sha = (yield* Command.string(cmd)).trim();
+      )).trim();
       return sha;
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getBaseSha", cause })),
       Effect.withSpan("GhService.getBaseSha", { attributes: { prUrl } }),
-      Effect.provide(BunContext.layer),
     ),
 
   getFileContent: (params: { owner: string; repo: string; path: string; ref: string }) =>
     Effect.gen(function* () {
       const result = yield* Effect.tryPromise(() =>
         Bun.$`gh api repos/${params.owner}/${params.repo}/contents/${params.path}?ref=${params.ref} -H "Accept: application/vnd.github.raw+json"`.text(),
-      ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+      ).pipe(Effect.catch(() => Effect.succeed(null)));
       return result;
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getFileContent", cause })),
       Effect.withSpan("GhService.getFileContent", {
         attributes: { path: params.path, ref: params.ref },
       }),
-      Effect.provide(BunContext.layer),
     ),
-});
+};
+
+export class GhService extends ServiceMap.Service<GhService, GhCli>()("GhService", {
+  make: Effect.succeed(ghCli),
+}) {}
+
+export const GhServiceLive = Layer.effect(GhService, Effect.succeed(ghCli));

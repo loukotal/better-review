@@ -33,7 +33,7 @@ export const middleware = t.middleware;
 export async function runEffect<A>(effect: Effect.Effect<A, unknown, RuntimeContext>): Promise<A> {
   return runtime.runPromise(
     effect.pipe(
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.fail(
           new TRPCError({
             code: "INTERNAL_SERVER_ERROR",

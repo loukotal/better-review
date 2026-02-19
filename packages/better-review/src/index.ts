@@ -1,10 +1,10 @@
 import path from "node:path";
 
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { Effect, Fiber } from "effect";
+import { Effect, Fiber, type ServiceMap } from "effect";
 
-import { filterDiffByLineRange } from "./diff";
-import { GhService } from "./gh/gh";
+import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
+import { GhService, type PrStatus } from "./gh/gh";
 import { getErrorMessage } from "./response";
 import { runtime } from "./runtime";
 import { DiffCacheService, PrContextService, PrListCacheService } from "./state";
@@ -67,9 +67,9 @@ function parseOptionalPositiveInt(value: string | null): number | undefined {
 }
 
 type RouteServices = {
-  gh: Effect.Effect.Success<typeof GhService>;
-  diffCache: Effect.Effect.Success<typeof DiffCacheService>;
-  prContext: Effect.Effect.Success<typeof PrContextService>;
+  gh: ServiceMap.Service.Shape<typeof GhService>;
+  diffCache: ServiceMap.Service.Shape<typeof DiffCacheService>;
+  prContext: ServiceMap.Service.Shape<typeof PrContextService>;
 };
 
 const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
@@ -163,13 +163,18 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
       }
 
       try {
-        const prUrl = await runtime.runPromise(prContext.getPrUrlBySessionId(sessionId));
+        const prUrl = (await runtime.runPromise(prContext.getPrUrlBySessionId(sessionId))) as
+          | string
+          | null;
 
         if (!prUrl) {
           return Response.json({ error: "Session not found. Load a PR first." }, { status: 404 });
         }
 
-        const prDiffs = await runtime.runPromise(diffCache.get(prUrl));
+        const prDiffs = (await runtime.runPromise(diffCache.get(prUrl))) as Map<
+          string,
+          FileDiffMeta
+        > | null;
 
         if (!prDiffs) {
           return Response.json(
@@ -206,18 +211,20 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
       }
 
       try {
-        const prUrl = await runtime.runPromise(prContext.getPrUrlBySessionId(sessionId));
+        const prUrl = (await runtime.runPromise(prContext.getPrUrlBySessionId(sessionId))) as
+          | string
+          | null;
 
         if (!prUrl) {
           return Response.json({ error: "Session not found. Load a PR first." }, { status: 404 });
         }
 
         // Fetch PR status and diffs in parallel
-        const [prStatus, prDiffs] = await runtime.runPromise(
+        const [prStatus, prDiffs] = (await runtime.runPromise(
           Effect.all([gh.getPrStatus(prUrl), diffCache.get(prUrl)], {
             concurrency: "unbounded",
           }),
-        );
+        )) as [PrStatus, Map<string, FileDiffMeta> | null];
 
         const fileStats: string[] = [];
         const files: string[] = [];
@@ -228,7 +235,7 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
             const { totalAdded, totalRemoved, hunks } = fileMeta;
             if (totalAdded + totalRemoved > 1000 && hunks.length > 0) {
               const ranges = hunks
-                .map((h) => `${h.newStart}-${h.newStart + h.newCount - 1}`)
+                .map((h: HunkInfo) => `${h.newStart}-${h.newStart + h.newCount - 1}`)
                 .join(", ");
               fileStats.push(`${f} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`);
             } else {
@@ -280,7 +287,7 @@ const main = Effect.gen(function* () {
 
   // Start the PR list background refresh loop (fetches every 15 min)
   yield* prListCache.backgroundLoop.pipe(
-    Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
+    Effect.catch((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
     Effect.forkScoped,
   );
 
@@ -314,7 +321,7 @@ const main = Effect.gen(function* () {
 // =============================================================================
 
 declare global {
-  var __appFiber: Fiber.RuntimeFiber<void, unknown> | undefined;
+  var __appFiber: Fiber.Fiber<void, unknown> | undefined;
   var __shutdownHandler: (() => void) | undefined;
 }
 

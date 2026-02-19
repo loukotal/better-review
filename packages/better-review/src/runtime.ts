@@ -4,20 +4,20 @@
 
 import { Layer, ManagedRuntime } from "effect";
 
-import { EventBroadcaster } from "./event-broadcaster";
+import { EventBroadcasterLive } from "./event-broadcaster";
 import { GhServiceLive } from "./gh/gh";
-import { OpencodeService } from "./opencode";
-import { DiffCacheService, PrContextService, PrListCacheService } from "./state";
+import { OpencodeServiceLive } from "./opencode";
+import { DiffCacheServiceLive, PrContextServiceLive, PrListCacheServiceLive } from "./state";
 
 // Single shared layer with all services
 export const layers = Layer.mergeAll(
   GhServiceLive,
-  OpencodeService.Default,
-  DiffCacheService.Default,
-  PrContextService.Default,
-  PrListCacheService.Default,
-  EventBroadcaster.Default,
-);
+  OpencodeServiceLive,
+  DiffCacheServiceLive,
+  PrContextServiceLive,
+  PrListCacheServiceLive,
+  EventBroadcasterLive,
+) as Layer.Layer<unknown, unknown, never>;
 
 // Single shared runtime - used by main app, tRPC handlers, and REST endpoints
 // This ensures all code paths share the same service instances (including Refs)

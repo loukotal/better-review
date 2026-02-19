@@ -71,7 +71,7 @@ export const prRouter = router({
           commits.map((commit) =>
             gh.getCommitDiff({ owner, repo, sha: commit.sha }).pipe(
               Effect.map((diff) => ({ sha: commit.sha, diff })),
-              Effect.catchAll(() => Effect.succeed({ sha: commit.sha, diff: null })),
+              Effect.catch(() => Effect.succeed({ sha: commit.sha, diff: null })),
             ),
           ),
           { concurrency: 5 },
@@ -264,10 +264,10 @@ export const prRouter = router({
             [
               gh
                 .getFileContent({ owner, repo, path: oldPath, ref: baseSha })
-                .pipe(Effect.catchAll(() => Effect.succeed(null))),
+                .pipe(Effect.catch(() => Effect.succeed(null))),
               gh
                 .getFileContent({ owner, repo, path: input.path, ref: headSha })
-                .pipe(Effect.catchAll(() => Effect.succeed(null))),
+                .pipe(Effect.catch(() => Effect.succeed(null))),
             ],
             { concurrency: 2 },
           );
@@ -365,7 +365,10 @@ export const prRouter = router({
             // Show hunk ranges for large files (>1k lines changed)
             if (totalAdded + totalRemoved > 1000 && hunks.length > 0) {
               const ranges = hunks
-                .map((h) => `${h.newStart}-${h.newStart + h.newCount - 1}`)
+                .map(
+                  (h: { newStart: number; newCount: number }) =>
+                    `${h.newStart}-${h.newStart + h.newCount - 1}`,
+                )
                 .join(", ");
               fileStats.push(`${file} +${totalAdded} -${totalRemoved} [hunks: ${ranges}]`);
             } else {

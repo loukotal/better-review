@@ -24,7 +24,7 @@ export const opencodeRouter = router({
         const opencode = yield* OpencodeService;
         yield* Effect.tryPromise(() => opencode.client.global.health());
         return { healthy: true };
-      }).pipe(Effect.catchAll((e) => Effect.succeed({ healthy: false, error: String(e) }))),
+      }).pipe(Effect.catch((e) => Effect.succeed({ healthy: false, error: String(e) }))),
     ),
   ),
 
@@ -64,7 +64,9 @@ export const opencodeRouter = router({
           const { sessions, activeSessionId } = yield* prContext.listSessions(input.prUrl);
 
           if (activeSessionId) {
-            const activeSession = sessions.find((s) => s.id === activeSessionId);
+            const activeSession = (sessions as Array<{ id: string; headSha: string }>).find(
+              (s) => s.id === activeSessionId,
+            );
             if (activeSession) {
               if (activeSession.headSha !== currentHeadSha) {
                 yield* diffCache.clear(input.prUrl);
@@ -254,7 +256,7 @@ export const opencodeRouter = router({
     console.log(`[SSE] Subscription requested`);
 
     // Get the runtime and subscribe to events
-    const rt = await runtime.runtime();
+    const services = await runtime.services();
 
     const stream = await runtime.runPromise(
       Effect.gen(function* () {
@@ -273,7 +275,7 @@ export const opencodeRouter = router({
 
     // Convert Effect Stream to async iterable using our runtime
     // This properly handles cleanup when the iterator is returned
-    const asyncIterable = Stream.toAsyncIterableRuntime(rt)(stream);
+    const asyncIterable = Stream.toAsyncIterableWith(stream, services);
     const iterator = asyncIterable[Symbol.asyncIterator]();
 
     try {
