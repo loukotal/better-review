@@ -89,6 +89,12 @@ export interface UseStreamingChatOptions {
   onError?: (error: string) => void;
 }
 
+export interface SendMessageOptions {
+  agent?: string;
+  reviewMode?: "full" | "commit";
+  commitSha?: string;
+}
+
 export function useStreamingChat(options: UseStreamingChatOptions) {
   const [messages, setMessages] = createSignal<StreamingMessage[]>([]);
   const [isConnected, setIsConnected] = createSignal(false);
@@ -100,6 +106,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     "Disconnected" | "Connecting" | "Connected" | "Reconnecting" | "Error" | null
   >(null);
   const [subscriberCount, setSubscriberCount] = createSignal<number>(0);
+  const [awaitingFirstToken, setAwaitingFirstToken] = createSignal(false);
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [streamingContent, setStreamingContent] = createSignal("");
@@ -277,6 +284,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         if (!allowAssistantParts && awaitingAssistantResponse) {
           allowAssistantParts = true;
           setIsStreaming(true);
+          setAwaitingFirstToken(false);
         }
         if (!allowAssistantParts) return;
         // Append streaming text
@@ -290,6 +298,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         if (!allowAssistantParts && awaitingAssistantResponse) {
           allowAssistantParts = true;
           setIsStreaming(true);
+          setAwaitingFirstToken(false);
         }
         if (!allowAssistantParts) return;
         // Append reasoning text
@@ -300,6 +309,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         if (!allowAssistantParts && awaitingAssistantResponse) {
           allowAssistantParts = true;
           setIsStreaming(true);
+          setAwaitingFirstToken(false);
         }
         if (!allowAssistantParts) return;
         setActiveTools((prev) => [
@@ -318,6 +328,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         if (!allowAssistantParts && awaitingAssistantResponse) {
           allowAssistantParts = true;
           setIsStreaming(true);
+          setAwaitingFirstToken(false);
         }
         if (!allowAssistantParts) return;
         setActiveTools((prev) =>
@@ -333,6 +344,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         if (!allowAssistantParts && awaitingAssistantResponse) {
           allowAssistantParts = true;
           setIsStreaming(true);
+          setAwaitingFirstToken(false);
         }
         if (!allowAssistantParts) return;
         setActiveTools((prev) =>
@@ -353,6 +365,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         if (!allowAssistantParts && awaitingAssistantResponse) {
           allowAssistantParts = true;
           setIsStreaming(true);
+          setAwaitingFirstToken(false);
         }
         if (!allowAssistantParts) return;
         setActiveTools((prev) =>
@@ -367,9 +380,11 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
           setIsStreaming(true);
           allowAssistantParts = true;
           awaitingAssistantResponse = true;
+          setAwaitingFirstToken(true);
         } else if (event.status === "idle") {
           allowAssistantParts = false;
           awaitingAssistantResponse = false;
+          setAwaitingFirstToken(false);
           finalizeMessage();
         }
         break;
@@ -377,6 +392,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       case "done":
         allowAssistantParts = false;
         awaitingAssistantResponse = false;
+        setAwaitingFirstToken(false);
         // Message completed - finalize it
         finalizeMessage();
         break;
@@ -387,6 +403,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         setIsStreaming(false);
         allowAssistantParts = false;
         awaitingAssistantResponse = false;
+        setAwaitingFirstToken(false);
         break;
     }
   }
@@ -400,6 +417,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     if (!content && !reasoning && tools.length === 0) {
       // Nothing to finalize
       setIsStreaming(false);
+      setAwaitingFirstToken(false);
       return;
     }
 
@@ -423,6 +441,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setActiveTools([]);
       setCurrentMessageId(null);
       setIsStreaming(false);
+      setAwaitingFirstToken(false);
     });
   }
 
@@ -447,7 +466,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     });
   }
 
-  async function sendMessage(message: string, agent?: string): Promise<boolean> {
+  async function sendMessage(message: string, sendOptions?: SendMessageOptions): Promise<boolean> {
     const sessionId = options.getSessionId();
     if (!sessionId) {
       setError("No session");
@@ -473,6 +492,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
     setMessages((prev) => [...prev, userMessage]);
     setIsStreaming(true);
+    setAwaitingFirstToken(true);
     setError(null);
     awaitingAssistantResponse = true;
 
@@ -482,7 +502,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       await trpc.opencode.promptStart.mutate({
         sessionId,
         message,
-        agent,
+        agent: sendOptions?.agent,
+        reviewMode: sendOptions?.reviewMode,
+        commitSha: sendOptions?.commitSha,
       });
 
       // Success - streaming will happen via subscription
@@ -491,6 +513,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       const errorMsg = err instanceof Error ? err.message : "Failed to send message";
       setError(errorMsg);
       setIsStreaming(false);
+      setAwaitingFirstToken(false);
       awaitingAssistantResponse = false;
       options.onError?.(errorMsg);
       return false;
@@ -542,6 +565,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     upstreamStatus,
     subscriberCount,
     isStreaming,
+    awaitingFirstToken,
     error,
     streamingContent,
     streamingReasoning,

@@ -5,7 +5,7 @@ import { EventBroadcaster } from "../../event-broadcaster";
 import { GhService } from "../../gh/gh";
 import { OpencodeService } from "../../opencode";
 import { buildReviewContext } from "../../response";
-import { DiffCacheService, PrContextService } from "../../state";
+import { DiffCacheService, PrContextService, type SessionReviewScope } from "../../state";
 import { runtime } from "../context";
 import { router, publicProcedure, runEffect } from "../index";
 import { getCurrentModel } from "./models";
@@ -36,6 +36,8 @@ export const opencodeRouter = router({
         repoOwner: z.string(),
         repoName: z.string(),
         files: z.array(z.string()),
+        reviewMode: z.enum(["full", "commit"]).optional(),
+        commitSha: z.string().optional(),
       }),
     )
     .mutation(({ input }) =>
@@ -46,6 +48,11 @@ export const opencodeRouter = router({
           const diffCache = yield* DiffCacheService;
           const prContext = yield* PrContextService;
           yield* Effect.log("[OpenCode] Creating session for PR:", input.prUrl);
+
+          const reviewScope: SessionReviewScope = {
+            mode: input.reviewMode === "commit" ? "commit" : "full",
+            commitSha: input.reviewMode === "commit" && input.commitSha ? input.commitSha : null,
+          };
 
           // Run independent operations in parallel
           const [currentHeadSha] = yield* Effect.all(
@@ -78,6 +85,7 @@ export const opencodeRouter = router({
 
               if (existingSessionData.data) {
                 yield* prContext.registerSession(activeSessionId, input.prUrl);
+                yield* prContext.setSessionScope(activeSessionId, reviewScope);
 
                 return {
                   session: existingSessionData.data,
@@ -102,6 +110,7 @@ export const opencodeRouter = router({
           }
 
           const prData = yield* prContext.addSession(input.prUrl, session.data.id, currentHeadSha);
+          yield* prContext.setSessionScope(session.data.id, reviewScope);
 
           const contextMessage = yield* Effect.tryPromise(() => buildReviewContext(input));
           yield* Effect.tryPromise(() =>
@@ -133,13 +142,23 @@ export const opencodeRouter = router({
         sessionId: z.string(),
         message: z.string(),
         agent: z.string().optional(),
+        reviewMode: z.enum(["full", "commit"]).optional(),
+        commitSha: z.string().optional(),
       }),
     )
     .mutation(({ input }) =>
       runEffect(
         Effect.gen(function* () {
           const opencode = yield* OpencodeService;
+          const prContext = yield* PrContextService;
           const currentModel = getCurrentModel();
+
+          if (input.reviewMode) {
+            yield* prContext.setSessionScope(input.sessionId, {
+              mode: input.reviewMode,
+              commitSha: input.reviewMode === "commit" ? (input.commitSha ?? null) : null,
+            });
+          }
 
           const result = yield* Effect.tryPromise(() =>
             opencode.client.session.prompt({
@@ -179,13 +198,23 @@ export const opencodeRouter = router({
         sessionId: z.string(),
         message: z.string(),
         agent: z.string().optional(),
+        reviewMode: z.enum(["full", "commit"]).optional(),
+        commitSha: z.string().optional(),
       }),
     )
     .mutation(({ input }) =>
       runEffect(
         Effect.gen(function* () {
           const opencode = yield* OpencodeService;
+          const prContext = yield* PrContextService;
           const currentModel = getCurrentModel();
+
+          if (input.reviewMode) {
+            yield* prContext.setSessionScope(input.sessionId, {
+              mode: input.reviewMode,
+              commitSha: input.reviewMode === "commit" ? (input.commitSha ?? null) : null,
+            });
+          }
 
           // Use the SDK's promptAsync method
           yield* Effect.tryPromise(() =>

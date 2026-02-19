@@ -20,6 +20,11 @@ export interface PrContext {
   info: PrInfo | null;
 }
 
+export interface SessionReviewScope {
+  mode: "full" | "commit";
+  commitSha: string | null;
+}
+
 // Re-export for convenience
 export type { PrInfo, StoredSession, PrSessionData };
 
@@ -50,6 +55,8 @@ function prUrlToKey(url: string): string | null {
 const makeDiffCacheService = Effect.gen(function* () {
   // Ref holding: prUrl -> Map<fileName, FileDiffMeta>
   const cache = yield* Ref.make(new Map<string, Map<string, FileDiffMeta>>());
+  // Ref holding: `${prUrl}#${commitSha}` -> Map<fileName, FileDiffMeta>
+  const commitCache = yield* Ref.make(new Map<string, Map<string, FileDiffMeta>>());
 
   // Capture GhService at construction time
   const gh = yield* GhService;
@@ -94,19 +101,78 @@ const makeDiffCacheService = Effect.gen(function* () {
       }),
 
     /**
+     * Get cached diffs for a specific commit, or fetch and cache them
+     */
+    getOrFetchCommit: (prUrl: string, commitSha: string) =>
+      Effect.gen(function* () {
+        const key = `${prUrl}#${commitSha}`;
+        const current = yield* Ref.get(commitCache);
+        const existing = current.get(key);
+        if (existing) {
+          yield* Effect.log(
+            `[cache] Using cached commit diff for ${commitSha} (${existing.size} files)`,
+          );
+          return existing;
+        }
+
+        const prInfo = yield* gh.getPrInfo(prUrl);
+        yield* Effect.log(`[cache] Fetching commit diff for ${commitSha}...`);
+        const fullDiff = yield* gh.getCommitDiff({
+          owner: prInfo.owner,
+          repo: prInfo.repo,
+          sha: commitSha,
+        });
+
+        const fileDiffs = parseFullDiff(fullDiff);
+        yield* Effect.log(`[cache] Cached ${fileDiffs.size} commit file diffs for ${commitSha}`);
+
+        yield* Ref.update(commitCache, (m) => {
+          const newMap = new Map(m);
+          newMap.set(key, fileDiffs);
+          return newMap;
+        });
+
+        return fileDiffs;
+      }),
+
+    /**
+     * Get commit cached diffs without fetching (returns undefined if not cached)
+     */
+    getCommit: (prUrl: string, commitSha: string) =>
+      Effect.gen(function* () {
+        const current = yield* Ref.get(commitCache);
+        return current.get(`${prUrl}#${commitSha}`);
+      }),
+
+    /**
      * Clear cache for a specific PR
      */
     clear: (prUrl: string) =>
-      Ref.update(cache, (m) => {
-        const newMap = new Map(m);
-        newMap.delete(prUrl);
-        return newMap;
+      Effect.gen(function* () {
+        yield* Ref.update(cache, (m) => {
+          const newMap = new Map(m);
+          newMap.delete(prUrl);
+          return newMap;
+        });
+
+        yield* Ref.update(commitCache, (m) => {
+          const newMap = new Map(m);
+          for (const key of newMap.keys()) {
+            if (key.startsWith(`${prUrl}#`)) {
+              newMap.delete(key);
+            }
+          }
+          return newMap;
+        });
       }),
 
     /**
      * Clear all cached diffs
      */
-    clearAll: Ref.set(cache, new Map()),
+    clearAll: Effect.gen(function* () {
+      yield* Ref.set(cache, new Map());
+      yield* Ref.set(commitCache, new Map());
+    }),
   };
 });
 
@@ -141,6 +207,7 @@ const makePrContextService = Effect.gen(function* () {
 
   // Session -> PR URL mapping (in-memory, populated at runtime)
   const sessionToPr = yield* Ref.make(new Map<string, string>());
+  const sessionToScope = yield* Ref.make(new Map<string, SessionReviewScope>());
 
   // Get store service for persistence
   const store = yield* StoreService;
@@ -169,7 +236,16 @@ const makePrContextService = Effect.gen(function* () {
      * Register a session → PR URL mapping (call when session is activated)
      */
     registerSession: (sessionId: string, prUrl: string) =>
-      Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl)),
+      Effect.gen(function* () {
+        yield* Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl));
+        yield* Ref.update(sessionToScope, (m) => {
+          const next = new Map(m);
+          if (!next.has(sessionId)) {
+            next.set(sessionId, { mode: "full", commitSha: null });
+          }
+          return next;
+        });
+      }),
 
     /**
      * Get PR URL for a session (O(1) lookup)
@@ -178,6 +254,15 @@ const makePrContextService = Effect.gen(function* () {
       Effect.gen(function* () {
         const map = yield* Ref.get(sessionToPr);
         return map.get(sessionId) ?? null;
+      }),
+
+    setSessionScope: (sessionId: string, scope: SessionReviewScope) =>
+      Ref.update(sessionToScope, (m) => new Map(m).set(sessionId, scope)),
+
+    getSessionScope: (sessionId: string) =>
+      Effect.gen(function* () {
+        const map = yield* Ref.get(sessionToScope);
+        return map.get(sessionId) ?? { mode: "full", commitSha: null };
       }),
 
     // =====================================================================
@@ -263,6 +348,9 @@ const makePrContextService = Effect.gen(function* () {
 
         // Register in-memory mapping for O(1) lookup
         yield* Ref.update(sessionToPr, (m) => new Map(m).set(sessionId, prUrl));
+        yield* Ref.update(sessionToScope, (m) =>
+          new Map(m).set(sessionId, { mode: "full", commitSha: null }),
+        );
 
         yield* Effect.log(
           `[PrContext] Added session ${sessionId} to ${pr.owner}/${pr.repo}#${pr.number}`,

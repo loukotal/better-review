@@ -4,7 +4,7 @@ import { z } from "zod";
 import { GhService } from "../../gh/gh";
 import { OpencodeService } from "../../opencode";
 import { buildReviewContext } from "../../response";
-import { PrContextService } from "../../state";
+import { PrContextService, type SessionReviewScope } from "../../state";
 import { router, publicProcedure, runEffect } from "../index";
 
 export const sessionsRouter = router({
@@ -60,6 +60,8 @@ export const sessionsRouter = router({
         repoOwner: z.string(),
         repoName: z.string(),
         files: z.array(z.string()),
+        reviewMode: z.enum(["full", "commit"]).optional(),
+        commitSha: z.string().optional(),
       }),
     )
     .mutation(({ input }) =>
@@ -68,6 +70,11 @@ export const sessionsRouter = router({
           const prContext = yield* PrContextService;
           const gh = yield* GhService;
           const opencode = yield* OpencodeService;
+
+          const reviewScope: SessionReviewScope = {
+            mode: input.reviewMode === "commit" ? "commit" : "full",
+            commitSha: input.reviewMode === "commit" ? (input.commitSha ?? null) : null,
+          };
 
           yield* Effect.log("[API] Creating new session for PR:", input.prUrl);
 
@@ -87,6 +94,7 @@ export const sessionsRouter = router({
 
           // Persist to storage
           const prData = yield* prContext.addSession(input.prUrl, session.data.id, currentHeadSha);
+          yield* prContext.setSessionScope(session.data.id, reviewScope);
 
           // Inject initial context
           const contextMessage = yield* Effect.tryPromise(() => buildReviewContext(input));

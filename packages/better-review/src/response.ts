@@ -95,6 +95,8 @@ export async function buildReviewContext(params: {
   repoOwner: string;
   repoName: string;
   files: string[];
+  reviewMode?: "full" | "commit";
+  commitSha?: string;
 }): Promise<string> {
   const relevantFiles = params.files.filter(
     (file) => !IGNORE_PATTERNS.some((pattern) => pattern.test(file)),
@@ -121,6 +123,10 @@ You are reviewing PR #${params.prNumber} in ${params.repoOwner}/${params.repoNam
 
 **Files changed (${relevantFiles.length} files):**
 ${relevantFiles.map((f) => `- ${f}`).join("\n")}
+
+**Review mode:** ${params.reviewMode === "commit" ? "Commit" : "Full PR"}${
+    params.reviewMode === "commit" && params.commitSha ? ` (${params.commitSha.slice(0, 7)})` : ""
+  }
 
 ---
 
@@ -151,5 +157,7 @@ For large files, use the hunk ranges from \`pr_metadata\` to request specific po
 - Identify potential issues or bugs
 - Suggest improvements
 - Answer questions about the code
+
+When review mode is **Commit**, \`pr_metadata\` and \`pr_diff\` are commit-scoped. Do not assume full PR context unless user asks.
 ${personalitySection}`;
 }

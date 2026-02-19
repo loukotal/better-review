@@ -913,6 +913,10 @@ const AppContent: Component = () => {
             repoOwner={prInfo()?.owner ?? null}
             repoName={prInfo()?.repo ?? null}
             files={fileNames()}
+            reviewMode={reviewMode()}
+            commitSha={
+              reviewMode() === "commit" ? (commits()[currentCommitIndex()]?.sha ?? null) : null
+            }
             theme={settings().theme}
             aiAnnotations={aiAnnotations()}
             onScrollToFile={scrollToFile}

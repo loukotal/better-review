@@ -47,6 +47,8 @@ interface ChatPanelProps {
   onScrollToFile?: (file: string, line?: number) => void;
   onApplyReviewOrder?: (files: string[]) => void;
   onAnnotationsReceived?: (annotations: Annotation[]) => void;
+  reviewMode?: "full" | "commit";
+  commitSha?: string | null;
 }
 
 const CHAT_WIDTH_KEY = "chat-panel-width";
@@ -74,6 +76,8 @@ export function ChatPanel(props: ChatPanelProps) {
   const [sessionId, setSessionId] = createSignal<string | null>(null);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [initializing, setInitializing] = createSignal(false);
+  const [scopeSessionKey, setScopeSessionKey] = createSignal<string | null>(null);
+  const [switchingCommitSession, setSwitchingCommitSession] = createSignal(false);
 
   // Session management state
   const [sessions, setSessions] = createSignal<StoredSession[]>([]);
@@ -161,7 +165,30 @@ export function ChatPanel(props: ChatPanelProps) {
       setCurrentHeadSha(null);
       chat.clearMessages();
       setSessionError(null);
+      setScopeSessionKey(null);
     }
+  });
+
+  createEffect(() => {
+    const prUrl = props.prUrl;
+    const mode = props.reviewMode ?? "full";
+    const commitSha = props.commitSha ?? null;
+    const sid = sessionId();
+
+    if (!prUrl || !sid || mode !== "commit" || !commitSha) return;
+    if (initializing() || switchingCommitSession() || chat.isStreaming()) return;
+
+    const wantedKey = `commit:${commitSha}`;
+    if (scopeSessionKey() === wantedKey) return;
+
+    setSwitchingCommitSession(true);
+    void handleNewSession()
+      .then((created) => {
+        if (created) setScopeSessionKey(wantedKey);
+      })
+      .finally(() => {
+        setSwitchingCommitSession(false);
+      });
   });
 
   async function initSession() {
@@ -179,6 +206,8 @@ export function ChatPanel(props: ChatPanelProps) {
         repoOwner: props.repoOwner,
         repoName: props.repoName,
         files: props.files,
+        reviewMode: props.reviewMode,
+        commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
       });
 
       if (!data.session?.id) {
@@ -187,6 +216,9 @@ export function ChatPanel(props: ChatPanelProps) {
       }
 
       setSessionId(data.session.id);
+      setScopeSessionKey(
+        props.reviewMode === "commit" && props.commitSha ? `commit:${props.commitSha}` : "full",
+      );
 
       // Update sessions list and current head SHA
       if (data.sessions) {
@@ -277,7 +309,11 @@ export function ChatPanel(props: ChatPanelProps) {
     if (!message || chat.isStreaming() || !sessionId()) return;
 
     setInput("");
-    await chat.sendMessage(message, useReviewAgent ? "review" : undefined);
+    await chat.sendMessage(message, {
+      agent: useReviewAgent ? "review" : undefined,
+      reviewMode: props.reviewMode,
+      commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
+    });
   }
 
   function handleQuickPrompt(prompt: string) {
@@ -328,8 +364,8 @@ export function ChatPanel(props: ChatPanelProps) {
     }
   }
 
-  async function handleNewSession() {
-    if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return;
+  async function handleNewSession(): Promise<boolean> {
+    if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return false;
 
     try {
       const data = await trpc.sessions.create.mutate({
@@ -338,19 +374,26 @@ export function ChatPanel(props: ChatPanelProps) {
         repoOwner: props.repoOwner,
         repoName: props.repoName,
         files: props.files,
+        reviewMode: props.reviewMode,
+        commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
       });
 
       if (data.session?.id) {
         batch(() => {
           setSessionId(data.session.id);
           chat.loadExistingMessages([]); // New session has no messages
+          setScopeSessionKey(
+            props.reviewMode === "commit" && props.commitSha ? `commit:${props.commitSha}` : "full",
+          );
         });
       }
       if (data.sessions) {
         setSessions(data.sessions.filter((s: StoredSession) => !s.hidden));
       }
+      return true;
     } catch (err) {
       console.error("Failed to create new session:", err);
+      return false;
     }
   }
 
@@ -949,11 +992,14 @@ export function ChatPanel(props: ChatPanelProps) {
               {/* Show cursor when actively streaming with no content yet */}
               <Show
                 when={
-                  chat.isStreaming() && !chat.streamingContent() && chat.activeTools().length === 0
+                  chat.awaitingFirstToken() &&
+                  !chat.streamingContent() &&
+                  chat.activeTools().length === 0
                 }
               >
-                <div class="text-text-muted text-sm">
-                  <span class="inline-block animate-pulse">Thinking...</span>
+                <div class="text-text-muted text-sm flex items-center gap-2">
+                  <SpinnerIcon size={12} class="animate-spin" />
+                  <span class="inline-block animate-pulse">Model is thinking...</span>
                 </div>
               </Show>
             </div>
@@ -1027,6 +1073,12 @@ export function ChatPanel(props: ChatPanelProps) {
                       upstream: {chat.upstreamStatus()}
                     </span>
                   </Show>
+                  <span class="text-[9px] text-text-faint/80">
+                    scope:{" "}
+                    {props.reviewMode === "commit" && props.commitSha
+                      ? `commit ${props.commitSha.slice(0, 7)}`
+                      : "full pr"}
+                  </span>
                 </div>
                 {/* Quick prompts */}
                 <Show when={chat.messages().length > 0}>

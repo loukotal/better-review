@@ -171,10 +171,13 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
           return Response.json({ error: "Session not found. Load a PR first." }, { status: 404 });
         }
 
-        const prDiffs = (await runtime.runPromise(diffCache.get(prUrl))) as Map<
-          string,
-          FileDiffMeta
-        > | null;
+        const sessionScope = await runtime.runPromise(prContext.getSessionScope(sessionId));
+
+        const prDiffs = (await runtime.runPromise(
+          sessionScope.mode === "commit" && sessionScope.commitSha
+            ? diffCache.getOrFetchCommit(prUrl, sessionScope.commitSha)
+            : diffCache.get(prUrl),
+        )) as Map<string, FileDiffMeta> | null;
 
         if (!prDiffs) {
           return Response.json(
@@ -219,9 +222,16 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
           return Response.json({ error: "Session not found. Load a PR first." }, { status: 404 });
         }
 
+        const sessionScope = await runtime.runPromise(prContext.getSessionScope(sessionId));
+
+        const diffEffect =
+          sessionScope.mode === "commit" && sessionScope.commitSha
+            ? diffCache.getOrFetchCommit(prUrl, sessionScope.commitSha)
+            : diffCache.get(prUrl);
+
         // Fetch PR status and diffs in parallel
         const [prStatus, prDiffs] = (await runtime.runPromise(
-          Effect.all([gh.getPrStatus(prUrl), diffCache.get(prUrl)], {
+          Effect.all([gh.getPrStatus(prUrl), diffEffect], {
             concurrency: "unbounded",
           }),
         )) as [PrStatus, Map<string, FileDiffMeta> | null];
@@ -255,10 +265,16 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
             : prStatus.body
           : "(no description)";
 
+        const scopeLine =
+          sessionScope.mode === "commit" && sessionScope.commitSha
+            ? `Scope: commit ${sessionScope.commitSha.slice(0, 7)}\n`
+            : "Scope: full PR\n";
+
         const metadata = `PR: ${owner}/${repo}#${number}
 Title: ${prStatus.title}
 Author: ${prStatus.author}
 State: ${prStatus.state}${prStatus.draft ? " (draft)" : ""}
+${scopeLine}
 
 Description:
 ${description}

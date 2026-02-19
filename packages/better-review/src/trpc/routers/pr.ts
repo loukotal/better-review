@@ -304,12 +304,16 @@ export const prRouter = router({
             return yield* Effect.fail(new Error("Session not found. Load a PR first."));
           }
 
+          const sessionScope = yield* prContext.getSessionScope(input.sessionId);
+
           yield* Effect.log(
             `[file-diff] Session ${input.sessionId} -> PR ${prUrl}, file: ${input.file}`,
           );
 
-          // Get from cache
-          const prDiffs = yield* diffCache.get(prUrl);
+          const prDiffs =
+            sessionScope.mode === "commit" && sessionScope.commitSha
+              ? yield* diffCache.getOrFetchCommit(prUrl, sessionScope.commitSha)
+              : yield* diffCache.get(prUrl);
           if (!prDiffs) {
             return yield* Effect.fail(new Error("Diffs not cached. This shouldn't happen."));
           }
@@ -348,13 +352,18 @@ export const prRouter = router({
           return yield* Effect.fail(new Error("Session not found. Load a PR first."));
         }
 
+        const sessionScope = yield* prContext.getSessionScope(input.sessionId);
+
         yield* Effect.log(`[metadata] Session ${input.sessionId} -> PR ${prUrl}`);
 
         // Get PR status (includes description)
         const prStatus = yield* gh.getPrStatus(prUrl);
 
         // Get cached diffs and compute line counts
-        const prDiffs = yield* diffCache.get(prUrl);
+        const prDiffs =
+          sessionScope.mode === "commit" && sessionScope.commitSha
+            ? yield* diffCache.getOrFetchCommit(prUrl, sessionScope.commitSha)
+            : yield* diffCache.get(prUrl);
         const fileStats: string[] = [];
         const files: string[] = [];
 
@@ -390,10 +399,16 @@ export const prRouter = router({
             : prStatus.body
           : "(no description)";
 
+        const scopeLine =
+          sessionScope.mode === "commit" && sessionScope.commitSha
+            ? `Scope: commit ${sessionScope.commitSha.slice(0, 7)}\n`
+            : "Scope: full PR\n";
+
         const metadata = `PR: ${owner}/${repo}#${number}
 Title: ${prStatus.title}
 Author: ${prStatus.author}
 State: ${prStatus.state}${prStatus.draft ? " (draft)" : ""}
+${scopeLine}
 
 Description:
 ${description}
