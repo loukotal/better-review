@@ -82,7 +82,8 @@ export const queryKeys = {
   },
   projects: {
     list: (owner: string) => ["projects", "list", owner] as const,
-    board: (owner: string, number: number) => ["projects", "board", owner, number] as const,
+    board: (owner: string, number: number, itemQuery?: string) =>
+      ["projects", "board", owner, number, itemQuery ?? ""] as const,
     rateLimit: ["projects", "rateLimit"] as const,
   },
   user: {
@@ -172,8 +173,9 @@ export const api = {
     owner: string,
     number: number,
     _signal?: AbortSignal,
+    itemQuery?: string,
   ): Promise<ProjectBoard> {
-    return await trpc.projects.board.query({ owner, number });
+    return await trpc.projects.board.query({ owner, number, itemQuery });
   },
 
   async moveProjectItem(

@@ -28,13 +28,14 @@ export const projectsRouter = router({
       z.object({
         owner: z.string().min(1),
         number: z.number().int().positive(),
+        itemQuery: z.string().optional(),
       }),
     )
     .query(({ input }) =>
       runEffect(
         Effect.gen(function* () {
           const gh = yield* GhService;
-          const board = yield* gh.getProjectBoard(input.owner, input.number);
+          const board = yield* gh.getProjectBoard(input.owner, input.number, input.itemQuery);
           return board;
         }),
       ),

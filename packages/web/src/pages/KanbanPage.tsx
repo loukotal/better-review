@@ -104,6 +104,7 @@ const KanbanPage: Component = () => {
   const [dragOverColumn, setDragOverColumn] = createSignal<string | null>(null);
   const [selectedRepo, setSelectedRepo] = createSignal("");
   const [selectedAssignee, setSelectedAssignee] = createSignal("");
+  const [targetWeekFilter, setTargetWeekFilter] = createSignal<"all" | "lte-next">("all");
   const [cardStyle, setCardStyle] = createSignal<KanbanCardStyle>("readable");
   const [selectedItemId, setSelectedItemId] = createSignal<string | null>(null);
   const [pendingMoves, setPendingMoves] = createSignal<QueuedMove[]>([]);
@@ -156,10 +157,15 @@ const KanbanPage: Component = () => {
     return (projectsQuery.data ?? []).find((project) => project.number === number) ?? null;
   });
 
+  const boardItemQuery = createMemo(() =>
+    targetWeekFilter() === "lte-next" ? "target-week:<=@next" : undefined,
+  );
+
   const boardQuery = useQuery(() => ({
     enabled: selectedProjectNumber() !== null,
-    queryKey: queryKeys.projects.board(owner(), selectedProjectNumber() ?? -1),
-    queryFn: ({ signal }) => api.fetchProjectBoard(owner(), selectedProjectNumber()!, signal),
+    queryKey: queryKeys.projects.board(owner(), selectedProjectNumber() ?? -1, boardItemQuery()),
+    queryFn: ({ signal }) =>
+      api.fetchProjectBoard(owner(), selectedProjectNumber()!, signal, boardItemQuery()),
   }));
 
   const repoOptions = createMemo(() => {
@@ -297,7 +303,7 @@ const KanbanPage: Component = () => {
     const number = selectedProjectNumber();
     if (number === null) return;
     await queryClient.invalidateQueries({
-      queryKey: queryKeys.projects.board(owner(), number),
+      queryKey: queryKeys.projects.board(owner(), number, boardItemQuery()),
     });
   };
 
@@ -361,7 +367,7 @@ const KanbanPage: Component = () => {
     const number = selectedProjectNumber();
     if (!number) return;
 
-    const boardKey = queryKeys.projects.board(owner(), number);
+    const boardKey = queryKeys.projects.board(owner(), number, boardItemQuery());
     const currentBoard = queryClient.getQueryData<ProjectBoard>(boardKey);
 
     if (currentBoard) {
@@ -644,6 +650,22 @@ const KanbanPage: Component = () => {
                   </Select>
                 </div>
 
+                <div class="flex items-center gap-1">
+                  <span>target-week:</span>
+                  <Select
+                    compact
+                    value={targetWeekFilter()}
+                    onChange={(e) =>
+                      setTargetWeekFilter(e.currentTarget.value as "all" | "lte-next")
+                    }
+                    class="min-w-[160px]"
+                    disabled={!selectedProjectNumber()}
+                  >
+                    <option value="all">All</option>
+                    <option value="lte-next">&lt;=@next</option>
+                  </Select>
+                </div>
+
                 <Show when={pendingMoves().length > 0}>
                   <Badge variant="warning">{pendingMoves().length} queued move(s)</Badge>
                 </Show>
@@ -679,6 +701,12 @@ const KanbanPage: Component = () => {
                       • assignee: <span class="text-text">@{assignee()}</span>
                     </>
                   )}
+                </Show>
+                <Show when={targetWeekFilter() === "lte-next"}>
+                  <>
+                    {" "}
+                    • target-week: <span class="text-text">&lt;=@next</span>
+                  </>
                 </Show>
               </p>
             )}

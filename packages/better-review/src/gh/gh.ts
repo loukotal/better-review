@@ -299,7 +299,11 @@ interface GhCli {
   approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError, never>;
   searchReviewRequested: () => Effect.Effect<readonly SearchedPr[], GhError, never>;
   listProjects: (owner: string) => Effect.Effect<readonly ProjectSummary[], GhError, never>;
-  getProjectBoard: (owner: string, number: number) => Effect.Effect<ProjectBoard, GhError, never>;
+  getProjectBoard: (
+    owner: string,
+    number: number,
+    itemQuery?: string,
+  ) => Effect.Effect<ProjectBoard, GhError, never>;
   moveProjectItem: (params: MoveProjectItemParams) => Effect.Effect<void, GhError, never>;
   getProjectGraphqlRateLimit: () => Effect.Effect<ProjectGraphqlRateLimit, GhError, never>;
   listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError, never>;
@@ -1166,9 +1170,23 @@ const ghCli: GhCli = {
       Effect.withSpan("GhService.listProjects", { attributes: { owner } }),
     ),
 
-  getProjectBoard: (owner: string, number: number) =>
+  getProjectBoard: (owner: string, number: number, itemQuery?: string) =>
     Effect.gen(function* () {
       const normalizedOwner = normalizeOwner(owner);
+
+      const itemListArgs = [
+        "project",
+        "item-list",
+        String(number),
+        "--owner",
+        normalizedOwner,
+        "--limit",
+        "200",
+      ];
+      if (itemQuery && itemQuery.trim().length > 0) {
+        itemListArgs.push("--query", itemQuery.trim());
+      }
+      itemListArgs.push("--format", "json");
 
       const [viewResult, fieldsResult, itemsResult] = yield* Effect.all(
         [
@@ -1184,17 +1202,7 @@ const ghCli: GhCli = {
             "--format",
             "json",
           ),
-          runGh(
-            "project",
-            "item-list",
-            String(number),
-            "--owner",
-            normalizedOwner,
-            "--limit",
-            "200",
-            "--format",
-            "json",
-          ),
+          runGh(...itemListArgs),
         ],
         { concurrency: "unbounded" },
       );
@@ -1282,7 +1290,11 @@ const ghCli: GhCli = {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getProjectBoard", cause })),
       Effect.withSpan("GhService.getProjectBoard", {
-        attributes: { owner, projectNumber: number },
+        attributes: {
+          owner,
+          projectNumber: number,
+          itemQuery: itemQuery?.trim() || "",
+        },
       }),
     ),
 
