@@ -87,6 +87,15 @@ const formatResetAt = (resetAt: string | null | undefined): string | null => {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 };
 
+const formatTargetWeekBadgeText = (targetWeek: string): string => {
+  const trimmed = targetWeek.trim();
+  const withoutPrefix = trimmed.replace(/^target\s*week\s*:?\s*/i, "").trim();
+  if (withoutPrefix.length > 0 && withoutPrefix.length < trimmed.length) {
+    return `TW ${withoutPrefix}`;
+  }
+  return `TW ${trimmed}`;
+};
+
 const KanbanPage: Component = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const ownerFromUrl = () => {
@@ -849,7 +858,7 @@ const KanbanPage: Component = () => {
                                           class="text-[11px]"
                                           title="Target week"
                                         >
-                                          Target week: {targetWeek()}
+                                          {formatTargetWeekBadgeText(targetWeek())}
                                         </Badge>
                                       )}
                                     </Show>
@@ -908,7 +917,9 @@ const KanbanPage: Component = () => {
                   {item().status ?? "No status"}
                 </Badge>
                 <Show when={item().targetWeek}>
-                  {(targetWeek) => <Badge variant="accent">Target week: {targetWeek()}</Badge>}
+                  {(targetWeek) => (
+                    <Badge variant="accent">{formatTargetWeekBadgeText(targetWeek())}</Badge>
+                  )}
                 </Show>
               </div>
 
@@ -942,8 +953,7 @@ const KanbanPage: Component = () => {
                   <Show when={item().targetWeek}>
                     {(targetWeek) => (
                       <div class="flex items-center gap-2">
-                        <span>Target week:</span>
-                        <Badge variant="accent">{targetWeek()}</Badge>
+                        <Badge variant="accent">{formatTargetWeekBadgeText(targetWeek())}</Badge>
                       </div>
                     )}
                   </Show>
