@@ -103,6 +103,7 @@ const KanbanPage: Component = () => {
   const [movingItemId, setMovingItemId] = createSignal<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = createSignal<string | null>(null);
   const [selectedRepo, setSelectedRepo] = createSignal("");
+  const [selectedAssignee, setSelectedAssignee] = createSignal("");
   const [cardStyle, setCardStyle] = createSignal<KanbanCardStyle>("readable");
   const [selectedItemId, setSelectedItemId] = createSignal<string | null>(null);
   const [pendingMoves, setPendingMoves] = createSignal<QueuedMove[]>([]);
@@ -117,6 +118,7 @@ const KanbanPage: Component = () => {
     setOwnerInput(nextOwner);
     setSelectedProjectNumber(null);
     setSelectedRepo("");
+    setSelectedAssignee("");
     setSelectedItemId(null);
     setPendingMoves([]);
     setError(null);
@@ -176,6 +178,22 @@ const KanbanPage: Component = () => {
     return [...repos].sort();
   });
 
+  const assigneeOptions = createMemo(() => {
+    const board = boardQuery.data;
+    if (!board) return [] as string[];
+
+    const assignees = new Set<string>();
+    for (const column of board.columns) {
+      for (const item of column.items) {
+        for (const assignee of item.assignees ?? []) {
+          assignees.add(assignee);
+        }
+      }
+    }
+
+    return [...assignees].sort((a, b) => a.localeCompare(b));
+  });
+
   createEffect(() => {
     const current = selectedRepo();
     if (!current) return;
@@ -185,16 +203,29 @@ const KanbanPage: Component = () => {
     }
   });
 
+  createEffect(() => {
+    const current = selectedAssignee();
+    if (!current) return;
+    const assignees = assigneeOptions();
+    if (!assignees.includes(current)) {
+      setSelectedAssignee("");
+    }
+  });
+
   const visibleColumns = createMemo(() => {
     const board = boardQuery.data;
     if (!board) return [];
 
     const repo = selectedRepo();
-    if (!repo) return board.columns;
+    const assignee = selectedAssignee();
 
     return board.columns.map((column) => ({
       ...column,
-      items: column.items.filter((item) => item.content?.repository === repo),
+      items: column.items.filter((item) => {
+        if (repo && item.content?.repository !== repo) return false;
+        if (assignee && !(item.assignees ?? []).includes(assignee)) return false;
+        return true;
+      }),
     }));
   });
 
@@ -456,6 +487,7 @@ const KanbanPage: Component = () => {
     setSearchParams({ owner: nextOwner });
     setSelectedProjectNumber(null);
     setSelectedRepo("");
+    setSelectedAssignee("");
     setSelectedItemId(null);
     setPendingMoves([]);
     setError(null);
@@ -515,6 +547,7 @@ const KanbanPage: Component = () => {
                 onChange={(e) => {
                   setSelectedProjectNumber(Number(e.currentTarget.value));
                   setSelectedRepo("");
+                  setSelectedAssignee("");
                   setSelectedItemId(null);
                   setPendingMoves([]);
                 }}
@@ -594,6 +627,23 @@ const KanbanPage: Component = () => {
                     </span>
                   )}
                 </Show>
+
+                <div class="flex items-center gap-1">
+                  <span>assignee:</span>
+                  <Select
+                    compact
+                    value={selectedAssignee()}
+                    onChange={(e) => setSelectedAssignee(e.currentTarget.value)}
+                    class="min-w-[190px]"
+                    disabled={!boardQuery.data}
+                  >
+                    <option value="">All</option>
+                    <For each={assigneeOptions()}>
+                      {(assignee) => <option value={assignee}>@{assignee}</option>}
+                    </For>
+                  </Select>
+                </div>
+
                 <Show when={pendingMoves().length > 0}>
                   <Badge variant="warning">{pendingMoves().length} queued move(s)</Badge>
                 </Show>
@@ -618,7 +668,15 @@ const KanbanPage: Component = () => {
                   {(repo) => (
                     <>
                       {" "}
-                      • filtered to <span class="text-text">{repo()}</span>
+                      • repo: <span class="text-text">{repo()}</span>
+                    </>
+                  )}
+                </Show>
+                <Show when={selectedAssignee()}>
+                  {(assignee) => (
+                    <>
+                      {" "}
+                      • assignee: <span class="text-text">@{assignee()}</span>
                     </>
                   )}
                 </Show>
