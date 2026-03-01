@@ -10,6 +10,11 @@ import type {
   SearchedPr,
   PRComment,
   PrCommit,
+  ProjectSummary,
+  ProjectBoard,
+  ProjectBoardColumn,
+  ProjectBoardItem,
+  ProjectStatusField,
 } from "@better-review/shared";
 
 class GhError extends Data.TaggedError("GhError")<{
@@ -28,6 +33,11 @@ export type {
   SearchedPr,
   PRComment,
   PrCommit,
+  ProjectSummary,
+  ProjectBoard,
+  ProjectBoardColumn,
+  ProjectBoardItem,
+  ProjectStatusField,
 };
 
 // ============================================================================
@@ -248,6 +258,15 @@ export interface AddIssueCommentParams {
   body: string;
 }
 
+export interface MoveProjectItemParams {
+  owner: string;
+  number: number;
+  itemId: string;
+  statusOptionId: string | null;
+  projectId?: string;
+  statusFieldId?: string;
+}
+
 /** GhCli methods */
 interface GhCli {
   getDiff: (urlOrNumber: string) => Effect.Effect<string, GhError, never>;
@@ -277,6 +296,9 @@ interface GhCli {
   unresolveThread: (params: ResolveThreadParams) => Effect.Effect<void, GhError, never>;
   approvePr: (params: ApprovePrParams) => Effect.Effect<void, GhError, never>;
   searchReviewRequested: () => Effect.Effect<readonly SearchedPr[], GhError, never>;
+  listProjects: (owner: string) => Effect.Effect<readonly ProjectSummary[], GhError, never>;
+  getProjectBoard: (owner: string, number: number) => Effect.Effect<ProjectBoard, GhError, never>;
+  moveProjectItem: (params: MoveProjectItemParams) => Effect.Effect<void, GhError, never>;
   listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError, never>;
   getCommitDiff: (params: {
     owner: string;
@@ -376,6 +398,161 @@ const getPrInfo = (urlOrNumber: string) =>
 
     return { owner, repo, number: urlOrNumber };
   });
+
+const toCamelCase = (value: string): string => {
+  if (!value) return "";
+  return value.charAt(0).toLowerCase() + value.slice(1);
+};
+
+const normalizeOwner = (owner: string): string => {
+  const trimmed = owner.trim();
+  return trimmed.length > 0 ? trimmed : "@me";
+};
+
+const parseJsonUnknown = (json: string): Effect.Effect<unknown, GhError> =>
+  Effect.try({
+    try: () => JSON.parse(json) as unknown,
+    catch: (cause) => new GhError({ command: "parseJson", cause }),
+  });
+
+const toProjectSummary = (raw: unknown): ProjectSummary | null => {
+  if (!raw || typeof raw !== "object") return null;
+  const project = raw as Record<string, unknown>;
+  const owner =
+    project.owner && typeof project.owner === "object"
+      ? (project.owner as Record<string, unknown>)
+      : null;
+
+  const id = typeof project.id === "string" ? project.id : null;
+  const number = typeof project.number === "number" ? project.number : null;
+  const title = typeof project.title === "string" ? project.title : null;
+  const url = typeof project.url === "string" ? project.url : null;
+  const closed = typeof project.closed === "boolean" ? project.closed : false;
+  const ownerLogin = owner && typeof owner.login === "string" ? owner.login : null;
+  const ownerType = owner && typeof owner.type === "string" ? owner.type : null;
+
+  if (!id || number === null || !title || !url || !ownerLogin || !ownerType) {
+    return null;
+  }
+
+  return {
+    id,
+    number,
+    title,
+    url,
+    closed,
+    owner: {
+      login: ownerLogin,
+      type: ownerType,
+    },
+  };
+};
+
+const toProjectStatusField = (rawFields: unknown[]): ProjectStatusField | null => {
+  const normalized = rawFields
+    .map((field) => {
+      if (!field || typeof field !== "object") return null;
+      const f = field as Record<string, unknown>;
+      const id = typeof f.id === "string" ? f.id : null;
+      const name = typeof f.name === "string" ? f.name : null;
+      const optionsRaw = Array.isArray(f.options) ? f.options : null;
+      if (!id || !name || !optionsRaw) return null;
+
+      const options = optionsRaw
+        .map((opt) => {
+          if (!opt || typeof opt !== "object") return null;
+          const o = opt as Record<string, unknown>;
+          const optionId = typeof o.id === "string" ? o.id : null;
+          const optionName = typeof o.name === "string" ? o.name : null;
+          if (!optionId || !optionName) return null;
+          return { id: optionId, name: optionName };
+        })
+        .filter((opt): opt is { id: string; name: string } => opt !== null);
+
+      if (options.length === 0) return null;
+
+      return {
+        id,
+        name,
+        key: toCamelCase(name),
+        options,
+      } satisfies ProjectStatusField;
+    })
+    .filter((field): field is ProjectStatusField => field !== null);
+
+  if (normalized.length === 0) return null;
+
+  return (
+    normalized.find((field) => field.name.toLowerCase() === "status") ??
+    normalized.find((field) => field.key === "status") ??
+    normalized[0]
+  );
+};
+
+const findFieldKey = (
+  rawFields: unknown[],
+  matcher: (fieldName: string) => boolean,
+): string | null => {
+  for (const field of rawFields) {
+    if (!field || typeof field !== "object") continue;
+    const record = field as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name : null;
+    if (!name) continue;
+    if (matcher(name.trim().toLowerCase())) {
+      return toCamelCase(name);
+    }
+  }
+  return null;
+};
+
+const toStringList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  if (typeof value === "string" && value.length > 0) {
+    return [value];
+  }
+  return [];
+};
+
+const toProjectBoardItem = (
+  raw: unknown,
+  statusKey: string | null,
+  assigneesKey: string | null,
+): ProjectBoardItem | null => {
+  if (!raw || typeof raw !== "object") return null;
+  const item = raw as Record<string, unknown>;
+  const id = typeof item.id === "string" ? item.id : null;
+  if (!id) return null;
+
+  const rawStatus = statusKey ? item[statusKey] : null;
+  const status = typeof rawStatus === "string" ? rawStatus : null;
+
+  const assignees = assigneesKey ? toStringList(item[assigneesKey]) : [];
+
+  const contentRaw =
+    item.content && typeof item.content === "object"
+      ? (item.content as Record<string, unknown>)
+      : null;
+
+  const content = contentRaw
+    ? {
+        type: typeof contentRaw.type === "string" ? contentRaw.type : "Unknown",
+        title: typeof contentRaw.title === "string" ? contentRaw.title : "Untitled",
+        body: typeof contentRaw.body === "string" ? contentRaw.body : null,
+        url: typeof contentRaw.url === "string" ? contentRaw.url : null,
+        number: typeof contentRaw.number === "number" ? contentRaw.number : null,
+        repository: typeof contentRaw.repository === "string" ? contentRaw.repository : null,
+      }
+    : null;
+
+  return {
+    id,
+    status,
+    assignees,
+    content,
+  };
+};
 
 const ghCli: GhCli = {
   getPrInfo: (urlOrNumber: string) =>
@@ -920,6 +1097,261 @@ const ghCli: GhCli = {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "searchReviewRequested", cause })),
       Effect.withSpan("GhService.searchReviewRequested"),
+    ),
+
+  listProjects: (owner: string) =>
+    Effect.gen(function* () {
+      const normalizedOwner = normalizeOwner(owner);
+      const result = yield* runGh(
+        "project",
+        "list",
+        "--owner",
+        normalizedOwner,
+        "--limit",
+        "100",
+        "--format",
+        "json",
+      );
+
+      const parsed = yield* parseJsonUnknown(result);
+      const projectsRaw =
+        parsed &&
+        typeof parsed === "object" &&
+        Array.isArray((parsed as { projects?: unknown[] }).projects)
+          ? ((parsed as { projects: unknown[] }).projects ?? [])
+          : [];
+
+      return projectsRaw
+        .map(toProjectSummary)
+        .filter((project): project is ProjectSummary => project !== null)
+        .sort((a, b) => {
+          if (a.closed !== b.closed) return a.closed ? 1 : -1;
+          return a.number - b.number;
+        });
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "listProjects", cause })),
+      Effect.withSpan("GhService.listProjects", { attributes: { owner } }),
+    ),
+
+  getProjectBoard: (owner: string, number: number) =>
+    Effect.gen(function* () {
+      const normalizedOwner = normalizeOwner(owner);
+
+      const [viewResult, fieldsResult, itemsResult] = yield* Effect.all(
+        [
+          runGh("project", "view", String(number), "--owner", normalizedOwner, "--format", "json"),
+          runGh(
+            "project",
+            "field-list",
+            String(number),
+            "--owner",
+            normalizedOwner,
+            "--limit",
+            "100",
+            "--format",
+            "json",
+          ),
+          runGh(
+            "project",
+            "item-list",
+            String(number),
+            "--owner",
+            normalizedOwner,
+            "--limit",
+            "200",
+            "--format",
+            "json",
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      const parsedView = yield* parseJsonUnknown(viewResult);
+      const parsedFields = yield* parseJsonUnknown(fieldsResult);
+      const parsedItems = yield* parseJsonUnknown(itemsResult);
+
+      const project = toProjectSummary(parsedView);
+      if (!project) {
+        return yield* Effect.fail(
+          new GhError({ command: "getProjectBoard", cause: "Could not parse project metadata" }),
+        );
+      }
+
+      const fields =
+        parsedFields &&
+        typeof parsedFields === "object" &&
+        Array.isArray((parsedFields as { fields?: unknown[] }).fields)
+          ? ((parsedFields as { fields: unknown[] }).fields ?? [])
+          : [];
+
+      const statusField = toProjectStatusField(fields);
+      const statusKey = statusField?.key ?? null;
+      const assigneesKey = findFieldKey(
+        fields,
+        (fieldName) => fieldName === "assignees" || fieldName === "assignee",
+      );
+
+      const itemsRaw =
+        parsedItems &&
+        typeof parsedItems === "object" &&
+        Array.isArray((parsedItems as { items?: unknown[] }).items)
+          ? ((parsedItems as { items: unknown[] }).items ?? [])
+          : [];
+
+      const boardItems = itemsRaw
+        .map((item) => toProjectBoardItem(item, statusKey, assigneesKey))
+        .filter((item): item is ProjectBoardItem => item !== null);
+
+      const columns: ProjectBoardColumn[] = [];
+
+      if (statusField) {
+        for (const option of statusField.options) {
+          columns.push({
+            id: option.id,
+            name: option.name,
+            items: boardItems.filter((item) => item.status === option.name),
+          });
+        }
+
+        const uncategorized = boardItems.filter(
+          (item) =>
+            !item.status || !statusField.options.some((option) => option.name === item.status),
+        );
+
+        if (uncategorized.length > 0) {
+          columns.push({
+            id: null,
+            name: "No status",
+            items: uncategorized,
+          });
+        }
+      } else {
+        columns.push({
+          id: null,
+          name: "Items",
+          items: boardItems,
+        });
+      }
+
+      const totalCount =
+        parsedItems &&
+        typeof parsedItems === "object" &&
+        typeof (parsedItems as { totalCount?: unknown }).totalCount === "number"
+          ? ((parsedItems as { totalCount: number }).totalCount ?? boardItems.length)
+          : boardItems.length;
+
+      return {
+        project,
+        statusField,
+        columns,
+        totalCount,
+      } satisfies ProjectBoard;
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getProjectBoard", cause })),
+      Effect.withSpan("GhService.getProjectBoard", {
+        attributes: { owner, projectNumber: number },
+      }),
+    ),
+
+  moveProjectItem: (params: MoveProjectItemParams) =>
+    Effect.gen(function* () {
+      const normalizedOwner = normalizeOwner(params.owner);
+
+      let projectId = params.projectId ?? null;
+      let statusFieldId = params.statusFieldId ?? null;
+
+      if (!projectId || !statusFieldId) {
+        const [viewResult, fieldsResult] = yield* Effect.all(
+          [
+            runGh(
+              "project",
+              "view",
+              String(params.number),
+              "--owner",
+              normalizedOwner,
+              "--format",
+              "json",
+            ),
+            runGh(
+              "project",
+              "field-list",
+              String(params.number),
+              "--owner",
+              normalizedOwner,
+              "--limit",
+              "100",
+              "--format",
+              "json",
+            ),
+          ],
+          { concurrency: "unbounded" },
+        );
+
+        const parsedView = yield* parseJsonUnknown(viewResult);
+        const parsedFields = yield* parseJsonUnknown(fieldsResult);
+
+        const project = toProjectSummary(parsedView);
+        if (!project) {
+          return yield* Effect.fail(
+            new GhError({ command: "moveProjectItem", cause: "Could not parse project metadata" }),
+          );
+        }
+
+        const fields =
+          parsedFields &&
+          typeof parsedFields === "object" &&
+          Array.isArray((parsedFields as { fields?: unknown[] }).fields)
+            ? ((parsedFields as { fields: unknown[] }).fields ?? [])
+            : [];
+
+        const statusField = toProjectStatusField(fields);
+        if (!statusField) {
+          return yield* Effect.fail(
+            new GhError({
+              command: "moveProjectItem",
+              cause: "No single-select Status field found",
+            }),
+          );
+        }
+
+        projectId = project.id;
+        statusFieldId = statusField.id;
+      }
+
+      if (!projectId || !statusFieldId) {
+        return yield* Effect.fail(
+          new GhError({ command: "moveProjectItem", cause: "Missing projectId or statusFieldId" }),
+        );
+      }
+
+      const args = [
+        "project",
+        "item-edit",
+        "--id",
+        params.itemId,
+        "--field-id",
+        statusFieldId,
+        "--project-id",
+        projectId,
+      ];
+
+      if (params.statusOptionId) {
+        args.push("--single-select-option-id", params.statusOptionId);
+      } else {
+        args.push("--clear");
+      }
+
+      yield* runGh(...args);
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "moveProjectItem", cause })),
+      Effect.withSpan("GhService.moveProjectItem", {
+        attributes: {
+          owner: params.owner,
+          projectNumber: params.number,
+          itemId: params.itemId,
+          statusOptionId: params.statusOptionId ?? "clear",
+        },
+      }),
     ),
 
   getPrCiStatus: (prUrl: string) =>

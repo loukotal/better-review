@@ -820,6 +820,12 @@ const AppContent: Component = () => {
                 <A href="/" class="text-base text-text-faint hover:text-text transition-colors">
                   Browse PRs
                 </A>
+                <A
+                  href="/kanban"
+                  class="text-base text-text-faint hover:text-text transition-colors"
+                >
+                  Kanban
+                </A>
                 <SettingsPanel settings={settings()} onChange={setSettings} />
               </div>
             </div>

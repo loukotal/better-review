@@ -251,9 +251,14 @@ const PrListPage: Component = () => {
               <span class="text-accent text-base">●</span>
               <h1 class="text-base text-text">better-review</h1>
             </A>
-            <A href="/review" class="text-base text-text-faint hover:text-text transition-colors">
-              Enter PR URL manually
-            </A>
+            <div class="flex items-center gap-4">
+              <A href="/kanban" class="text-base text-text-faint hover:text-text transition-colors">
+                Kanban
+              </A>
+              <A href="/review" class="text-base text-text-faint hover:text-text transition-colors">
+                Enter PR URL manually
+              </A>
+            </div>
           </div>
         </div>
       </header>

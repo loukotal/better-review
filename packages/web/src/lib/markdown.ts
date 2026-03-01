@@ -62,6 +62,13 @@ renderer.image = ({ href, title, text }) => {
   return `<img src="${srcUrl}" alt="${text}"${titleAttr} class="${baseClasses}" loading="lazy" />`;
 };
 
+renderer.link = ({ href, title, text }) => {
+  const titleAttr = title ? ` title="${title}"` : "";
+  const isExternal = /^https?:\/\//i.test(href);
+  const targetAttrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : "";
+  return `<a href="${href}"${titleAttr}${targetAttrs}>${text}</a>`;
+};
+
 marked.use({ renderer });
 
 // Unescape quotes that marked escapes unnecessarily

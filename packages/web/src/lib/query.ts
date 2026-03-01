@@ -9,6 +9,8 @@ import type {
   CiStatus,
   SearchedPr,
   IssueComment,
+  ProjectSummary,
+  ProjectBoard,
 } from "@better-review/shared";
 
 import type { Annotation } from "../utils/parseReviewTokens";
@@ -76,6 +78,10 @@ export const queryKeys = {
   },
   prs: {
     list: ["prs", "list"] as const,
+  },
+  projects: {
+    list: (owner: string) => ["projects", "list", owner] as const,
+    board: (owner: string, number: number) => ["projects", "board", owner, number] as const,
   },
   user: {
     current: ["user", "current"] as const,
@@ -153,6 +159,37 @@ export const api = {
       prs: [...(result.prs ?? [])],
       fetchedAt: (result as { fetchedAt?: number }).fetchedAt ?? null,
     };
+  },
+
+  async fetchProjects(owner: string, _signal?: AbortSignal): Promise<ProjectSummary[]> {
+    const result = await trpc.projects.list.query({ owner });
+    return [...(result.projects ?? [])];
+  },
+
+  async fetchProjectBoard(
+    owner: string,
+    number: number,
+    _signal?: AbortSignal,
+  ): Promise<ProjectBoard> {
+    return await trpc.projects.board.query({ owner, number });
+  },
+
+  async moveProjectItem(
+    owner: string,
+    number: number,
+    itemId: string,
+    statusOptionId: string | null,
+    projectId?: string,
+    statusFieldId?: string,
+  ): Promise<void> {
+    await trpc.projects.moveItem.mutate({
+      owner,
+      number,
+      itemId,
+      statusOptionId,
+      projectId,
+      statusFieldId,
+    });
   },
 
   async fetchPrCiStatus(prUrl: string, _signal?: AbortSignal): Promise<CiStatus | null> {
@@ -324,7 +361,7 @@ export async function fetchFileContentCached(
 }
 
 // Re-export shared types for convenience
-export type { CiStatus, SearchedPr, PrStatus, PrCommit, PRComment };
+export type { CiStatus, SearchedPr, PrStatus, PrCommit, PRComment, ProjectSummary, ProjectBoard };
 
 // ============================================================================
 // Local State Helpers (persisted via IndexedDB with query cache)

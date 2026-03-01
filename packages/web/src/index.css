@@ -160,6 +160,9 @@ body {
 
 /* === MARKDOWN CONTENT STYLING === */
 .markdown-content {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+
   /* Reset default margins */
   & > *:first-child {
     margin-top: 0;
@@ -264,6 +267,8 @@ body {
     color: var(--color-accent);
     text-decoration: none;
     cursor: pointer;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
   & a:hover {
     text-decoration: underline;
