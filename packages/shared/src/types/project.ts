@@ -25,6 +25,7 @@ export interface ProjectStatusField {
 export interface ProjectBoardItem {
   id: string;
   status: string | null;
+  targetWeek: string | null;
   assignees: string[];
   content: {
     type: string;

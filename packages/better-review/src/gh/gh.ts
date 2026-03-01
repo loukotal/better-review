@@ -496,21 +496,26 @@ const toProjectStatusField = (rawFields: unknown[]): ProjectStatusField | null =
   );
 };
 
-const findFieldKey = (
+const findField = (
   rawFields: unknown[],
   matcher: (fieldName: string) => boolean,
-): string | null => {
+): { key: string; name: string } | null => {
   for (const field of rawFields) {
     if (!field || typeof field !== "object") continue;
     const record = field as Record<string, unknown>;
     const name = typeof record.name === "string" ? record.name : null;
     if (!name) continue;
     if (matcher(name.trim().toLowerCase())) {
-      return toCamelCase(name);
+      return { key: toCamelCase(name), name };
     }
   }
   return null;
 };
+
+const findFieldKey = (
+  rawFields: unknown[],
+  matcher: (fieldName: string) => boolean,
+): string | null => findField(rawFields, matcher)?.key ?? null;
 
 const toStringList = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -522,10 +527,154 @@ const toStringList = (value: unknown): string[] => {
   return [];
 };
 
+const toProjectFieldDisplay = (value: unknown): string | null => {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((entry) => toProjectFieldDisplay(entry))
+      .filter((entry): entry is string => !!entry);
+    return parts.length > 0 ? parts.join(", ") : null;
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const titled = typeof record.title === "string" ? record.title.trim() : "";
+    if (titled.length > 0) return titled;
+
+    const named = typeof record.name === "string" ? record.name.trim() : "";
+    if (named.length > 0) return named;
+
+    const startDate = typeof record.startDate === "string" ? record.startDate.trim() : "";
+    if (startDate.length > 0) return startDate;
+  }
+
+  return null;
+};
+
+const getUnknownErrorMessage = (error: unknown): string => {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
+const isUnsupportedProjectItemQueryError = (errorMessage: string): boolean => {
+  const normalized = errorMessage.toLowerCase();
+  return (
+    normalized.includes("unknown flag: --query") ||
+    normalized.includes("`--query` flag is not supported on this github host")
+  );
+};
+
+const normalizeProjectQueryFieldName = (fieldName: string): string =>
+  fieldName.toLowerCase().replace(/[\s_\-"]/g, "");
+
+const isTargetWeekLteNextQuery = (query: string, targetWeekFieldName: string | null): boolean => {
+  const trimmed = query.trim();
+  if (!trimmed.endsWith(":<=@next")) return false;
+
+  const fieldPart = trimmed.slice(0, -":<=@next".length).replace(/^"|"$/g, "");
+  const normalizedFieldPart = normalizeProjectQueryFieldName(fieldPart);
+
+  if (normalizedFieldPart === "targetweek") return true;
+
+  if (targetWeekFieldName) {
+    return normalizedFieldPart === normalizeProjectQueryFieldName(targetWeekFieldName);
+  }
+
+  return false;
+};
+
+const parseIsoDateOnlyUtc = (raw: string): Date | null => {
+  const value = raw.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+
+  return new Date(Date.UTC(year, month - 1, day));
+};
+
+const resolveTargetWeekStartDate = (value: unknown): Date | null => {
+  if (!value) return null;
+
+  if (typeof value === "string") {
+    const date = parseIsoDateOnlyUtc(value);
+    if (date) return date;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const startDate = typeof record.startDate === "string" ? record.startDate : null;
+    if (startDate) {
+      const parsedStartDate = parseIsoDateOnlyUtc(startDate) ?? new Date(startDate);
+      if (!Number.isNaN(parsedStartDate.getTime())) return parsedStartDate;
+    }
+  }
+
+  return null;
+};
+
+const isTargetWeekAtOrBeforeNext = (value: unknown): boolean => {
+  const targetDate = resolveTargetWeekStartDate(value);
+  if (!targetDate) return false;
+
+  const now = new Date();
+  const cutoff = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 7, 23, 59, 59, 999),
+  );
+
+  return targetDate.getTime() <= cutoff.getTime();
+};
+
+const filterProjectItemsByQuery = (
+  itemsRaw: unknown[],
+  itemQuery: string,
+  targetWeekKey: string | null,
+  targetWeekFieldName: string | null,
+): unknown[] => {
+  if (!itemQuery.trim()) return itemsRaw;
+
+  if (!isTargetWeekLteNextQuery(itemQuery, targetWeekFieldName)) {
+    return itemsRaw;
+  }
+
+  if (!targetWeekKey) {
+    return [];
+  }
+
+  return itemsRaw.filter((item) => {
+    if (!item || typeof item !== "object") return false;
+    const record = item as Record<string, unknown>;
+    return isTargetWeekAtOrBeforeNext(record[targetWeekKey]);
+  });
+};
+
 const toProjectBoardItem = (
   raw: unknown,
   statusKey: string | null,
   assigneesKey: string | null,
+  targetWeekKey: string | null,
 ): ProjectBoardItem | null => {
   if (!raw || typeof raw !== "object") return null;
   const item = raw as Record<string, unknown>;
@@ -536,6 +685,8 @@ const toProjectBoardItem = (
   const status = typeof rawStatus === "string" ? rawStatus : null;
 
   const assignees = assigneesKey ? toStringList(item[assigneesKey]) : [];
+
+  const targetWeek = targetWeekKey ? toProjectFieldDisplay(item[targetWeekKey]) : null;
 
   const contentRaw =
     item.content && typeof item.content === "object"
@@ -556,6 +707,7 @@ const toProjectBoardItem = (
   return {
     id,
     status,
+    targetWeek,
     assignees,
     content,
   };
@@ -1174,21 +1326,7 @@ const ghCli: GhCli = {
     Effect.gen(function* () {
       const normalizedOwner = normalizeOwner(owner);
 
-      const itemListArgs = [
-        "project",
-        "item-list",
-        String(number),
-        "--owner",
-        normalizedOwner,
-        "--limit",
-        "200",
-      ];
-      if (itemQuery && itemQuery.trim().length > 0) {
-        itemListArgs.push("--query", itemQuery.trim());
-      }
-      itemListArgs.push("--format", "json");
-
-      const [viewResult, fieldsResult, itemsResult] = yield* Effect.all(
+      const [viewResult, fieldsResult] = yield* Effect.all(
         [
           runGh("project", "view", String(number), "--owner", normalizedOwner, "--format", "json"),
           runGh(
@@ -1202,14 +1340,12 @@ const ghCli: GhCli = {
             "--format",
             "json",
           ),
-          runGh(...itemListArgs),
         ],
         { concurrency: "unbounded" },
       );
 
       const parsedView = yield* parseJsonUnknown(viewResult);
       const parsedFields = yield* parseJsonUnknown(fieldsResult);
-      const parsedItems = yield* parseJsonUnknown(itemsResult);
 
       const project = toProjectSummary(parsedView);
       if (!project) {
@@ -1225,22 +1361,84 @@ const ghCli: GhCli = {
           ? ((parsedFields as { fields: unknown[] }).fields ?? [])
           : [];
 
+      const targetWeekField = findField(fields, (fieldName) => {
+        const normalized = fieldName.replace(/\s+/g, "-");
+        return normalized === "target-week" || normalized === "targetweek";
+      });
+
+      let resolvedItemQuery = itemQuery?.trim() || "";
+      if (resolvedItemQuery === "target-week:<=@next" && targetWeekField) {
+        const needsQuotes = /[^a-z0-9-]/i.test(targetWeekField.name);
+        const queryFieldName = needsQuotes ? `"${targetWeekField.name}"` : targetWeekField.name;
+        resolvedItemQuery = `${queryFieldName}:<=@next`;
+      }
+
+      const baseItemListArgs = [
+        "project",
+        "item-list",
+        String(number),
+        "--owner",
+        normalizedOwner,
+        "--limit",
+        "200",
+        "--format",
+        "json",
+      ];
+
+      const itemListArgs =
+        resolvedItemQuery.length > 0
+          ? [...baseItemListArgs, "--query", resolvedItemQuery]
+          : [...baseItemListArgs];
+
+      let usedClientSideQueryFallback = false;
+      const itemsResult = yield* runGh(...itemListArgs).pipe(
+        Effect.catch((error: unknown) => {
+          if (resolvedItemQuery.length === 0) {
+            return Effect.fail(error);
+          }
+
+          const errorMessage = getUnknownErrorMessage(error);
+          if (!isUnsupportedProjectItemQueryError(errorMessage)) {
+            return Effect.fail(error);
+          }
+
+          usedClientSideQueryFallback = true;
+          return runGh(...baseItemListArgs);
+        }),
+      );
+      const parsedItems = yield* parseJsonUnknown(itemsResult);
+
       const statusField = toProjectStatusField(fields);
       const statusKey = statusField?.key ?? null;
       const assigneesKey = findFieldKey(
         fields,
         (fieldName) => fieldName === "assignees" || fieldName === "assignee",
       );
+      const targetWeekKey =
+        targetWeekField?.key ??
+        findFieldKey(fields, (fieldName) => {
+          const normalized = fieldName.replace(/\s+/g, "-");
+          return normalized === "target-week" || normalized === "targetweek";
+        });
 
-      const itemsRaw =
+      let itemsRaw =
         parsedItems &&
         typeof parsedItems === "object" &&
         Array.isArray((parsedItems as { items?: unknown[] }).items)
           ? ((parsedItems as { items: unknown[] }).items ?? [])
           : [];
 
+      if (resolvedItemQuery.length > 0) {
+        itemsRaw = filterProjectItemsByQuery(
+          itemsRaw,
+          resolvedItemQuery,
+          targetWeekKey,
+          targetWeekField?.name ?? null,
+        );
+      }
+
       const boardItems = itemsRaw
-        .map((item) => toProjectBoardItem(item, statusKey, assigneesKey))
+        .map((item) => toProjectBoardItem(item, statusKey, assigneesKey, targetWeekKey))
         .filter((item): item is ProjectBoardItem => item !== null);
 
       const columns: ProjectBoardColumn[] = [];
@@ -1275,11 +1473,13 @@ const ghCli: GhCli = {
       }
 
       const totalCount =
-        parsedItems &&
-        typeof parsedItems === "object" &&
-        typeof (parsedItems as { totalCount?: unknown }).totalCount === "number"
-          ? ((parsedItems as { totalCount: number }).totalCount ?? boardItems.length)
-          : boardItems.length;
+        resolvedItemQuery.length > 0 || usedClientSideQueryFallback
+          ? boardItems.length
+          : parsedItems &&
+              typeof parsedItems === "object" &&
+              typeof (parsedItems as { totalCount?: unknown }).totalCount === "number"
+            ? ((parsedItems as { totalCount: number }).totalCount ?? boardItems.length)
+            : boardItems.length;
 
       return {
         project,

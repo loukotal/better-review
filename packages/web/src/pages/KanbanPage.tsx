@@ -834,6 +834,9 @@ const KanbanPage: Component = () => {
                                     <Show when={item.content?.number}>
                                       <span>#{item.content?.number}</span>
                                     </Show>
+                                    <Show when={item.targetWeek}>
+                                      {(targetWeek) => <span>• {targetWeek()}</span>}
+                                    </Show>
                                     <Show when={item.status}>
                                       {(status) => <span>• {status()}</span>}
                                     </Show>
@@ -923,6 +926,11 @@ const KanbanPage: Component = () => {
                   <Show when={item().content?.number}>
                     <div>
                       Number: <span class="text-text">#{item().content?.number}</span>
+                    </div>
+                  </Show>
+                  <Show when={item().targetWeek}>
+                    <div>
+                      Target week: <span class="text-text">{item().targetWeek}</span>
                     </div>
                   </Show>
                   <div>
