@@ -786,7 +786,7 @@ const KanbanPage: Component = () => {
                                       cardStyleConfig().headerClass
                                     }`}
                                   >
-                                    <div class="flex items-center gap-2">
+                                    <div class="flex items-center gap-2 flex-wrap">
                                       <Show
                                         when={isDoneStatus(item.status)}
                                         fallback={
@@ -800,6 +800,9 @@ const KanbanPage: Component = () => {
                                       </Show>
                                       <Badge variant={getTypeBadgeVariant(item.content?.type)}>
                                         {item.content?.type ?? "Item"}
+                                      </Badge>
+                                      <Badge variant={getStatusBadgeVariant(item.status)}>
+                                        {item.status ?? "No status"}
                                       </Badge>
                                     </div>
 
@@ -833,9 +836,6 @@ const KanbanPage: Component = () => {
                                     </Show>
                                     <Show when={item.content?.number}>
                                       <span>#{item.content?.number}</span>
-                                    </Show>
-                                    <Show when={item.status}>
-                                      {(status) => <span>• {status()}</span>}
                                     </Show>
                                   </div>
 
