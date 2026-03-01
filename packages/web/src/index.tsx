@@ -6,6 +6,7 @@ import { render } from "solid-js/web";
 import "solid-devtools";
 import App from "./App";
 import { queryClient, restoreCache } from "./lib/query";
+import DesignSystemPage from "./pages/DesignSystemPage";
 import PrListPage from "./pages/PrListPage";
 
 // Restore cache from IndexedDB on startup
@@ -25,6 +26,8 @@ render(
       <Router>
         <Route path="/" component={PrListPage} />
         <Route path="/review" component={App} />
+        <Route path="/design-system" component={DesignSystemPage} />
+        <Route path="/_debug/design-system" component={DesignSystemPage} />
       </Router>
     </QueryClientProvider>
   ),

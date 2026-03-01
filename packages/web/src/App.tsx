@@ -19,6 +19,7 @@ import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
 import { PrProvider, usePrContext } from "./context/PrContext";
+import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
 import { FONT_FAMILY_MAP } from "./diff/types";
 import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
@@ -780,36 +781,42 @@ const AppContent: Component = () => {
               </A>
               <div class="flex items-center gap-4">
                 <div class="flex items-center gap-1 border-r border-border pr-4">
-                  <button
+                  <Button
                     onClick={() => togglePanel("chat")}
-                    class={`px-2 py-1 text-base border transition-colors ${
+                    variant="secondary"
+                    size="sm"
+                    class={
                       panelVisibility().chat
-                        ? "border-accent/50 text-accent"
-                        : "border-border text-text-faint hover:text-text"
-                    }`}
+                        ? "border-accent/50 text-accent hover:text-accent hover:border-accent/50"
+                        : "text-text-faint"
+                    }
                     title="Toggle chat panel"
                   >
                     Chat
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     onClick={() => togglePanel("files")}
-                    class={`px-2 py-1 text-base border transition-colors ${
+                    variant="secondary"
+                    size="sm"
+                    class={
                       panelVisibility().files
-                        ? "border-accent/50 text-accent"
-                        : "border-border text-text-faint hover:text-text"
-                    }`}
+                        ? "border-accent/50 text-accent hover:text-accent hover:border-accent/50"
+                        : "text-text-faint"
+                    }
                     title="Toggle file tree panel"
                   >
                     Files
-                  </button>
+                  </Button>
                 </div>
-                <button
+                <Button
                   onClick={toggleFocusMode}
-                  class="text-base text-text-faint hover:text-text transition-colors"
+                  variant="ghost"
+                  size="sm"
+                  class="text-base"
                   title="Enter focus mode (F)"
                 >
                   Focus
-                </button>
+                </Button>
                 <A href="/" class="text-base text-text-faint hover:text-text transition-colors">
                   Browse PRs
                 </A>
@@ -819,21 +826,17 @@ const AppContent: Component = () => {
 
             <form onSubmit={loadPr} class="flex gap-2">
               <div class="flex-1">
-                <input
+                <TextInput
                   type="text"
                   value={prUrl()}
                   onInput={(e) => setPrUrl(e.currentTarget.value)}
                   placeholder="github.com/owner/repo/pull/123"
-                  class="w-full px-3 py-2 bg-bg border border-border text-text text-base placeholder:text-text-faint hover:border-text-faint focus:border-accent"
+                  class="text-base"
                 />
               </div>
-              <button
-                type="submit"
-                disabled={loading() || !prUrl()}
-                class="px-4 py-2 bg-accent text-black font-medium hover:bg-accent-bright active:bg-accent disabled:opacity-30 disabled:cursor-not-allowed text-base"
-              >
+              <Button type="submit" disabled={loading() || !prUrl()} variant="primary" size="lg">
                 {loading() ? "..." : "Load"}
-              </button>
+              </Button>
               <Show when={nextPr()}>
                 {(next) => (
                   <A
@@ -893,13 +896,15 @@ const AppContent: Component = () => {
       <Show when={focusMode()}>
         <div class="flex items-center justify-between px-3 py-1 bg-bg-surface border-b border-border">
           <span class="text-text-faint text-xs">Focus mode</span>
-          <button
+          <Button
             onClick={toggleFocusMode}
-            class="text-xs text-text-faint hover:text-text transition-colors"
+            variant="ghost"
+            size="xs"
+            class="text-text-faint"
             title="Exit focus mode (F or Esc)"
           >
             Exit <span class="text-text-faint/50 ml-1">F</span>
-          </button>
+          </Button>
         </div>
       </Show>
 

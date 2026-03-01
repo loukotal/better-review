@@ -1,5 +1,6 @@
 import { For, Show, type Component } from "solid-js";
 
+import { Button, Select } from "../design-system";
 import type { PrCommit } from "../diff/types";
 import { ChevronLeftIcon } from "../icons/chevron-left-icon";
 import { ChevronRightIcon } from "../icons/chevron-right-icon";
@@ -32,22 +33,25 @@ export const CommitNavigator: Component<CommitNavigatorProps> = (props) => {
   return (
     <div class="flex items-center gap-2 px-3 py-2 border-b border-border bg-bg-surface">
       {/* Prev button */}
-      <button
+      <Button
         type="button"
         onClick={props.onPrev}
         disabled={!canPrev()}
-        class="px-2 py-1 text-sm text-text-muted hover:text-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        variant="ghost"
+        size="sm"
+        class="text-text-muted"
         title="Previous commit"
       >
         <ChevronLeftIcon size={12} />
-      </button>
+      </Button>
 
       {/* Commit selector */}
-      <select
+      <Select
         value={props.currentIndex}
         onChange={(e) => props.onSelectCommit(Number(e.target.value))}
         disabled={props.loading}
-        class="flex-1 min-w-0 px-2 py-1 bg-bg border border-border text-sm text-text disabled:opacity-50 cursor-pointer"
+        compact
+        class="flex-1 min-w-0"
       >
         <For each={props.commits}>
           {(commit, i) => (
@@ -57,18 +61,20 @@ export const CommitNavigator: Component<CommitNavigatorProps> = (props) => {
             </option>
           )}
         </For>
-      </select>
+      </Select>
 
       {/* Next button */}
-      <button
+      <Button
         type="button"
         onClick={props.onNext}
         disabled={!canNext()}
-        class="px-2 py-1 text-sm text-text-muted hover:text-text disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        variant="ghost"
+        size="sm"
+        class="text-text-muted"
         title="Next commit"
       >
         <ChevronRightIcon size={12} />
-      </button>
+      </Button>
 
       {/* Loading indicator */}
       <Show when={props.loading}>

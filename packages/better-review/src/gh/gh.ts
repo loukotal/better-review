@@ -297,6 +297,8 @@ interface GhCli {
 
 export type GhServiceApi = GhCli;
 
+const GH_COMMAND_TIMEOUT_MS = Number(process.env.GH_COMMAND_TIMEOUT_MS ?? 45_000);
+
 const runGh = (...args: string[]) =>
   Effect.tryPromise(async () => {
     const process = Bun.spawn(["gh", ...args], {
@@ -304,17 +306,33 @@ const runGh = (...args: string[]) =>
       stderr: "pipe",
     });
 
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(process.stdout).text(),
-      new Response(process.stderr).text(),
-      process.exited,
-    ]);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      process.kill();
+    }, GH_COMMAND_TIMEOUT_MS);
 
-    if (code !== 0) {
-      throw new Error(stderr.trim() || stdout.trim() || `gh exited with code ${code}`);
+    try {
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(process.stdout).text(),
+        new Response(process.stderr).text(),
+        process.exited,
+      ]);
+
+      if (timedOut) {
+        throw new Error(
+          `gh command timed out after ${GH_COMMAND_TIMEOUT_MS}ms: gh ${args.join(" ")}`,
+        );
+      }
+
+      if (code !== 0) {
+        throw new Error(stderr.trim() || stdout.trim() || `gh exited with code ${code}`);
+      }
+
+      return stdout;
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return stdout;
   });
 
 // Validate it's a PR number or valid PR URL (not an issue URL)

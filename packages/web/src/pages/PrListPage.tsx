@@ -2,6 +2,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 
+import { Badge, Button, Select } from "../design-system";
 import { SpinnerIcon } from "../icons/spinner-icon";
 import {
   queryKeys,
@@ -271,69 +272,78 @@ const PrListPage: Component = () => {
               <Show when={lastUpdatedText()}>
                 <span class="text-sm text-text-faint">Updated {lastUpdatedText()}</span>
               </Show>
-              <button
+              <Button
                 onClick={hardRefresh}
                 disabled={hardRefreshing() || prsQuery.isFetching}
-                class="px-3 py-1.5 text-base border border-border hover:border-text-faint transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                variant="secondary"
+                size="md"
+                class="text-base"
               >
                 <Show when={hardRefreshing() || prsQuery.isFetching}>
                   <SpinnerIcon size={12} class="animate-spin" />
                 </Show>
                 {hardRefreshing() || prsQuery.isFetching ? "Refreshing" : "Refresh"}
-              </button>
+              </Button>
             </div>
           </div>
 
           {/* Filter chips */}
           <div class="flex items-center gap-2 mb-6 text-sm">
             <span class="text-text-faint mr-1">Filters:</span>
-            <button
+            <Button
               onClick={() => setSearchParams({ mine: showMyPrs() ? undefined : "1" })}
-              class={`px-3 py-1 border transition-colors ${
+              variant="secondary"
+              size="sm"
+              class={
                 showMyPrs()
-                  ? "border-accent bg-accent/10 text-accent"
-                  : "border-border text-text-faint hover:border-text-faint"
-              }`}
+                  ? "border-accent bg-accent/10 text-accent hover:text-accent hover:border-accent"
+                  : "text-text-faint"
+              }
             >
               My PRs
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() => setSearchParams({ drafts: showDrafts() ? undefined : "1" })}
-              class={`px-3 py-1 border transition-colors ${
+              variant="secondary"
+              size="sm"
+              class={
                 showDrafts()
-                  ? "border-accent bg-accent/10 text-accent"
-                  : "border-border text-text-faint hover:border-text-faint"
-              }`}
+                  ? "border-accent bg-accent/10 text-accent hover:text-accent hover:border-accent"
+                  : "text-text-faint"
+              }
             >
               Drafts
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={() =>
                 setSearchParams({
                   needsReview: showNeedsReview() ? "0" : undefined,
                 })
               }
-              class={`px-3 py-1 border transition-colors ${
+              variant="secondary"
+              size="sm"
+              class={
                 showNeedsReview()
-                  ? "border-accent bg-accent/10 text-accent"
-                  : "border-border text-text-faint hover:border-text-faint"
-              }`}
+                  ? "border-accent bg-accent/10 text-accent hover:text-accent hover:border-accent"
+                  : "text-text-faint"
+              }
             >
               Needs Review
-            </button>
-            <select
+            </Button>
+            <Select
               id="repo-filter"
+              compact
               value={repoFilter()}
               onChange={(e) => setSearchParams({ repo: e.currentTarget.value || undefined })}
-              class={`px-3 py-1 border bg-bg transition-colors cursor-pointer ${
+              class={
                 repoFilter()
                   ? "border-accent bg-accent/10 text-accent"
-                  : "border-border text-text-faint hover:border-text-faint"
-              }`}
+                  : "text-text-faint hover:border-text-faint"
+              }
             >
               <option value="">All repos</option>
               <For each={uniqueRepos()}>{(repo) => <option value={repo}>{repo}</option>}</For>
-            </select>
+            </Select>
           </div>
 
           {/* Loading state */}
@@ -386,19 +396,22 @@ const PrListPage: Component = () => {
                           <div class="flex items-center gap-2">
                             <span class="text-sm text-text truncate">{pr.title}</span>
                             <Show when={pr.isDraft}>
-                              <span class="px-1.5 py-0.5 text-sm border border-text-faint/50 bg-text-faint/10 text-text-muted">
+                              <Badge
+                                variant="neutral"
+                                class="text-sm border-text-faint/50 bg-text-faint/10 text-text-muted"
+                              >
                                 DRAFT
-                              </span>
+                              </Badge>
                             </Show>
                             <Show when={pr.myReviewState === "APPROVED"}>
-                              <span class="px-1.5 py-0.5 text-sm border border-accent/50 text-accent">
+                              <Badge variant="accent" class="text-sm">
                                 APPROVED
-                              </span>
+                              </Badge>
                             </Show>
                             <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
-                              <span class="px-1.5 py-0.5 text-sm border border-error/50 text-error">
+                              <Badge variant="danger" class="text-sm">
                                 CHANGES REQUESTED
-                              </span>
+                              </Badge>
                             </Show>
                           </div>
                           <div class="text-sm text-text-faint mt-1.5 flex items-center justify-between">

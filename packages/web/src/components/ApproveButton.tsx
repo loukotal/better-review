@@ -1,6 +1,7 @@
 import { createSignal, Show } from "solid-js";
 
 import { usePrContext } from "../context/PrContext";
+import { Button, Textarea } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
 import { SpinnerIcon } from "../icons/spinner-icon";
 import { trpc } from "../lib/trpc";
@@ -38,20 +39,17 @@ export function ApproveButton() {
 
   return (
     <div class="relative">
-      <button
+      <Button
         type="button"
         onClick={() => setOpen(!open())}
         disabled={!prUrl() || approved()}
-        class="flex items-center gap-1.5 px-2.5 py-1 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        classList={{
-          "bg-green-600 text-white hover:bg-green-500": !approved(),
-          "bg-green-600/20 text-green-400 border border-green-600/50": approved(),
-        }}
+        variant={approved() ? "success-subtle" : "success"}
+        size="sm"
         title={approved() ? "PR approved" : "Approve this PR"}
       >
         <CheckIcon size={12} />
         <span>{approved() ? "Approved" : "Approve"}</span>
-      </button>
+      </Button>
 
       <Show when={open()}>
         {/* Backdrop */}
@@ -62,16 +60,13 @@ export function ApproveButton() {
           {/* Header */}
           <div class="px-3 py-2 border-b border-border flex items-center justify-between">
             <span class="text-sm text-text">Approve PR</span>
-            <button
-              onClick={() => setOpen(false)}
-              class="text-text-faint hover:text-text text-base leading-none"
-            >
+            <Button onClick={() => setOpen(false)} variant="ghost" size="xs" class="leading-none">
               ×
-            </button>
+            </Button>
           </div>
 
           <div class="p-3">
-            <textarea
+            <Textarea
               value={comment()}
               onInput={(e) => setComment(e.currentTarget.value)}
               onKeyDown={(e) => {
@@ -81,7 +76,7 @@ export function ApproveButton() {
                 }
               }}
               placeholder="Leave a comment (optional)..."
-              class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint resize-y min-h-20 focus:border-accent focus:outline-none"
+              class="min-h-20"
             />
 
             <Show when={error()}>
@@ -91,24 +86,22 @@ export function ApproveButton() {
             </Show>
 
             <div class="flex gap-2 mt-3">
-              <button
+              <Button
                 type="button"
                 onClick={handleApprove}
                 disabled={submitting()}
-                class="flex-1 px-3 py-1.5 bg-green-600 text-white text-sm hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-1.5"
+                variant="success"
+                size="md"
+                fullWidth
               >
                 <Show when={submitting()}>
                   <SpinnerIcon size={12} class="animate-spin" />
                 </Show>
                 {submitting() ? "Approving..." : "Approve"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                class="px-3 py-1.5 text-text-faint text-sm hover:text-text transition-colors"
-              >
+              </Button>
+              <Button type="button" onClick={() => setOpen(false)} variant="ghost" size="md">
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
         </div>

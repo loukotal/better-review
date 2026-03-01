@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 
+import { Button, Select } from "../design-system";
 import { GearIcon } from "../icons/gear-icon";
 import {
   type DiffSettings,
@@ -26,14 +27,16 @@ export function SettingsPanel(props: SettingsPanelProps) {
 
   return (
     <div class="relative">
-      <button
+      <Button
         type="button"
         onClick={() => setOpen(!open())}
-        class="p-1.5 text-text-faint hover:text-accent transition-colors"
+        variant="ghost"
+        size="icon"
+        class="text-text-faint hover:text-accent"
         title="Settings"
       >
         <GearIcon size={14} />
-      </button>
+      </Button>
 
       <Show when={open()}>
         {/* Backdrop */}
@@ -44,12 +47,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
           {/* Panel Header */}
           <div class="px-3 py-2 border-b border-border flex items-center justify-between">
             <span class="text-sm text-text">Settings</span>
-            <button
-              onClick={() => setOpen(false)}
-              class="text-text-faint hover:text-text text-base leading-none"
-            >
+            <Button onClick={() => setOpen(false)} variant="ghost" size="xs" class="leading-none">
               ×
-            </button>
+            </Button>
           </div>
 
           <div class="p-3 flex flex-col gap-3">
@@ -57,66 +57,75 @@ export function SettingsPanel(props: SettingsPanelProps) {
             <div class="flex flex-col gap-1.5">
               <label class="text-base text-text-faint">View</label>
               <div class="flex">
-                <button
+                <Button
                   type="button"
                   onClick={() => update("diffStyle", "split")}
-                  class="flex-1 px-2 py-1.5 text-base border-y border-l border-border transition-colors"
-                  classList={{
-                    "bg-accent text-black border-accent": props.settings.diffStyle === "split",
-                    "bg-bg text-text-muted hover:text-text": props.settings.diffStyle !== "split",
-                  }}
+                  variant="secondary"
+                  size="md"
+                  fullWidth
+                  class={
+                    props.settings.diffStyle === "split"
+                      ? "bg-accent text-black border-accent hover:text-black hover:border-accent"
+                      : "bg-bg text-text-muted"
+                  }
                 >
                   Split
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
                   onClick={() => update("diffStyle", "unified")}
-                  class="flex-1 px-2 py-1.5 text-base border border-border transition-colors"
-                  classList={{
-                    "bg-accent text-black border-accent": props.settings.diffStyle === "unified",
-                    "bg-bg text-text-muted hover:text-text": props.settings.diffStyle !== "unified",
-                  }}
+                  variant="secondary"
+                  size="md"
+                  fullWidth
+                  class={`border-l-0 ${
+                    props.settings.diffStyle === "unified"
+                      ? "bg-accent text-black border-accent hover:text-black hover:border-accent"
+                      : "bg-bg text-text-muted"
+                  }`}
                 >
                   Unified
-                </button>
+                </Button>
               </div>
             </div>
 
             {/* Theme */}
             <div class="flex flex-col gap-1.5">
               <label class="text-base text-text-faint">Theme</label>
-              <select
+              <Select
                 value={props.settings.theme}
                 onChange={(e) => update("theme", e.currentTarget.value as DiffTheme)}
-                class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
+                compact
+                class="w-full"
               >
                 <For each={Object.entries(THEME_LABELS)}>
                   {([value, label]) => <option value={value}>{label}</option>}
                 </For>
-              </select>
+              </Select>
             </div>
 
             {/* Diff Mode */}
             <div class="flex flex-col gap-1.5">
               <label class="text-base text-text-faint">Highlighting</label>
-              <select
+              <Select
                 value={props.settings.lineDiffType}
                 onChange={(e) => update("lineDiffType", e.currentTarget.value as LineDiffType)}
-                class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
+                compact
+                class="w-full"
               >
                 <For each={Object.entries(LINE_DIFF_LABELS)}>
                   {([value, label]) => <option value={value}>{label}</option>}
                 </For>
-              </select>
+              </Select>
             </div>
 
             {/* Font */}
             <div class="flex flex-col gap-1.5">
               <label class="text-base text-text-faint">Font</label>
-              <select
+              <Select
                 value={props.settings.fontFamily}
                 onChange={(e) => update("fontFamily", e.currentTarget.value as FontFamily)}
-                class="px-2 py-1.5 bg-bg border border-border text-text text-sm focus:border-accent cursor-pointer"
+                compact
+                class="w-full"
                 style={{
                   "font-family": FONT_FAMILY_MAP[props.settings.fontFamily],
                 }}
@@ -133,7 +142,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     </option>
                   )}
                 </For>
-              </select>
+              </Select>
             </div>
           </div>
         </div>
