@@ -834,9 +834,6 @@ const KanbanPage: Component = () => {
                                     <Show when={item.content?.number}>
                                       <span>#{item.content?.number}</span>
                                     </Show>
-                                    <Show when={item.targetWeek}>
-                                      {(targetWeek) => <span>• {targetWeek()}</span>}
-                                    </Show>
                                     <Show when={item.status}>
                                       {(status) => <span>• {status()}</span>}
                                     </Show>
@@ -845,6 +842,17 @@ const KanbanPage: Component = () => {
                                   <div
                                     class={`flex items-center gap-1.5 flex-wrap ${cardStyleConfig().footerClass}`}
                                   >
+                                    <Show when={item.targetWeek}>
+                                      {(targetWeek) => (
+                                        <Badge
+                                          variant="accent"
+                                          class="text-[11px]"
+                                          title="Target week"
+                                        >
+                                          Target week: {targetWeek()}
+                                        </Badge>
+                                      )}
+                                    </Show>
                                     <Show
                                       when={(item.assignees?.length ?? 0) > 0}
                                       fallback={
@@ -899,6 +907,9 @@ const KanbanPage: Component = () => {
                 <Badge variant={getStatusBadgeVariant(item().status)}>
                   {item().status ?? "No status"}
                 </Badge>
+                <Show when={item().targetWeek}>
+                  {(targetWeek) => <Badge variant="accent">Target week: {targetWeek()}</Badge>}
+                </Show>
               </div>
 
               <Card padding="md" variant="subtle" class="space-y-3 bg-bg">
@@ -929,9 +940,12 @@ const KanbanPage: Component = () => {
                     </div>
                   </Show>
                   <Show when={item().targetWeek}>
-                    <div>
-                      Target week: <span class="text-text">{item().targetWeek}</span>
-                    </div>
+                    {(targetWeek) => (
+                      <div class="flex items-center gap-2">
+                        <span>Target week:</span>
+                        <Badge variant="accent">{targetWeek()}</Badge>
+                      </div>
+                    )}
                   </Show>
                   <div>
                     Item ID: <span class="text-text break-all">{item().id}</span>
