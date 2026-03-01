@@ -11,6 +11,7 @@ import type {
   IssueComment,
   ProjectSummary,
   ProjectBoard,
+  ProjectGraphqlRateLimit,
 } from "@better-review/shared";
 
 import type { Annotation } from "../utils/parseReviewTokens";
@@ -82,6 +83,7 @@ export const queryKeys = {
   projects: {
     list: (owner: string) => ["projects", "list", owner] as const,
     board: (owner: string, number: number) => ["projects", "board", owner, number] as const,
+    rateLimit: ["projects", "rateLimit"] as const,
   },
   user: {
     current: ["user", "current"] as const,
@@ -190,6 +192,11 @@ export const api = {
       projectId,
       statusFieldId,
     });
+  },
+
+  async fetchProjectsGraphqlRateLimit(_signal?: AbortSignal): Promise<ProjectGraphqlRateLimit> {
+    const result = await trpc.projects.rateLimit.query();
+    return result.graphql;
   },
 
   async fetchPrCiStatus(prUrl: string, _signal?: AbortSignal): Promise<CiStatus | null> {

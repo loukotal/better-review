@@ -15,6 +15,7 @@ import type {
   ProjectBoardColumn,
   ProjectBoardItem,
   ProjectStatusField,
+  ProjectGraphqlRateLimit,
 } from "@better-review/shared";
 
 class GhError extends Data.TaggedError("GhError")<{
@@ -38,6 +39,7 @@ export type {
   ProjectBoardColumn,
   ProjectBoardItem,
   ProjectStatusField,
+  ProjectGraphqlRateLimit,
 };
 
 // ============================================================================
@@ -299,6 +301,7 @@ interface GhCli {
   listProjects: (owner: string) => Effect.Effect<readonly ProjectSummary[], GhError, never>;
   getProjectBoard: (owner: string, number: number) => Effect.Effect<ProjectBoard, GhError, never>;
   moveProjectItem: (params: MoveProjectItemParams) => Effect.Effect<void, GhError, never>;
+  getProjectGraphqlRateLimit: () => Effect.Effect<ProjectGraphqlRateLimit, GhError, never>;
   listCommits: (prUrl: string) => Effect.Effect<readonly PrCommit[], GhError, never>;
   getCommitDiff: (params: {
     owner: string;
@@ -551,6 +554,36 @@ const toProjectBoardItem = (
     status,
     assignees,
     content,
+  };
+};
+
+const toProjectGraphqlRateLimit = (raw: unknown): ProjectGraphqlRateLimit | null => {
+  if (!raw || typeof raw !== "object") return null;
+  const limit =
+    typeof (raw as { limit?: unknown }).limit === "number"
+      ? (raw as { limit: number }).limit
+      : null;
+  const remaining =
+    typeof (raw as { remaining?: unknown }).remaining === "number"
+      ? (raw as { remaining: number }).remaining
+      : null;
+  const used =
+    typeof (raw as { used?: unknown }).used === "number" ? (raw as { used: number }).used : null;
+  const reset =
+    typeof (raw as { reset?: unknown }).reset === "number"
+      ? (raw as { reset: number }).reset
+      : null;
+
+  if (limit === null || remaining === null || used === null || reset === null) {
+    return null;
+  }
+
+  return {
+    limit,
+    remaining,
+    used,
+    reset,
+    resetAt: new Date(reset * 1000).toISOString(),
   };
 };
 
@@ -1352,6 +1385,27 @@ const ghCli: GhCli = {
           statusOptionId: params.statusOptionId ?? "clear",
         },
       }),
+    ),
+
+  getProjectGraphqlRateLimit: () =>
+    Effect.gen(function* () {
+      const result = yield* runGh("api", "rate_limit", "--jq", ".resources.graphql");
+      const parsed = yield* parseJsonUnknown(result);
+      const rateLimit = toProjectGraphqlRateLimit(parsed);
+
+      if (!rateLimit) {
+        return yield* Effect.fail(
+          new GhError({
+            command: "getProjectGraphqlRateLimit",
+            cause: "Could not parse GraphQL rate limit",
+          }),
+        );
+      }
+
+      return rateLimit;
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getProjectGraphqlRateLimit", cause })),
+      Effect.withSpan("GhService.getProjectGraphqlRateLimit"),
     ),
 
   getPrCiStatus: (prUrl: string) =>

@@ -48,3 +48,11 @@ export interface ProjectBoard {
   columns: ProjectBoardColumn[];
   totalCount: number;
 }
+
+export interface ProjectGraphqlRateLimit {
+  limit: number;
+  remaining: number;
+  used: number;
+  reset: number;
+  resetAt: string;
+}

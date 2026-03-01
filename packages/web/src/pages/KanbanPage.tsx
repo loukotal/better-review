@@ -23,6 +23,15 @@ import { api, queryClient, queryKeys } from "../lib/query";
 
 type KanbanCardStyle = "readable" | "compact" | "split";
 
+interface QueuedMove {
+  owner: string;
+  number: number;
+  itemId: string;
+  statusOptionId: string | null;
+  projectId?: string;
+  statusFieldId?: string;
+}
+
 const getTypeBadgeVariant = (type: string | null | undefined): "accent" | "warning" | "neutral" => {
   const normalized = (type ?? "").toLowerCase();
   if (normalized.includes("pullrequest")) return "accent";
@@ -66,6 +75,18 @@ const parseRepositoryContext = (
   return { owner, repo };
 };
 
+const isRateLimitError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /rate limit/i.test(message) || /API rate limit already exceeded/i.test(message);
+};
+
+const formatResetAt = (resetAt: string | null | undefined): string | null => {
+  if (!resetAt) return null;
+  const date = new Date(resetAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
 const KanbanPage: Component = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const ownerFromUrl = () => {
@@ -84,6 +105,8 @@ const KanbanPage: Component = () => {
   const [selectedRepo, setSelectedRepo] = createSignal("");
   const [cardStyle, setCardStyle] = createSignal<KanbanCardStyle>("readable");
   const [selectedItemId, setSelectedItemId] = createSignal<string | null>(null);
+  const [pendingMoves, setPendingMoves] = createSignal<QueuedMove[]>([]);
+  const [isFlushingQueue, setIsFlushingQueue] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
   createEffect(() => {
@@ -95,12 +118,19 @@ const KanbanPage: Component = () => {
     setSelectedProjectNumber(null);
     setSelectedRepo("");
     setSelectedItemId(null);
+    setPendingMoves([]);
     setError(null);
   });
 
   const projectsQuery = useQuery(() => ({
     queryKey: queryKeys.projects.list(owner()),
     queryFn: ({ signal }) => api.fetchProjects(owner(), signal),
+  }));
+
+  const quotaQuery = useQuery(() => ({
+    queryKey: queryKeys.projects.rateLimit,
+    queryFn: ({ signal }) => api.fetchProjectsGraphqlRateLimit(signal),
+    refetchInterval: pendingMoves().length > 0 ? 5000 : 15000,
   }));
 
   createEffect(() => {
@@ -240,6 +270,62 @@ const KanbanPage: Component = () => {
     });
   };
 
+  const graphqlRemaining = createMemo(() => quotaQuery.data?.remaining ?? null);
+  const graphqlResetLabel = createMemo(() => formatResetAt(quotaQuery.data?.resetAt));
+  const hasGraphqlQuota = createMemo(() => {
+    const remaining = graphqlRemaining();
+    return remaining === null ? true : remaining > 0;
+  });
+
+  const enqueueMove = (move: QueuedMove) => {
+    setPendingMoves((current) => {
+      const withoutSameItem = current.filter((queued) => queued.itemId !== move.itemId);
+      return [...withoutSameItem, move];
+    });
+  };
+
+  const flushOneQueuedMove = async () => {
+    if (isFlushingQueue()) return;
+    if (!hasGraphqlQuota()) return;
+
+    const next = pendingMoves()[0];
+    if (!next) return;
+
+    setIsFlushingQueue(true);
+    setMovingItemId(next.itemId);
+
+    try {
+      await api.moveProjectItem(
+        next.owner,
+        next.number,
+        next.itemId,
+        next.statusOptionId,
+        next.projectId,
+        next.statusFieldId,
+      );
+      setPendingMoves((current) => current.slice(1));
+      setError(null);
+    } catch (err) {
+      if (isRateLimitError(err)) {
+        setError("GraphQL quota exhausted. Pending moves will auto-apply after reset.");
+      } else {
+        setPendingMoves((current) => current.slice(1));
+        setError(err instanceof Error ? err.message : "Failed to apply queued move");
+      }
+    } finally {
+      setMovingItemId(null);
+      setIsFlushingQueue(false);
+      void quotaQuery.refetch();
+    }
+  };
+
+  createEffect(() => {
+    if (pendingMoves().length === 0) return;
+    if (!hasGraphqlQuota()) return;
+    if (isFlushingQueue()) return;
+    void flushOneQueuedMove();
+  });
+
   const moveItem = async (item: ProjectBoardItem, targetStatusOptionId: string | null) => {
     const number = selectedProjectNumber();
     if (!number) return;
@@ -295,24 +381,47 @@ const KanbanPage: Component = () => {
       });
     }
 
-    try {
-      await api.moveProjectItem(
-        owner(),
-        number,
-        item.id,
-        targetStatusOptionId,
-        currentBoard?.project.id,
-        currentBoard?.statusField?.id,
-      );
+    const movePayload: QueuedMove = {
+      owner: owner(),
+      number,
+      itemId: item.id,
+      statusOptionId: targetStatusOptionId,
+      projectId: currentBoard?.project.id,
+      statusFieldId: currentBoard?.statusField?.id,
+    };
 
+    if (!hasGraphqlQuota()) {
+      enqueueMove(movePayload);
+      setError("GraphQL quota exhausted. Move queued and will auto-apply after reset.");
       setMovingItemId(null);
       setDragOverColumn(null);
-      void queryClient.invalidateQueries({ queryKey: boardKey });
+      return;
+    }
+
+    try {
+      await api.moveProjectItem(
+        movePayload.owner,
+        movePayload.number,
+        movePayload.itemId,
+        movePayload.statusOptionId,
+        movePayload.projectId,
+        movePayload.statusFieldId,
+      );
+
+      setError(null);
+      setMovingItemId(null);
+      setDragOverColumn(null);
+      void quotaQuery.refetch();
     } catch (err) {
-      if (previousBoard) {
-        queryClient.setQueryData(boardKey, previousBoard);
+      if (isRateLimitError(err)) {
+        enqueueMove(movePayload);
+        setError("GraphQL quota exhausted. Move queued and will auto-apply after reset.");
+      } else {
+        if (previousBoard) {
+          queryClient.setQueryData(boardKey, previousBoard);
+        }
+        setError(err instanceof Error ? err.message : "Failed to move item");
       }
-      setError(err instanceof Error ? err.message : "Failed to move item");
       setMovingItemId(null);
       setDragOverColumn(null);
     }
@@ -348,6 +457,7 @@ const KanbanPage: Component = () => {
     setSelectedProjectNumber(null);
     setSelectedRepo("");
     setSelectedItemId(null);
+    setPendingMoves([]);
     setError(null);
   };
 
@@ -406,6 +516,7 @@ const KanbanPage: Component = () => {
                   setSelectedProjectNumber(Number(e.currentTarget.value));
                   setSelectedRepo("");
                   setSelectedItemId(null);
+                  setPendingMoves([]);
                 }}
                 class="min-w-[320px]"
               >
@@ -470,6 +581,26 @@ const KanbanPage: Component = () => {
             )}
           </Show>
 
+          <Show when={quotaQuery.data}>
+            {(quota) => (
+              <div class="text-xs text-text-faint flex items-center gap-2 flex-wrap">
+                <span>
+                  GraphQL: <span class="text-text">{quota().remaining}</span> / {quota().limit}
+                </span>
+                <Show when={graphqlResetLabel()}>
+                  {(label) => (
+                    <span>
+                      reset ~ <span class="text-text">{label()}</span>
+                    </span>
+                  )}
+                </Show>
+                <Show when={pendingMoves().length > 0}>
+                  <Badge variant="warning">{pendingMoves().length} queued move(s)</Badge>
+                </Show>
+              </div>
+            )}
+          </Show>
+
           <Show when={error()}>
             <div class="px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-sm">
               {error()}
@@ -481,7 +612,8 @@ const KanbanPage: Component = () => {
               <p class="text-xs text-text-faint">
                 Drag cards between columns. Field:{" "}
                 <span class="text-text">{statusField().name}</span> • card variants:{" "}
-                <span class="text-text">Readable / Compact / Split</span>
+                <span class="text-text">Readable / Compact / Split</span> • GraphQL saver mode:{" "}
+                <span class="text-text">queued auto-apply + manual board refresh</span>
                 <Show when={selectedRepo()}>
                   {(repo) => (
                     <>

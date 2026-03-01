@@ -60,4 +60,14 @@ export const projectsRouter = router({
         }),
       ),
     ),
+
+  rateLimit: publicProcedure.query(() =>
+    runEffect(
+      Effect.gen(function* () {
+        const gh = yield* GhService;
+        const graphql = yield* gh.getProjectGraphqlRateLimit();
+        return { graphql };
+      }),
+    ),
+  ),
 });
