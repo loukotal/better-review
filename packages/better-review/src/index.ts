@@ -55,6 +55,94 @@ async function serveStatic(pathname: string): Promise<Response> {
 }
 
 // =============================================================================
+// Request Logging
+// =============================================================================
+
+const activeRequests = new Map<string, { method: string; path: string; start: number }>();
+let requestCounter = 0;
+
+function loggedHandler<T extends (req: Request) => Response | Promise<Response>>(handler: T): T {
+  return ((req: Request) => {
+    const id = String(++requestCounter);
+    const url = new URL(req.url);
+    const method = req.method;
+    const path = url.pathname + url.search;
+    const start = Date.now();
+
+    activeRequests.set(id, { method, path, start });
+    console.log(`[req] --> ${method} ${path} (id=${id})`);
+
+    const cleanup = (status: number) => {
+      activeRequests.delete(id);
+      const duration = Date.now() - start;
+      console.log(`[req] <-- ${method} ${path} ${status} ${duration}ms (id=${id})`);
+    };
+
+    try {
+      const result = handler(req);
+      if (result instanceof Promise) {
+        return result.then(
+          (res) => {
+            cleanup(res.status);
+            return res;
+          },
+          (err) => {
+            cleanup(500);
+            throw err;
+          },
+        );
+      }
+      cleanup(result.status);
+      return result;
+    } catch (err) {
+      cleanup(500);
+      throw err;
+    }
+  }) as T;
+}
+
+/** Wrap all handlers in a routes object with request logging */
+function logRoutes<T extends Record<string, unknown>>(routes: T): T {
+  const wrapped: Record<string, unknown> = {};
+  for (const [pattern, handler] of Object.entries(routes)) {
+    if (typeof handler === "function") {
+      wrapped[pattern] = loggedHandler(handler as (req: Request) => Response | Promise<Response>);
+    } else if (typeof handler === "object" && handler !== null) {
+      // Route with method handlers: { GET: fn, POST: fn, ... }
+      const methods: Record<string, unknown> = {};
+      for (const [method, fn] of Object.entries(handler as Record<string, unknown>)) {
+        if (typeof fn === "function") {
+          methods[method] = loggedHandler(fn as (req: Request) => Response | Promise<Response>);
+        } else {
+          methods[method] = fn;
+        }
+      }
+      wrapped[pattern] = methods;
+    } else {
+      wrapped[pattern] = handler;
+    }
+  }
+  return wrapped as T;
+}
+
+// Periodically log requests that have been running for too long
+const STALL_CHECK_INTERVAL = 10_000; // 10s
+const STALL_THRESHOLD = 15_000; // 15s
+
+const stallChecker = setInterval(() => {
+  const now = Date.now();
+  for (const [id, { method, path, start }] of activeRequests) {
+    const elapsed = now - start;
+    if (elapsed > STALL_THRESHOLD) {
+      console.warn(`[req] STALLED: ${method} ${path} has been running for ${elapsed}ms (id=${id})`);
+    }
+  }
+}, STALL_CHECK_INTERVAL);
+
+// Ensure the interval doesn't prevent process exit
+stallChecker.unref();
+
+// =============================================================================
 // Route Handlers
 // =============================================================================
 
@@ -307,7 +395,7 @@ const main = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  const routes = createRoutes({ gh, diffCache, prContext });
+  const routes = logRoutes(createRoutes({ gh, diffCache, prContext }));
 
   const server = Bun.serve({
     // Local-first: avoid exposing an API that can shell out to `gh` on the LAN by default.
@@ -325,6 +413,7 @@ const main = Effect.gen(function* () {
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       console.log("[Shutdown] Stopping server...");
+      clearInterval(stallChecker);
       server.stop();
     }),
   );
