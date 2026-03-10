@@ -842,11 +842,16 @@ const ghCli: GhCli = {
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(params.prUrl);
 
-      const payload = JSON.stringify({ body: params.body });
-
       // Use the issues endpoint for top-level PR comments
-      const result = yield* Effect.tryPromise(() =>
-        Bun.$`echo ${payload} | gh api repos/${owner}/${repo}/issues/${number}/comments -X POST -H "Accept: application/vnd.github+json" --input -`.text(),
+      const result = yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/issues/${number}/comments`,
+        "-X",
+        "POST",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-f",
+        `body=${params.body}`,
       );
       return yield* parseJsonPreserve(IssueCommentSchema)(result);
     }).pipe(
@@ -870,18 +875,24 @@ const ghCli: GhCli = {
         ".head.sha",
       )).trim();
 
-      // Create the comment using raw JSON body
-      const payload = JSON.stringify({
-        body: params.body,
-        commit_id: commitSha,
-        path: params.filePath,
-        line: params.line,
-        side: params.side ?? "RIGHT",
-      });
-
-      // Use Bun shell directly for easier stdin handling
-      const result = yield* Effect.tryPromise(() =>
-        Bun.$`echo ${payload} | gh api repos/${owner}/${repo}/pulls/${number}/comments -X POST -H "Accept: application/vnd.github+json" --input -`.text(),
+      // Create a PR review comment
+      const result = yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}/comments`,
+        "-X",
+        "POST",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-f",
+        `body=${params.body}`,
+        "-f",
+        `commit_id=${commitSha}`,
+        "-f",
+        `path=${params.filePath}`,
+        "-F",
+        `line=${params.line}`,
+        "-f",
+        `side=${params.side ?? "RIGHT"}`,
       );
       return yield* parseJsonPreserve(PRCommentSchema)(result);
     }).pipe(
@@ -899,11 +910,16 @@ const ghCli: GhCli = {
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(params.prUrl);
 
-      const payload = JSON.stringify({ body: params.body });
-
       // Use the dedicated reply endpoint
-      const result = yield* Effect.tryPromise(() =>
-        Bun.$`echo ${payload} | gh api repos/${owner}/${repo}/pulls/${number}/comments/${params.commentId}/replies -X POST -H "Accept: application/vnd.github+json" --input -`.text(),
+      const result = yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}/comments/${params.commentId}/replies`,
+        "-X",
+        "POST",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-f",
+        `body=${params.body}`,
       );
       return yield* parseJsonPreserve(PRCommentSchema)(result);
     }).pipe(
@@ -921,8 +937,13 @@ const ghCli: GhCli = {
       const { owner, repo } = yield* getPrInfo(params.prUrl);
 
       // Use gh api with field flag for the body
-      const result = yield* Effect.tryPromise(() =>
-        Bun.$`gh api repos/${owner}/${repo}/pulls/comments/${params.commentId} -X PATCH -f body=${params.body}`.text(),
+      const result = yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/pulls/comments/${params.commentId}`,
+        "-X",
+        "PATCH",
+        "-f",
+        `body=${params.body}`,
       );
       return yield* parseJsonPreserve(PRCommentSchema)(result);
     }).pipe(
@@ -939,8 +960,11 @@ const ghCli: GhCli = {
     Effect.gen(function* () {
       const { owner, repo } = yield* getPrInfo(params.prUrl);
 
-      yield* Effect.tryPromise(() =>
-        Bun.$`gh api repos/${owner}/${repo}/pulls/comments/${params.commentId} -X DELETE`.text(),
+      yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/pulls/comments/${params.commentId}`,
+        "-X",
+        "DELETE",
       );
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "deleteComment", cause })),
@@ -957,8 +981,13 @@ const ghCli: GhCli = {
       const { owner, repo } = yield* getPrInfo(params.prUrl);
 
       // Issue comments use a different endpoint than PR review comments
-      const result = yield* Effect.tryPromise(() =>
-        Bun.$`gh api repos/${owner}/${repo}/issues/comments/${params.commentId} -X PATCH -f body=${params.body}`.text(),
+      const result = yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/issues/comments/${params.commentId}`,
+        "-X",
+        "PATCH",
+        "-f",
+        `body=${params.body}`,
       );
       return yield* parseJsonPreserve(IssueCommentSchema)(result);
     }).pipe(
@@ -975,8 +1004,11 @@ const ghCli: GhCli = {
     Effect.gen(function* () {
       const { owner, repo } = yield* getPrInfo(params.prUrl);
 
-      yield* Effect.tryPromise(() =>
-        Bun.$`gh api repos/${owner}/${repo}/issues/comments/${params.commentId} -X DELETE`.text(),
+      yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/issues/comments/${params.commentId}`,
+        "-X",
+        "DELETE",
       );
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "deleteIssueComment", cause })),
