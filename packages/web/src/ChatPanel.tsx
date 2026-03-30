@@ -471,8 +471,8 @@ export function ChatPanel(props: ChatPanelProps) {
 
       let text = msg.content;
 
-      // Strip review order blocks
-      text = text.replace(/(?:```\n?)?<<REVIEW_ORDER>>[\s\S]*?<<\/REVIEW_ORDER>>(?:\n?```)?/g, "");
+      // Strip review order blocks, including payloads wrapped in fenced json
+      text = text.replace(/<<REVIEW_ORDER>>[\s\S]*?<<\/REVIEW_ORDER>>/g, "");
 
       // Replace annotation blocks - keep non-dismissed, remove dismissed
       text = text.replace(

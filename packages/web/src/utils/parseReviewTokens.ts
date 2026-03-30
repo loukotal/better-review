@@ -30,12 +30,17 @@ export interface ParsedMessage {
 }
 
 // Regex patterns
-// Match REVIEW_ORDER with optional surrounding code block (```\n...\n```)
-const REVIEW_ORDER_PATTERN = /(?:```\n?)?<<REVIEW_ORDER>>([\s\S]*?)<<\/REVIEW_ORDER>>(?:\n?```)?/g;
+const REVIEW_ORDER_PATTERN = /<<REVIEW_ORDER>>([\s\S]*?)<<\/REVIEW_ORDER>>/g;
 const ANNOTATION_PATTERN =
   /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
 // Match file refs, optionally wrapped in ** (bold markdown)
 const FILE_REF_PATTERN = /\*{0,2}\[\[file:([^\]:\s]+)(?::(\d+))?\]\]\*{0,2}/g;
+
+function normalizeReviewOrderJson(raw: string): string {
+  const trimmed = raw.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
 
 /**
  * Generate a stable annotation ID based on content.
@@ -67,7 +72,7 @@ export function parseReviewTokens(content: string): ParsedMessage {
   // Extract review order
   processedContent = processedContent.replace(REVIEW_ORDER_PATTERN, (match, jsonContent) => {
     try {
-      const files = JSON.parse(jsonContent.trim());
+      const files = JSON.parse(normalizeReviewOrderJson(jsonContent));
       if (Array.isArray(files)) {
         reviewOrder = files;
         const placeholder = `__REVIEW_ORDER_${Date.now()}__`;
@@ -171,7 +176,7 @@ export function extractReviewOrder(content: string): string[] | null {
   const match = content.match(/<<REVIEW_ORDER>>([\s\S]*?)<<\/REVIEW_ORDER>>/);
   if (match) {
     try {
-      const files = JSON.parse(match[1].trim());
+      const files = JSON.parse(normalizeReviewOrderJson(match[1]));
       if (Array.isArray(files)) {
         return files;
       }
