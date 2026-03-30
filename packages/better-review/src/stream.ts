@@ -230,7 +230,11 @@ export function transformEvent(event: OpenCodeEvent): StreamEvent | null {
 
   switch (event.type) {
     case "message.part.updated": {
-      const { part, delta } = event.properties;
+      const { part } = event.properties;
+      const delta =
+        "delta" in event.properties && typeof event.properties.delta === "string"
+          ? event.properties.delta
+          : undefined;
       partKinds.set(part.id, part.type);
 
       // Skip events without sessionId (shouldn't happen for message events)
