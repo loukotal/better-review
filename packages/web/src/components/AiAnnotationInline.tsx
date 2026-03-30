@@ -1,13 +1,17 @@
-import { type Component, createSignal, Show } from "solid-js";
+import { type Component, For, createMemo, createSignal, Show } from "solid-js";
 import { render } from "solid-js/web";
 
 import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens";
+import { FileLink } from "./FileLink";
 
 export interface AiAnnotationInlineProps {
   annotation: Annotation;
   onDismiss?: (annotationId: string) => void;
   onCreateComment?: (annotation: Annotation) => void;
+  onNavigate?: (file: string, line?: number) => void;
 }
+
+type MessagePart = { type: "text"; text: string } | { type: "file"; file: string; line?: number };
 
 const severityConfig: Record<
   AnnotationSeverity,
@@ -106,6 +110,31 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
   const [isHovered, setIsHovered] = createSignal(false);
   const [copied, setCopied] = createSignal(false);
   const config = () => severityConfig[props.annotation.severity];
+  const parsedMessage = createMemo<MessagePart[]>(() => {
+    const pattern = /\[\[file:([^\]:\s]+)(?::(\d+))?\]\]/g;
+    const parts: MessagePart[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = pattern.exec(props.annotation.message)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({ type: "text", text: props.annotation.message.slice(lastIndex, match.index) });
+      }
+
+      parts.push({
+        type: "file",
+        file: match[1],
+        line: match[2] ? parseInt(match[2], 10) : undefined,
+      });
+      lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < props.annotation.message.length) {
+      parts.push({ type: "text", text: props.annotation.message.slice(lastIndex) });
+    }
+
+    return parts.length > 0 ? parts : [{ type: "text", text: props.annotation.message }];
+  });
 
   const handleCopy = async () => {
     const text = props.annotation.message;
@@ -192,7 +221,19 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
       </div>
 
       {/* Message */}
-      <p class="text-sm text-text-muted leading-relaxed m-0 pl-0">{props.annotation.message}</p>
+      <p class="text-sm text-text-muted leading-relaxed m-0 pl-0 whitespace-pre-wrap">
+        <For each={parsedMessage()}>
+          {(part) =>
+            part.type === "text" ? (
+              part.text
+            ) : props.onNavigate ? (
+              <FileLink file={part.file} line={part.line} onClick={props.onNavigate} />
+            ) : (
+              `${part.file}${part.line ? `:${part.line}` : ""}`
+            )
+          }
+        </For>
+      </p>
     </div>
   );
 };

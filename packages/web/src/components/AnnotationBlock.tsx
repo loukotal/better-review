@@ -1,4 +1,4 @@
-import { type Component, createSignal } from "solid-js";
+import { type Component, For, createMemo, createSignal } from "solid-js";
 
 import { CheckIcon } from "../icons/check-icon";
 import { CopyIcon } from "../icons/copy-icon";
@@ -6,11 +6,14 @@ import { CriticalIcon } from "../icons/critical-icon";
 import { InfoIcon } from "../icons/info-icon";
 import { WarningIcon } from "../icons/warning-icon";
 import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens";
+import { FileLink } from "./FileLink";
 
 interface AnnotationBlockProps {
   annotation: Annotation;
   onNavigate: (file: string, line: number) => void;
 }
+
+type MessagePart = { type: "text"; text: string } | { type: "file"; file: string; line?: number };
 
 const severityStyles: Record<
   AnnotationSeverity,
@@ -53,6 +56,31 @@ function SeverityIcon(props: { severity: AnnotationSeverity }) {
 export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
   const [copied, setCopied] = createSignal(false);
   const styles = () => severityStyles[props.annotation.severity];
+  const parsedMessage = createMemo<MessagePart[]>(() => {
+    const pattern = /\[\[file:([^\]:\s]+)(?::(\d+))?\]\]/g;
+    const parts: MessagePart[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = pattern.exec(props.annotation.message)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({ type: "text", text: props.annotation.message.slice(lastIndex, match.index) });
+      }
+
+      parts.push({
+        type: "file",
+        file: match[1],
+        line: match[2] ? parseInt(match[2], 10) : undefined,
+      });
+      lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < props.annotation.message.length) {
+      parts.push({ type: "text", text: props.annotation.message.slice(lastIndex) });
+    }
+
+    return parts.length > 0 ? parts : [{ type: "text", text: props.annotation.message }];
+  });
 
   const fileName = () => {
     const parts = props.annotation.file.split("/");
@@ -100,7 +128,21 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
       </div>
 
       {/* Message */}
-      <div class="text-sm text-text-muted leading-relaxed pl-5">{props.annotation.message}</div>
+      <div class="text-sm text-text-muted leading-relaxed pl-5 whitespace-pre-wrap">
+        <For each={parsedMessage()}>
+          {(part) =>
+            part.type === "text" ? (
+              part.text
+            ) : (
+              <FileLink
+                file={part.file}
+                line={part.line}
+                onClick={(file, line) => props.onNavigate(file, line ?? 1)}
+              />
+            )
+          }
+        </For>
+      </div>
     </div>
   );
 };
