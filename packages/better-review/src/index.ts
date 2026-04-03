@@ -17,6 +17,7 @@ import { appRouter } from "./trpc/routers";
 
 const isProduction = process.env.NODE_ENV === "production";
 const staticDir = path.resolve(import.meta.dir, "../../web/dist");
+const allowedDevOrigins = new Set(["http://localhost:3000", "http://127.0.0.1:3000"]);
 
 if (isProduction) {
   console.log(`[static] Production mode enabled, serving from: ${staticDir}`);
@@ -40,6 +41,10 @@ function resolveStaticFilePath(urlPathname: string): string | null {
 }
 
 async function serveStatic(pathname: string): Promise<Response> {
+  if (pathname === "/api" || pathname.startsWith("/api/")) {
+    return new Response("Not Found", { status: 404 });
+  }
+
   const resolved = resolveStaticFilePath(pathname);
   if (resolved) {
     const file = Bun.file(resolved);
@@ -51,6 +56,32 @@ async function serveStatic(pathname: string): Promise<Response> {
 
   return new Response(Bun.file(`${staticDir}/index.html`), {
     headers: { "Content-Type": "text/html" },
+  });
+}
+
+function getCorsHeaders(req: Request): HeadersInit {
+  const origin = req.headers.get("origin");
+  if (!origin || !allowedDevOrigins.has(origin)) return {};
+
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "content-type, trpc-accept, x-trpc-source",
+    "Access-Control-Allow-Credentials": "true",
+    Vary: "Origin",
+  };
+}
+
+function withCors(req: Request, response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(getCorsHeaders(req))) {
+    headers.set(key, value);
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
 }
 
@@ -211,13 +242,32 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
   },
 
   // tRPC endpoint
-  "/api/trpc/*": (req: Request) =>
-    fetchRequestHandler({
+  "/api/trpc": (req: Request) => {
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: getCorsHeaders(req) });
+    }
+
+    return fetchRequestHandler({
       endpoint: "/api/trpc",
       req,
       router: appRouter,
       createContext,
-    }),
+    }).then((response) => withCors(req, response));
+  },
+
+  // tRPC procedure path endpoint
+  "/api/trpc/*": (req: Request) => {
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: getCorsHeaders(req) });
+    }
+
+    return fetchRequestHandler({
+      endpoint: "/api/trpc",
+      req,
+      router: appRouter,
+      createContext,
+    }).then((response) => withCors(req, response));
+  },
 
   // REST endpoint: /api/pr/file-diff (used by OpenCode pr_diff tool)
   "/api/pr/file-diff": {
