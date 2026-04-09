@@ -1,6 +1,11 @@
-import { codeToHtml } from "shiki";
-
 import type { DiffTheme } from "../diff/types";
+
+let shikiModulePromise: Promise<typeof import("shiki")> | undefined;
+
+function loadShiki() {
+  shikiModulePromise ??= import("shiki");
+  return shikiModulePromise;
+}
 
 // Cache for highlighted code to avoid re-highlighting the same content
 const highlightCache = new Map<string, string>();
@@ -43,6 +48,7 @@ export async function highlightCode(code: string, lang: string, theme: DiffTheme
 
   try {
     const normalizedLang = normalizeLanguage(lang);
+    const { codeToHtml } = await loadShiki();
 
     const html = await codeToHtml(code, {
       lang: normalizedLang,

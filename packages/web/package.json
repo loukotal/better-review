@@ -8,29 +8,30 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
+    "test": "bun test",
     "serve": "vite preview"
   },
   "dependencies": {
     "@better-review/shared": "workspace:*",
-    "@pierre/diffs": "^1.0.11",
+    "@pierre/diffs": "^1.1.12",
     "@solidjs/router": "^0.15.4",
-    "@tanstack/query-persist-client-core": "^5.91.19",
-    "@tanstack/solid-query": "^5.90.23",
-    "@trpc/client": "^11.10.0",
+    "@tanstack/query-persist-client-core": "^5.97.0",
+    "@tanstack/solid-query": "^5.97.0",
+    "@trpc/client": "^11.16.0",
     "highlight.js": "^11.11.1",
     "idb": "^8.0.3",
     "idb-keyval": "^6.2.2",
-    "marked": "^17.0.2",
-    "remend": "^1.2.0",
-    "solid-js": "^1.9.11",
+    "marked": "^17.0.6",
+    "remend": "^1.3.0",
+    "solid-js": "^1.9.12",
     "superjson": "^2.2.6"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.1.18",
-    "solid-devtools": "^0.34.5",
-    "tailwindcss": "^4.1.18",
+    "@tailwindcss/vite": "^4.2.2",
+    "tailwindcss": "^4.2.2",
     "typescript": "^5.9.3",
-    "vite": "^8",
-    "vite-plugin-solid": "^2.11.11"
+    "vite": "^8.0.8",
+    "vite-plugin-solid": "^2.11.12",
+    "vitefu": "^1.1.3"
   }
 }

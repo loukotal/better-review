@@ -3,7 +3,7 @@ import "./index.css";
 import { Router, Route } from "@solidjs/router";
 import { QueryClientProvider } from "@tanstack/solid-query";
 import { render } from "solid-js/web";
-import "solid-devtools";
+
 import App from "./App";
 import { queryClient, restoreCache } from "./lib/query";
 import DesignSystemPage from "./pages/DesignSystemPage";
