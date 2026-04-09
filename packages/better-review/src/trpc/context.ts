@@ -1,5 +1,6 @@
 // Re-export the shared runtime for use in tRPC procedures
 export { runtime } from "../runtime";
+export { opencodeRuntime } from "../runtime";
 
 // Type representing all services provided by the runtime
 export type RuntimeContext = unknown;

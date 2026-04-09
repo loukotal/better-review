@@ -5,7 +5,7 @@ import { GhService } from "../../gh/gh";
 import { OpencodeService } from "../../opencode";
 import { buildReviewContext } from "../../response";
 import { PrContextService, type SessionReviewScope } from "../../state";
-import { router, publicProcedure, runEffect } from "../index";
+import { router, publicProcedure, runEffect, runOpencodeEffect } from "../index";
 
 export const sessionsRouter = router({
   /**
@@ -65,7 +65,7 @@ export const sessionsRouter = router({
       }),
     )
     .mutation(({ input }) =>
-      runEffect(
+      runOpencodeEffect(
         Effect.gen(function* () {
           const prContext = yield* PrContextService;
           const gh = yield* GhService;

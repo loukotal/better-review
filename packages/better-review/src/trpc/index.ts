@@ -4,7 +4,7 @@ import superjson from "superjson";
 
 import { getErrorMessage } from "../response";
 import type { TRPCContext, RuntimeContext } from "./context";
-import { runtime } from "./context";
+import { opencodeRuntime, runtime } from "./context";
 
 // Initialize tRPC with superjson transformer for proper serialization
 const t = initTRPC.context<TRPCContext>().create({
@@ -32,6 +32,24 @@ export const middleware = t.middleware;
  */
 export async function runEffect<A>(effect: Effect.Effect<A, unknown, RuntimeContext>): Promise<A> {
   return runtime.runPromise(
+    effect.pipe(
+      Effect.catch((error) =>
+        Effect.fail(
+          new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: getErrorMessage(error),
+            cause: error instanceof Error ? error : new Error(String(error)),
+          }),
+        ),
+      ),
+    ),
+  );
+}
+
+export async function runOpencodeEffect<A>(
+  effect: Effect.Effect<A, unknown, RuntimeContext>,
+): Promise<A> {
+  return opencodeRuntime.runPromise(
     effect.pipe(
       Effect.catch((error) =>
         Effect.fail(

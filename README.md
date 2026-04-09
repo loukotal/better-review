@@ -54,6 +54,56 @@ Currently you need to pull the repo and run it locally.
 
 You can update ports with `API_PORT`, `WEB_PORT` (for dev), `OPENCODE_PORT` environment variables. Defaults are `3000`, `3001` and `4096`
 
+## Agent Review CLI
+
+The repo now exposes a local `better-review` CLI entrypoint for agent review sessions.
+
+Examples:
+
+1. `bun run index.ts plan < AGENT_REVIEW_PLAN.md`
+2. `bun run index.ts last --file message.md`
+3. `bun run index.ts review`
+4. `bun run index.ts open-session <session-id>`
+
+Current flow:
+
+- create a local review session through the API
+- open or print a browser URL for `/agent-review/:sessionId`
+- wait for approve / request changes
+- emit structured JSON to stdout with raw result fields plus:
+  - `feedbackMarkdown` for mode-specific exported feedback
+  - `agentMessage` for a ready-to-send runtime-facing message
+
+For now, keep the app running with `bun run dev` or `bun start` before using the CLI.
+
+### Local Command Install
+
+To expose `better-review` as a machine-local command for other repos and plugins:
+
+```bash
+./scripts/install-local-command.sh
+```
+
+This installs a launcher at `~/.local/bin/better-review` that runs this repo's `index.ts` via `bun`.
+
+### OpenCode Plugin Example
+
+See [examples/opencode-better-review-plugin.ts](/Users/louky/Work/better-review/examples/opencode-better-review-plugin.ts) for a minimal plugin pattern that:
+
+- shells out to the local `better-review` command
+- waits for JSON output
+- returns tool results or injects feedback back into the current OpenCode session
+
+### OpenCode Command Examples
+
+Ready-to-copy custom command examples are also available:
+
+- [opencode-better-review-plan-command.md](/Users/louky/Work/better-review/examples/opencode-better-review-plan-command.md)
+- [opencode-better-review-last-command.md](/Users/louky/Work/better-review/examples/opencode-better-review-last-command.md)
+- [opencode-better-review-diff-command.md](/Users/louky/Work/better-review/examples/opencode-better-review-diff-command.md)
+
+Copy them into `.opencode/commands/` in the target repo and rename them as desired.
+
 ## TODOs (& limitations & ideas)
 
 - [ ] render images

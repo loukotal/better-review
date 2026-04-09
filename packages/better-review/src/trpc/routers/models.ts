@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import { z } from "zod";
 
 import { OpencodeService } from "../../opencode";
-import { runtime } from "../context";
+import { opencodeRuntime } from "../context";
 import { router, publicProcedure } from "../index";
 
 // =============================================================================
@@ -51,7 +51,7 @@ async function getProviderCatalog(): Promise<ProviderCatalog> {
     return providerCatalogCache.catalog;
   }
 
-  const catalog = await runtime.runPromise(
+  const catalog = await opencodeRuntime.runPromise(
     Effect.gen(function* () {
       const opencode = yield* OpencodeService;
       return yield* Effect.tryPromise(() => fetchProviderCatalog(opencode.client));

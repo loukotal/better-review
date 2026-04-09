@@ -2,6 +2,9 @@
   "name": "better-review",
   "private": true,
   "license": "MIT",
+  "bin": {
+    "better-review": "./index.ts"
+  },
   "workspaces": [
     "packages/*"
   ],

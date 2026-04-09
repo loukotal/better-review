@@ -14,17 +14,21 @@ export function getFileElementId(fileName: string): string {
   return `file-${encodeURIComponent(fileName)}`;
 }
 
+export interface DiffCommentDraft {
+  filePath: string;
+  line: number;
+  side: "LEFT" | "RIGHT";
+  body: string;
+  startLine?: number;
+  endLine?: number;
+}
+
 interface Props {
   rawDiff: string;
   comments: PRComment[];
   aiAnnotations?: Annotation[];
   loadingComments?: boolean;
-  onAddComment: (
-    filePath: string,
-    line: number,
-    side: "LEFT" | "RIGHT",
-    body: string,
-  ) => Promise<unknown>;
+  onAddComment: (draft: DiffCommentDraft) => Promise<unknown>;
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
@@ -126,8 +130,11 @@ export function DiffViewer(props: Props) {
                   file={file}
                   comments={commentsByFile().get(file.name) ?? []}
                   aiAnnotations={aiAnnotationsByFile().get(file.name) ?? []}
-                  onAddComment={(line, side, body) =>
-                    props.onAddComment(file.name, line, side, body)
+                  onAddComment={(draft) =>
+                    props.onAddComment({
+                      ...draft,
+                      filePath: file.name,
+                    })
                   }
                   onReplyToComment={props.onReplyToComment}
                   onEditComment={props.onEditComment}

@@ -6,6 +6,7 @@ import { render } from "solid-js/web";
 
 import App from "./App";
 import { queryClient, restoreCache } from "./lib/query";
+import AgentReviewPage from "./pages/AgentReviewPage";
 import DesignSystemPage from "./pages/DesignSystemPage";
 import KanbanPage from "./pages/KanbanPage";
 import PrListPage from "./pages/PrListPage";
@@ -26,6 +27,7 @@ render(
     <QueryClientProvider client={queryClient}>
       <Router>
         <Route path="/" component={PrListPage} />
+        <Route path="/agent-review/:sessionId" component={AgentReviewPage} />
         <Route path="/review" component={App} />
         <Route path="/kanban" component={KanbanPage} />
         <Route path="/design-system" component={DesignSystemPage} />

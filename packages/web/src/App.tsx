@@ -26,6 +26,7 @@ import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
 import {
   DiffViewer,
   getFileElementId,
+  type DiffCommentDraft,
   type PRComment,
   type DiffSettings,
   DEFAULT_DIFF_SETTINGS,
@@ -566,12 +567,7 @@ const AppContent: Component = () => {
     queryClient.setQueryData(queryKeys.pr.comments(url), newComments);
   };
 
-  const addComment = async (
-    filePath: string,
-    line: number,
-    side: "LEFT" | "RIGHT",
-    body: string,
-  ) => {
+  const addComment = async ({ filePath, line, side, body }: DiffCommentDraft) => {
     try {
       const data = await trpc.pr.addComment.mutate({
         prUrl: prUrl()!,

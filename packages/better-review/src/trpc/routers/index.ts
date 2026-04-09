@@ -4,6 +4,7 @@ import { opencodeRouter } from "./opencode";
 import { prRouter } from "./pr";
 import { projectsRouter } from "./projects";
 import { prsRouter } from "./prs";
+import { reviewSessionsRouter } from "./review-sessions";
 import { sessionsRouter } from "./sessions";
 import { userRouter } from "./user";
 
@@ -13,6 +14,7 @@ export const appRouter = router({
   projects: projectsRouter,
   user: userRouter,
   sessions: sessionsRouter,
+  reviewSessions: reviewSessionsRouter,
   models: modelsRouter,
   opencode: opencodeRouter,
 });

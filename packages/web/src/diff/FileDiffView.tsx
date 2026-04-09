@@ -10,6 +10,7 @@ import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "sol
 
 import { renderAiAnnotation } from "../components/AiAnnotationInline";
 import { renderCommentThread, renderPendingCommentForm } from "../components/CommentView";
+import type { DiffCommentDraft } from "../DiffViewer";
 import { CheckIcon } from "../icons/check-icon";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CircleIcon } from "../icons/circle-icon";
@@ -44,7 +45,7 @@ interface FileDiffViewProps {
   file: FileDiffMetadata;
   comments: PRComment[];
   aiAnnotations?: Annotation[];
-  onAddComment: (line: number, side: "LEFT" | "RIGHT", body: string) => Promise<unknown>;
+  onAddComment: (draft: Omit<DiffCommentDraft, "filePath">) => Promise<unknown>;
   onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
   onEditComment: (commentId: number, body: string) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
@@ -573,7 +574,13 @@ export function FileDiffView(props: FileDiffViewProps) {
             endLine: metadata.endLine,
             initialBody: metadata.initialBody,
             onSubmit: async (body) => {
-              await props.onAddComment(metadata.endLine, metadata.side, body);
+              await props.onAddComment({
+                line: metadata.endLine,
+                side: metadata.side,
+                body,
+                startLine: metadata.startLine,
+                endLine: metadata.endLine,
+              });
               setPendingComment(null);
               window.getSelection()?.removeAllRanges();
             },

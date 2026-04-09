@@ -6,8 +6,8 @@ import { GhService } from "../../gh/gh";
 import { OpencodeService } from "../../opencode";
 import { buildReviewContext } from "../../response";
 import { DiffCacheService, PrContextService, type SessionReviewScope } from "../../state";
-import { runtime } from "../context";
-import { router, publicProcedure, runEffect } from "../index";
+import { opencodeRuntime } from "../context";
+import { router, publicProcedure, runOpencodeEffect } from "../index";
 import { getCurrentModel } from "./models";
 
 // =============================================================================
@@ -19,7 +19,7 @@ export const opencodeRouter = router({
    * Health check for OpenCode service
    */
   health: publicProcedure.query(() =>
-    runEffect(
+    runOpencodeEffect(
       Effect.gen(function* () {
         const opencode = yield* OpencodeService;
         yield* Effect.tryPromise(() => opencode.client.global.health());
@@ -41,7 +41,7 @@ export const opencodeRouter = router({
       }),
     )
     .mutation(({ input }) =>
-      runEffect(
+      runOpencodeEffect(
         Effect.gen(function* () {
           const gh = yield* GhService;
           const opencode = yield* OpencodeService;
@@ -147,7 +147,7 @@ export const opencodeRouter = router({
       }),
     )
     .mutation(({ input }) =>
-      runEffect(
+      runOpencodeEffect(
         Effect.gen(function* () {
           const opencode = yield* OpencodeService;
           const prContext = yield* PrContextService;
@@ -203,7 +203,7 @@ export const opencodeRouter = router({
       }),
     )
     .mutation(({ input }) =>
-      runEffect(
+      runOpencodeEffect(
         Effect.gen(function* () {
           const opencode = yield* OpencodeService;
           const prContext = yield* PrContextService;
@@ -251,7 +251,7 @@ export const opencodeRouter = router({
    * Get messages for a session
    */
   messages: publicProcedure.input(z.object({ sessionId: z.string() })).query(({ input }) =>
-    runEffect(
+    runOpencodeEffect(
       Effect.gen(function* () {
         const opencode = yield* OpencodeService;
 
@@ -268,7 +268,7 @@ export const opencodeRouter = router({
    * Abort an in-progress prompt
    */
   abort: publicProcedure.input(z.object({ sessionId: z.string() })).mutation(({ input }) =>
-    runEffect(
+    runOpencodeEffect(
       Effect.gen(function* () {
         const opencode = yield* OpencodeService;
 
@@ -285,9 +285,9 @@ export const opencodeRouter = router({
     console.log(`[SSE] Subscription requested`);
 
     // Get the runtime and subscribe to events
-    const services = await runtime.services();
+    const services = await opencodeRuntime.services();
 
-    const { stream, getState, getSubscriberCount } = await runtime.runPromise(
+    const { stream, getState, getSubscriberCount } = await opencodeRuntime.runPromise(
       Effect.gen(function* () {
         const broadcaster = yield* EventBroadcaster;
         return {
@@ -324,8 +324,8 @@ export const opencodeRouter = router({
 
         if ("__ping" in result) {
           const [state, subscribers] = await Promise.all([
-            runtime.runPromise(getState()),
-            runtime.runPromise(getSubscriberCount()),
+            opencodeRuntime.runPromise(getState()),
+            opencodeRuntime.runPromise(getSubscriberCount()),
           ]);
           pingSequence += 1;
           yield {

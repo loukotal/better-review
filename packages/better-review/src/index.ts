@@ -1,10 +1,12 @@
 import path from "node:path";
 
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { Effect, Fiber, type ServiceMap } from "effect";
+import { Effect, type ServiceMap } from "effect";
 
+import type { ReviewSessionAnnotation } from "@better-review/shared";
 import { isGitHubAssetId } from "@better-review/shared/github-asset";
 
+import { ReviewSessionService } from "./agent-sessions";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
 import { GhService, type PrStatus } from "./gh/gh";
 import { getErrorMessage } from "./response";
@@ -19,7 +21,8 @@ import { appRouter } from "./trpc/routers";
 
 const isProduction = process.env.NODE_ENV === "production";
 const staticDir = path.resolve(import.meta.dir, "../../web/dist");
-const allowedDevOrigins = new Set(["http://localhost:3000", "http://127.0.0.1:3000"]);
+const webPort = process.env.WEB_PORT ?? "3000";
+const allowedDevOrigins = new Set([`http://localhost:${webPort}`, `http://127.0.0.1:${webPort}`]);
 
 if (isProduction) {
   console.log(`[static] Production mode enabled, serving from: ${staticDir}`);
@@ -191,9 +194,10 @@ type RouteServices = {
   gh: ServiceMap.Service.Shape<typeof GhService>;
   diffCache: ServiceMap.Service.Shape<typeof DiffCacheService>;
   prContext: ServiceMap.Service.Shape<typeof PrContextService>;
+  reviewSessions: ServiceMap.Service.Shape<typeof ReviewSessionService>;
 };
 
-const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
+const createRoutes = ({ gh, diffCache, prContext, reviewSessions }: RouteServices) => ({
   // Proxy for GitHub assets (images/videos in PR descriptions)
   // This bypasses CORS/ORB issues by fetching through the server with auth
   "/api/github-asset/*": {
@@ -428,6 +432,122 @@ ${fileStats.join("\n")}`;
       }
     },
   },
+
+  "/api/sessions": {
+    POST: async (req: Request) => {
+      try {
+        const body = (await req.json()) as {
+          mode?: "plan" | "message" | "diff";
+          origin?: string;
+          title?: string;
+          cwd?: string;
+          repoRoot?: string;
+          payload?:
+            | { kind: "markdown"; content: string }
+            | { kind: "message"; content: string }
+            | { kind: "diff"; rawPatch: string; label?: string };
+          returnChannel?: { type: "stdout" | "http"; endpoint?: string };
+        };
+
+        if (!body.mode || !body.title || !body.payload) {
+          return Response.json({ error: "Missing mode, title, or payload" }, { status: 400 });
+        }
+
+        const session = await runtime.runPromise(
+          reviewSessions.createSession({
+            mode: body.mode,
+            origin: body.origin ?? "manual",
+            title: body.title,
+            cwd: body.cwd,
+            repoRoot: body.repoRoot,
+            payload: body.payload,
+            returnChannel: body.returnChannel,
+          }),
+        );
+
+        return Response.json(session, { status: 201 });
+      } catch (error) {
+        return Response.json({ error: getErrorMessage(error) }, { status: 500 });
+      }
+    },
+  },
+
+  "/api/sessions/*": {
+    GET: async (req: Request) => {
+      try {
+        const url = new URL(req.url);
+        const parts = url.pathname.split("/").filter(Boolean);
+        const sessionId = parts[2];
+        const resource = parts[3];
+
+        if (!sessionId) {
+          return Response.json({ error: "Missing sessionId" }, { status: 400 });
+        }
+
+        if (resource === "result") {
+          const result = await runtime.runPromise(reviewSessions.getResult(sessionId));
+          if (!result) {
+            return Response.json({ error: "Result not found" }, { status: 404 });
+          }
+          return Response.json(result);
+        }
+
+        if (resource) {
+          return Response.json({ error: "Not found" }, { status: 404 });
+        }
+
+        const session = await runtime.runPromise(reviewSessions.getSession(sessionId));
+        if (!session) {
+          return Response.json({ error: "Session not found" }, { status: 404 });
+        }
+
+        return Response.json(session);
+      } catch (error) {
+        return Response.json({ error: getErrorMessage(error) }, { status: 500 });
+      }
+    },
+
+    POST: async (req: Request) => {
+      try {
+        const url = new URL(req.url);
+        const parts = url.pathname.split("/").filter(Boolean);
+        const sessionId = parts[2];
+        const resource = parts[3];
+
+        if (!sessionId || resource !== "result") {
+          return Response.json({ error: "Not found" }, { status: 404 });
+        }
+
+        const session = await runtime.runPromise(reviewSessions.getSession(sessionId));
+        if (!session) {
+          return Response.json({ error: "Session not found" }, { status: 404 });
+        }
+
+        const body = (await req.json()) as {
+          approved?: boolean;
+          feedback?: string;
+          annotations?: ReviewSessionAnnotation[];
+        };
+
+        if (typeof body.approved !== "boolean") {
+          return Response.json({ error: "Missing approved boolean" }, { status: 400 });
+        }
+
+        const result = await runtime.runPromise(
+          reviewSessions.submitResult(sessionId, {
+            mode: session.mode,
+            approved: body.approved,
+            feedback: body.feedback ?? "",
+            annotations: body.annotations ?? [],
+          }),
+        );
+
+        return Response.json(result, { status: 201 });
+      } catch (error) {
+        return Response.json({ error: getErrorMessage(error) }, { status: 500 });
+      }
+    },
+  },
 });
 
 // =============================================================================
@@ -440,6 +560,7 @@ const main = Effect.gen(function* () {
   const diffCache = yield* DiffCacheService;
   const prContext = yield* PrContextService;
   const prListCache = yield* PrListCacheService;
+  const reviewSessions = yield* ReviewSessionService;
 
   // Start the PR list background refresh loop (fetches every 15 min)
   yield* prListCache.backgroundLoop.pipe(
@@ -447,7 +568,7 @@ const main = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  const routes = logRoutes(createRoutes({ gh, diffCache, prContext }));
+  const routes = logRoutes(createRoutes({ gh, diffCache, prContext, reviewSessions }));
 
   const server = Bun.serve({
     // Local-first: avoid exposing an API that can shell out to `gh` on the LAN by default.
@@ -473,44 +594,4 @@ const main = Effect.gen(function* () {
   yield* Effect.never;
 });
 
-// =============================================================================
-// Run the application using the shared runtime
-// =============================================================================
-
-declare global {
-  var __appFiber: Fiber.Fiber<void, unknown> | undefined;
-  var __shutdownHandler: (() => void) | undefined;
-}
-
-if (globalThis.__appFiber) {
-  console.log("[HMR] Stopping previous instance...");
-  await Effect.runPromise(Fiber.interrupt(globalThis.__appFiber)).catch(() => {});
-}
-
-if (globalThis.__shutdownHandler) {
-  process.off("SIGINT", globalThis.__shutdownHandler);
-  process.off("SIGTERM", globalThis.__shutdownHandler);
-}
-
-const fiber = runtime.runFork(Effect.scoped(main));
-globalThis.__appFiber = fiber;
-
-const shutdown = () => {
-  console.log("\n[Shutdown] Received signal, stopping...");
-  Effect.runPromise(Fiber.interrupt(fiber)).then(() => {
-    console.log("[Shutdown] Complete");
-    process.exit(0);
-  });
-};
-globalThis.__shutdownHandler = shutdown;
-
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
-
-if (import.meta.hot) {
-  import.meta.hot.dispose(async () => {
-    console.log("[HMR] Disposing...");
-    await Effect.runPromise(Fiber.interrupt(fiber)).catch(() => {});
-    globalThis.__appFiber = undefined;
-  });
-}
+await runtime.runPromise(Effect.scoped(main));
