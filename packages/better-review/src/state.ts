@@ -7,7 +7,7 @@ import { Effect, Layer, Ref, ServiceMap } from "effect";
 import type { PrInfo, StoredSession, PrSessionData, SearchedPr } from "@better-review/shared";
 
 import { type FileDiffMeta, parseFullDiff } from "./diff";
-import { GhService, GhServiceLive } from "./gh/gh";
+import { GhService, GhServiceLive, type GhServiceApi } from "./gh/gh";
 import { StoreService, StoreServiceLive } from "./store";
 
 // =============================================================================
@@ -52,128 +52,215 @@ function prUrlToKey(url: string): string | null {
 // DiffCacheService
 // =============================================================================
 
-const makeDiffCacheService = Effect.gen(function* () {
-  // Ref holding: prUrl -> Map<fileName, FileDiffMeta>
-  const cache = yield* Ref.make(new Map<string, Map<string, FileDiffMeta>>());
-  // Ref holding: `${prUrl}#${commitSha}` -> Map<fileName, FileDiffMeta>
-  const commitCache = yield* Ref.make(new Map<string, Map<string, FileDiffMeta>>());
+interface DiffCacheEntry {
+  fileDiffs: Map<string, FileDiffMeta>;
+  cachedAt: number;
+}
 
-  // Capture GhService at construction time
-  const gh = yield* GhService;
+export interface DiffCacheOptions {
+  maxEntries: number;
+  maxCommitEntries: number;
+  ttlMs: number;
+}
 
-  return {
-    /**
-     * Get cached diffs for a PR, or fetch and cache them
-     */
-    getOrFetch: (prUrl: string) =>
+const DEFAULT_DIFF_CACHE_OPTIONS: DiffCacheOptions = {
+  maxEntries: Number(process.env.DIFF_CACHE_MAX_ENTRIES ?? 20),
+  maxCommitEntries: Number(process.env.DIFF_COMMIT_CACHE_MAX_ENTRIES ?? 100),
+  ttlMs: Number(process.env.DIFF_CACHE_TTL_MS ?? 30 * 60 * 1000),
+};
+
+function touchCacheEntry<T>(cache: Map<string, T>, key: string, entry: T): Map<string, T> {
+  const next = new Map(cache);
+  next.delete(key);
+  next.set(key, entry);
+  return next;
+}
+
+function setBoundedCacheEntry<T>(
+  cache: Map<string, T>,
+  key: string,
+  entry: T,
+  maxEntries: number,
+): Map<string, T> {
+  const next = touchCacheEntry(cache, key, entry);
+
+  while (next.size > maxEntries) {
+    const oldestKey = next.keys().next().value;
+    if (oldestKey === undefined) break;
+    next.delete(oldestKey);
+  }
+
+  return next;
+}
+
+export const createDiffCacheServiceApi = (
+  gh: GhServiceApi,
+  partialOptions: Partial<DiffCacheOptions> = {},
+) =>
+  Effect.gen(function* () {
+    const options = { ...DEFAULT_DIFF_CACHE_OPTIONS, ...partialOptions };
+
+    // Ref holding: prUrl -> cached diff entry
+    const cache = yield* Ref.make(new Map<string, DiffCacheEntry>());
+    // Ref holding: `${prUrl}#${commitSha}` -> cached diff entry
+    const commitCache = yield* Ref.make(new Map<string, DiffCacheEntry>());
+
+    const inFlight = new Map<string, Promise<Map<string, FileDiffMeta>>>();
+    const commitInFlight = new Map<string, Promise<Map<string, FileDiffMeta>>>();
+
+    const readFreshEntry = (
+      target: Ref.Ref<Map<string, DiffCacheEntry>>,
+      key: string,
+    ): Effect.Effect<Map<string, FileDiffMeta> | undefined> =>
       Effect.gen(function* () {
-        const current = yield* Ref.get(cache);
-        const existing = current.get(prUrl);
-        if (existing) {
-          yield* Effect.log(`[cache] Using cached diffs for ${prUrl} (${existing.size} files)`);
-          return existing;
+        const current = yield* Ref.get(target);
+        const entry = current.get(key);
+        if (!entry) return undefined;
+
+        if (Date.now() - entry.cachedAt > options.ttlMs) {
+          yield* Ref.update(target, (m) => {
+            const next = new Map(m);
+            next.delete(key);
+            return next;
+          });
+          return undefined;
         }
 
-        // Fetch using GhService (captured at construction)
-        yield* Effect.log(`[cache] Fetching full diff for ${prUrl}...`);
-        const fullDiff = yield* gh.getDiff(prUrl);
-        yield* Effect.log(`[cache] Full diff fetched (${fullDiff.length} chars)`);
+        yield* Ref.update(target, (m) => touchCacheEntry(m, key, entry));
+        return entry.fileDiffs;
+      });
 
-        const fileDiffs = parseFullDiff(fullDiff);
-        yield* Effect.log(`[cache] Cached ${fileDiffs.size} file diffs`);
-
-        yield* Ref.update(cache, (m) => {
-          const newMap = new Map(m);
-          newMap.set(prUrl, fileDiffs);
-          return newMap;
-        });
-
-        return fileDiffs;
-      }),
-
-    /**
-     * Get cached diffs without fetching (returns undefined if not cached)
-     */
-    get: (prUrl: string) =>
+    const loadWithDedup = (
+      target: Ref.Ref<Map<string, DiffCacheEntry>>,
+      pending: Map<string, Promise<Map<string, FileDiffMeta>>>,
+      key: string,
+      maxEntries: number,
+      load: Effect.Effect<Map<string, FileDiffMeta>, unknown, never>,
+      waitLabel: string,
+    ): Effect.Effect<Map<string, FileDiffMeta>, unknown> =>
       Effect.gen(function* () {
-        const current = yield* Ref.get(cache);
-        return current.get(prUrl);
-      }),
+        const cached = yield* readFreshEntry(target, key);
+        if (cached) return cached;
 
-    /**
-     * Get cached diffs for a specific commit, or fetch and cache them
-     */
-    getOrFetchCommit: (prUrl: string, commitSha: string) =>
-      Effect.gen(function* () {
-        const key = `${prUrl}#${commitSha}`;
-        const current = yield* Ref.get(commitCache);
-        const existing = current.get(key);
-        if (existing) {
-          yield* Effect.log(
-            `[cache] Using cached commit diff for ${commitSha} (${existing.size} files)`,
-          );
-          return existing;
+        const existingLoad = pending.get(key);
+        if (existingLoad) {
+          yield* Effect.log(`[cache] Waiting for in-flight ${waitLabel}`);
+          return yield* Effect.promise(() => existingLoad);
         }
 
-        const prInfo = yield* gh.getPrInfo(prUrl);
-        yield* Effect.log(`[cache] Fetching commit diff for ${commitSha}...`);
-        const fullDiff = yield* gh.getCommitDiff({
-          owner: prInfo.owner,
-          repo: prInfo.repo,
-          sha: commitSha,
+        const loadPromise = Effect.runPromise(
+          load.pipe(
+            Effect.tap((fileDiffs) =>
+              Ref.update(target, (m) =>
+                setBoundedCacheEntry(m, key, { fileDiffs, cachedAt: Date.now() }, maxEntries),
+              ),
+            ),
+          ),
+        ).finally(() => {
+          pending.delete(key);
         });
 
-        const fileDiffs = parseFullDiff(fullDiff);
-        yield* Effect.log(`[cache] Cached ${fileDiffs.size} commit file diffs for ${commitSha}`);
+        pending.set(key, loadPromise);
+        return yield* Effect.promise(() => loadPromise);
+      });
 
-        yield* Ref.update(commitCache, (m) => {
-          const newMap = new Map(m);
-          newMap.set(key, fileDiffs);
-          return newMap;
-        });
+    return {
+      /**
+       * Get cached diffs for a PR, or fetch and cache them
+       */
+      getOrFetch: (prUrl: string) =>
+        loadWithDedup(
+          cache,
+          inFlight,
+          prUrl,
+          options.maxEntries,
+          Effect.gen(function* () {
+            yield* Effect.log(`[cache] Fetching full diff for ${prUrl}...`);
+            const fullDiff = yield* gh.getDiff(prUrl);
+            yield* Effect.log(`[cache] Full diff fetched (${fullDiff.length} chars)`);
 
-        return fileDiffs;
-      }),
+            const fileDiffs = parseFullDiff(fullDiff);
+            yield* Effect.log(`[cache] Cached ${fileDiffs.size} file diffs`);
+            return fileDiffs;
+          }),
+          `diff fetch for ${prUrl}`,
+        ),
 
-    /**
-     * Get commit cached diffs without fetching (returns undefined if not cached)
-     */
-    getCommit: (prUrl: string, commitSha: string) =>
-      Effect.gen(function* () {
-        const current = yield* Ref.get(commitCache);
-        return current.get(`${prUrl}#${commitSha}`);
-      }),
+      /**
+       * Get cached diffs without fetching (returns undefined if not cached)
+       */
+      get: (prUrl: string) => readFreshEntry(cache, prUrl),
 
-    /**
-     * Clear cache for a specific PR
-     */
-    clear: (prUrl: string) =>
-      Effect.gen(function* () {
-        yield* Ref.update(cache, (m) => {
-          const newMap = new Map(m);
-          newMap.delete(prUrl);
-          return newMap;
-        });
+      /**
+       * Get cached diffs for a specific commit, or fetch and cache them
+       */
+      getOrFetchCommit: (prUrl: string, commitSha: string) =>
+        loadWithDedup(
+          commitCache,
+          commitInFlight,
+          `${prUrl}#${commitSha}`,
+          options.maxCommitEntries,
+          Effect.gen(function* () {
+            const prInfo = yield* gh.getPrInfo(prUrl);
+            yield* Effect.log(`[cache] Fetching commit diff for ${commitSha}...`);
+            const fullDiff = yield* gh.getCommitDiff({
+              owner: prInfo.owner,
+              repo: prInfo.repo,
+              sha: commitSha,
+            });
 
-        yield* Ref.update(commitCache, (m) => {
-          const newMap = new Map(m);
-          for (const key of newMap.keys()) {
-            if (key.startsWith(`${prUrl}#`)) {
-              newMap.delete(key);
+            const fileDiffs = parseFullDiff(fullDiff);
+            yield* Effect.log(
+              `[cache] Cached ${fileDiffs.size} commit file diffs for ${commitSha}`,
+            );
+            return fileDiffs;
+          }),
+          `commit diff fetch for ${commitSha}`,
+        ),
+
+      /**
+       * Get commit cached diffs without fetching (returns undefined if not cached)
+       */
+      getCommit: (prUrl: string, commitSha: string) =>
+        readFreshEntry(commitCache, `${prUrl}#${commitSha}`),
+
+      /**
+       * Clear cache for a specific PR
+       */
+      clear: (prUrl: string) =>
+        Effect.gen(function* () {
+          yield* Ref.update(cache, (m) => {
+            const newMap = new Map(m);
+            newMap.delete(prUrl);
+            return newMap;
+          });
+
+          yield* Ref.update(commitCache, (m) => {
+            const newMap = new Map(m);
+            for (const key of newMap.keys()) {
+              if (key.startsWith(`${prUrl}#`)) {
+                newMap.delete(key);
+              }
             }
-          }
-          return newMap;
-        });
-      }),
+            return newMap;
+          });
+        }),
 
-    /**
-     * Clear all cached diffs
-     */
-    clearAll: Effect.gen(function* () {
-      yield* Ref.set(cache, new Map());
-      yield* Ref.set(commitCache, new Map());
-    }),
-  };
+      /**
+       * Clear all cached diffs
+       */
+      clearAll: Effect.gen(function* () {
+        yield* Ref.set(cache, new Map());
+        yield* Ref.set(commitCache, new Map());
+        inFlight.clear();
+        commitInFlight.clear();
+      }),
+    };
+  });
+
+const makeDiffCacheService = Effect.gen(function* () {
+  const gh = yield* GhService;
+  return yield* createDiffCacheServiceApi(gh);
 });
 
 type SuccessOf<T> = T extends Effect.Effect<infer A, infer _E, infer _R> ? A : never;
@@ -506,14 +593,23 @@ const makePrListCacheService = Effect.gen(function* () {
     refresh,
 
     /**
-     * Get cached data immediately, and trigger a background refresh.
-     * This is the primary method for the tRPC endpoint — returns fast
-     * with potentially stale data, while kicking off a fresh fetch.
+     * Get cached data immediately, and trigger a background refresh only when stale.
+     * This is the primary method for the tRPC endpoint — returns fast with cached
+     * data, while kicking off a fresh fetch when needed.
      */
     getAndRefresh: Effect.gen(function* () {
       const cached = yield* Ref.get(cache);
 
-      // Always trigger a background refresh (fire-and-forget)
+      if (!cached) {
+        return null;
+      }
+
+      const isStale = Date.now() - cached.fetchedAt > PR_LIST_REFRESH_INTERVAL_MS;
+      if (!isStale) {
+        return cached;
+      }
+
+      // Only refresh stale cache entries so frequent list reads stay cheap.
       yield* refresh.pipe(
         Effect.catch((e) => Effect.log(`[pr-list-cache] Background refresh failed: ${e}`)),
         Effect.forkDetach,

@@ -265,7 +265,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
       // 3. Cleans up subscriber count when done
       return Stream.fromPubSub(eventPubSub).pipe(
         Stream.map(transformEvent),
-        Stream.filter((event) => event != null),
+        Stream.filter((event) => event !== null),
         Stream.ensuring(
           Effect.gen(function* () {
             const count = yield* decrementSubscribers;

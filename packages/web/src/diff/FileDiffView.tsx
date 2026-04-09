@@ -427,7 +427,7 @@ export function FileDiffView(props: FileDiffViewProps) {
    */
   const renderHunkSeparator = (
     hunk: HunkData,
-    fileDiffInstance: FileDiff<AnnotationMetadata>,
+    _fileDiffInstance: FileDiff<AnnotationMetadata>,
   ): HTMLElement => {
     const container = document.createElement("div");
     container.className = "hunk-sep";
@@ -647,7 +647,9 @@ export function FileDiffView(props: FileDiffViewProps) {
     <div>
       {/* File Header - sticky */}
       <button
-        ref={headerRef}
+        ref={(el) => {
+          headerRef = el;
+        }}
         type="button"
         onClick={() => setCollapsed(!collapsed())}
         class="w-full flex items-center gap-2 px-3 py-1.5 bg-bg-elevated hover:bg-bg-surface text-left group sticky top-0 z-10 border border-border rounded-t-sm"
