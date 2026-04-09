@@ -1,6 +1,6 @@
-import hljs from "highlight.js";
-import { marked } from "marked";
-import "highlight.js/styles/monokai.css";
+import { marked, type Renderer, type Tokens } from "marked";
+
+import { extractGitHubAssetId, toGitHubAssetProxyPath } from "@better-review/shared/github-asset";
 
 // Configure marked with syntax highlighting for fenced code blocks
 marked.setOptions({
@@ -10,7 +10,6 @@ marked.setOptions({
 
 // Media URL patterns - GitHub user-attachments can be images OR videos
 const GITHUB_ASSET_URL = /github\.com\/user-attachments\/assets\//;
-const GITHUB_ASSET_ID_PATTERN = /github\.com\/user-attachments\/assets\/([a-f0-9-]+)/;
 const GITHUBUSERCONTENT_URL = /githubusercontent\.com\//;
 
 // Known image extensions
@@ -20,61 +19,108 @@ const VIDEO_EXTENSIONS = /\.(mp4|webm|mov|avi|mkv|m4v|ogv)(\?|$)/i;
 
 // Convert GitHub asset URL to use our proxy (to bypass CORS/ORB)
 function proxyGitHubAssetUrl(url: string): string {
-  const match = url.match(GITHUB_ASSET_ID_PATTERN);
-  if (match) {
-    return `/api/github-asset/${match[1]}`;
-  }
+  const assetId = extractGitHubAssetId(url);
+  if (assetId) return toGitHubAssetProxyPath(assetId) ?? url;
   return url;
 }
 
-// Custom renderer for code blocks with syntax highlighting and media handling
-const renderer = new marked.Renderer();
+function isSafeUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed) return false;
 
-renderer.code = ({ text, lang }) => {
-  if (lang && hljs.getLanguage(lang)) {
-    const highlighted = hljs.highlight(text, { language: lang }).value;
-    return `<pre><code class="hljs language-${lang}">${highlighted}</code></pre>`;
+  if (
+    trimmed.startsWith("#") ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../")
+  ) {
+    return true;
   }
-  // Fallback: auto-detect or plain
-  const highlighted = hljs.highlightAuto(text).value;
-  return `<pre><code class="hljs">${highlighted}</code></pre>`;
-};
 
-renderer.image = ({ href, title, text }) => {
-  const titleAttr = title ? ` title="${title}"` : "";
+  try {
+    const parsed = new URL(trimmed);
+    return (
+      parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getSafeUrl(url: string): string | null {
+  return isSafeUrl(url) ? url : null;
+}
+
+export function escapeHtmlText(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return escapeHtmlText(value).replace(/"/g, "&quot;");
+}
+
+function getLanguageClass(lang: string | undefined): string {
+  const normalized = (lang ?? "text").toLowerCase().replace(/[^a-z0-9-]/g, "");
+  return normalized.length > 0 ? ` language-${normalized}` : "";
+}
+
+function renderSafeImage({ href, title, text }: Tokens.Image): string {
+  const safeHref = getSafeUrl(href);
+  if (!safeHref) {
+    return `<span>${escapeHtmlText(text || href)}</span>`;
+  }
+
+  const titleAttr = title ? ` title="${escapeHtmlAttribute(title)}"` : "";
   const baseClasses = "max-w-full h-auto rounded border border-border my-2";
+  const escapedText = escapeHtmlAttribute(text || "image");
 
   // Use proxy for GitHub assets to bypass CORS/ORB
-  const srcUrl = proxyGitHubAssetUrl(href);
+  const srcUrl = proxyGitHubAssetUrl(safeHref);
+  const escapedSrcUrl = escapeHtmlAttribute(srcUrl);
 
   // Check if this is actually a video
-  if (VIDEO_EXTENSIONS.test(href)) {
-    return `<video src="${srcUrl}" controls class="${baseClasses}" style="max-height: 400px;"${titleAttr}><a href="${href}" target="_blank" rel="noopener noreferrer">${text || "View video"}</a></video>`;
+  if (VIDEO_EXTENSIONS.test(safeHref)) {
+    return `<video src="${escapedSrcUrl}" controls class="${baseClasses} max-h-[400px]"${titleAttr}><a href="${escapedSrcUrl}" target="_blank" rel="noopener noreferrer">${text || "View video"}</a></video>`;
   }
 
-  // Check if it's a GitHub asset (could be image or video)
-  if (GITHUB_ASSET_URL.test(href) && !IMAGE_EXTENSIONS.test(href)) {
-    // Unknown type - use smart detection with fallback link
-    // Order: try video -> try image -> show link
-    return `<span class="media-container block"><video src="${srcUrl}" controls class="${baseClasses}" style="max-height: 400px; display: none;" onloadedmetadata="this.style.display='block'" onerror="this.style.display='none'; this.nextElementSibling.style.display='block'"></video><img src="${srcUrl}" alt="${text || "media"}"${titleAttr} class="${baseClasses}" style="display: none;" onload="this.style.display='block'" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-flex'" /><a href="${href}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-3 py-2 text-sm text-accent hover:underline bg-bg-elevated border border-border rounded my-2" style="display: none;"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>View attachment</a></span>`;
+  // Unknown GitHub assets are rendered as links until we know the media type safely.
+  if (GITHUB_ASSET_URL.test(safeHref) && !IMAGE_EXTENSIONS.test(safeHref)) {
+    return `<a href="${escapedSrcUrl}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-3 py-2 text-sm text-accent hover:underline bg-bg-elevated border border-border rounded my-2">View attachment</a>`;
   }
 
-  return `<img src="${srcUrl}" alt="${text}"${titleAttr} class="${baseClasses}" loading="lazy" />`;
-};
+  return `<img src="${escapedSrcUrl}" alt="${escapedText}"${titleAttr} class="${baseClasses}" loading="lazy" />`;
+}
 
-renderer.link = ({ href, title, text }) => {
-  const titleAttr = title ? ` title="${title}"` : "";
-  const isExternal = /^https?:\/\//i.test(href);
+function renderSafeLink({ href, title, text }: Tokens.Link): string {
+  const safeHref = getSafeUrl(href);
+  if (!safeHref) return text;
+
+  const escapedHref = escapeHtmlAttribute(safeHref);
+  const titleAttr = title ? ` title="${escapeHtmlAttribute(title)}"` : "";
+  const isExternal = /^https?:\/\//i.test(safeHref);
   const targetAttrs = isExternal ? ' target="_blank" rel="noopener noreferrer"' : "";
-  return `<a href="${href}"${titleAttr}${targetAttrs}>${text}</a>`;
+  return `<a href="${escapedHref}"${titleAttr}${targetAttrs}>${text}</a>`;
+}
+
+function renderSafeHtml(token: Tokens.HTML | Tokens.Tag): string {
+  return escapeHtmlText(token.text);
+}
+
+export function applySafeMarkdownRenderer(renderer: Renderer): Renderer {
+  renderer.link = renderSafeLink;
+  renderer.image = renderSafeImage;
+  renderer.html = renderSafeHtml;
+  return renderer;
+}
+
+// Custom renderer for code blocks with safe image/link/html handling
+const renderer = applySafeMarkdownRenderer(new marked.Renderer());
+
+renderer.code = ({ text, lang }) => {
+  return `<pre><code class="markdown-code-block${getLanguageClass(lang)}">${escapeHtmlText(text)}</code></pre>`;
 };
 
 marked.use({ renderer });
-
-// Unescape quotes that marked escapes unnecessarily
-function unescapeQuotes(html: string): string {
-  return html.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-}
 
 // GitHub reference patterns
 const GITHUB_USER_MENTION = /@([a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)/g;
@@ -170,22 +216,26 @@ function isMediaUrl(url: string): boolean {
 
 // Create media element HTML - uses a smart approach for unknown types
 function createMediaElement(url: string): string {
-  const mediaType = getMediaType(url);
+  const safeUrl = getSafeUrl(url);
+  if (!safeUrl) {
+    return `<span>${escapeHtmlText(url)}</span>`;
+  }
+
+  const mediaType = getMediaType(safeUrl);
   const baseClasses = "max-w-full h-auto rounded border border-border my-2";
 
   // Use proxy for GitHub assets to bypass CORS/ORB
-  const srcUrl = proxyGitHubAssetUrl(url);
+  const srcUrl = proxyGitHubAssetUrl(safeUrl);
 
   if (mediaType === "video") {
-    return `<video src="${srcUrl}" controls class="${baseClasses}" style="max-height: 400px;"><a href="${url}" target="_blank" rel="noopener noreferrer">View video</a></video>`;
+    return `<video src="${escapeHtmlAttribute(srcUrl)}" controls class="${baseClasses} max-h-[400px]"><a href="${escapeHtmlAttribute(srcUrl)}" target="_blank" rel="noopener noreferrer">View video</a></video>`;
   }
 
   if (mediaType === "image") {
-    return `<img src="${srcUrl}" alt="image" class="${baseClasses}" loading="lazy" />`;
+    return `<img src="${escapeHtmlAttribute(srcUrl)}" alt="image" class="${baseClasses}" loading="lazy" />`;
   }
 
-  // Unknown type (GitHub assets) - try video, then image, then show link fallback
-  return `<span class="media-container block"><video src="${srcUrl}" controls class="${baseClasses}" style="max-height: 400px; display: none;" onloadedmetadata="this.style.display='block'" onerror="this.style.display='none'; this.nextElementSibling.style.display='block'"></video><img src="${srcUrl}" alt="media" class="${baseClasses}" style="display: none;" onload="this.style.display='block'" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-flex'" /><a href="${url}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-3 py-2 text-sm text-accent hover:underline bg-bg-elevated border border-border rounded my-2" style="display: none;"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>View attachment</a></span>`;
+  return `<a href="${escapeHtmlAttribute(srcUrl)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-3 py-2 text-sm text-accent hover:underline bg-bg-elevated border border-border rounded my-2">View attachment</a>`;
 }
 
 // Convert links that point to media into actual media elements
@@ -205,9 +255,6 @@ function convertMediaLinksToMedia(html: string): string {
 export function parseMarkdown(text: string, context?: GitHubContext | null): string {
   // First parse with marked
   let html = marked.parse(text, { async: false }) as string;
-
-  // Unescape quotes
-  html = unescapeQuotes(html);
 
   // Convert auto-linked media URLs to actual media elements (images/videos)
   html = convertMediaLinksToMedia(html);

@@ -26,6 +26,7 @@ import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { CheckIcon } from "./icons/check-icon";
 import { CopyIcon } from "./icons/copy-icon";
 import { SpinnerIcon } from "./icons/spinner-icon";
+import { applySafeMarkdownRenderer, escapeHtmlText } from "./lib/markdown";
 import { highlightCode, clearHighlightCache } from "./lib/shiki";
 import { trpc } from "./lib/trpc";
 import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
@@ -538,7 +539,7 @@ export function ChatPanel(props: ChatPanelProps) {
     let blockCounter = 0;
 
     // Custom renderer that creates placeholders for code blocks
-    const renderer = new marked.Renderer();
+    const renderer = applySafeMarkdownRenderer(new marked.Renderer());
     renderer.code = (token: Tokens.Code) => {
       const id = `code-block-${blockCounter++}`;
       const lang = token.lang || "text";
@@ -567,10 +568,10 @@ export function ChatPanel(props: ChatPanelProps) {
 
         // If not streaming and there are code blocks, highlight them
         if (!streaming && codeBlocks.length > 0) {
-          highlightCodeBlocks(parsedHtml, [...codeBlocks]);
+          void highlightCodeBlocks(parsedHtml, [...codeBlocks]);
         }
       } catch {
-        setHtml(content);
+        setHtml(escapeHtmlText(content));
       }
     });
 
@@ -599,14 +600,7 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   // Helper to escape HTML for placeholders
-  function escapeHtml(str: string): string {
-    return str
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
+  const escapeHtml = escapeHtmlText;
 
   // Render a message segment
   function MessageSegmentView(segmentProps: { segment: MessageSegment }) {

@@ -3,6 +3,8 @@ import path from "node:path";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Effect, Fiber, type ServiceMap } from "effect";
 
+import { isGitHubAssetId } from "@better-review/shared/github-asset";
+
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
 import { GhService, type PrStatus } from "./gh/gh";
 import { getErrorMessage } from "./response";
@@ -200,8 +202,8 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
       // Extract the asset ID from the path: /api/github-asset/{asset-id}
       const assetId = url.pathname.replace("/api/github-asset/", "");
 
-      if (!assetId) {
-        return new Response("Missing asset ID", { status: 400 });
+      if (!assetId || !isGitHubAssetId(assetId)) {
+        return new Response("Invalid asset ID", { status: 400 });
       }
 
       const githubUrl = `https://github.com/user-attachments/assets/${assetId}`;
@@ -231,7 +233,7 @@ const createRoutes = ({ gh, diffCache, prContext }: RouteServices) => ({
         return new Response(body, {
           headers: {
             "Content-Type": contentType,
-            "Cache-Control": "public, max-age=31536000, immutable",
+            "Cache-Control": "private, max-age=31536000, immutable",
           },
         });
       } catch (error) {

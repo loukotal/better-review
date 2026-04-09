@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./constants": "./src/constants.ts",
+    "./github-asset": "./src/github-asset.ts",
     "./types": "./src/types/index.ts",
     "./utils": "./src/utils/index.ts"
   }
