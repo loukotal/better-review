@@ -274,16 +274,6 @@ const AppContent: Component = () => {
     }
   };
 
-  // Preload all commit diffs in background using TanStack Query
-  const preloadCommitDiffs = async (prUrl: string, commitList: PrCommit[]) => {
-    for (const commit of commitList) {
-      await queryClient.prefetchQuery({
-        queryKey: queryKeys.pr.commitDiff(prUrl, commit.sha),
-        queryFn: () => api.fetchCommitDiff(prUrl, commit.sha),
-      });
-    }
-  };
-
   // Navigate to next commit
   const goToNextCommit = async () => {
     const idx = currentCommitIndex();
@@ -557,11 +547,6 @@ const AppContent: Component = () => {
       }
 
       setLoading(false);
-
-      // Preload all commit diffs in background
-      if (data.commits.length > 0) {
-        preloadCommitDiffs(currentPrUrl, data.commits);
-      }
 
       setComments(data.comments);
       setIssueComments(data.issueComments);

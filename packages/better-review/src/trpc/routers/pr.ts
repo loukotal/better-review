@@ -201,7 +201,7 @@ export const prRouter = router({
                   ),
                 ),
             ],
-            { concurrency: "unbounded" },
+            { concurrency: 4 },
           );
 
         yield* Effect.log(`[pr.batch] DONE total=${Date.now() - startTime}ms`);

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/solid-query";
-import { createEffect, createMemo } from "solid-js";
+import { createMemo } from "solid-js";
 
-import { queryKeys, api, prefetchCommitDiffs, type PRComment } from "../lib/query";
+import { queryKeys, api, type PRComment } from "../lib/query";
 
 /**
  * Custom hook that manages all PR data fetching using TanStack Query.
@@ -44,15 +44,6 @@ export function usePrData(prUrl: () => string | null) {
     queryFn: ({ signal }) => api.fetchStatus(prUrl()!, signal),
     enabled: !!prUrl(),
   }));
-
-  // Prefetch commit diffs when commits are loaded
-  createEffect(() => {
-    const url = prUrl();
-    const commits = commitsQuery.data;
-    if (url && commits && commits.length > 0) {
-      prefetchCommitDiffs(url, commits);
-    }
-  });
 
   // Commit diff query factory (for individual commits)
   const createCommitDiffQuery = (sha: () => string | null) => {

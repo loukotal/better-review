@@ -1140,15 +1140,22 @@ const ghCli: GhCli = {
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(params.prUrl);
 
-      const payload = JSON.stringify({
-        event: "APPROVE",
-        body: params.body ?? "",
-      });
+      const args = [
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}/reviews`,
+        "-X",
+        "POST",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-f",
+        "event=APPROVE",
+      ];
 
-      // Create a review with APPROVE event
-      yield* Effect.tryPromise(() =>
-        Bun.$`echo ${payload} | gh api repos/${owner}/${repo}/pulls/${number}/reviews -X POST -H "Accept: application/vnd.github+json" --input -`.text(),
-      );
+      if (params.body !== undefined) {
+        args.push("-f", `body=${params.body}`);
+      }
+
+      yield* runGh(...args);
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "approvePr", cause })),
       Effect.withSpan("GhService.approvePr", {

@@ -93,13 +93,13 @@ function formatRelativeTime(dateString: string): string {
 const PrListPage: Component = () => {
   // Use TanStack Query for PR list - automatically cached in IndexedDB
   // staleTime: 0 ensures we always fetch fresh data on mount while showing cached immediately
-  // refetchInterval: refresh every minute, but not when tab is in background
+  // refetchInterval: refresh periodically while the tab is active
   const prsQuery = useQuery(() => ({
     queryKey: queryKeys.prs.list,
     queryFn: ({ signal }) => api.fetchPrList(signal),
     staleTime: 0,
-    refetchInterval: 60 * 1000,
-    refetchIntervalInBackground: true,
+    refetchInterval: 5 * 60 * 1000,
+    refetchIntervalInBackground: false,
   }));
 
   // Convenience accessor: extract the PR list from the query result
@@ -202,12 +202,6 @@ const PrListPage: Component = () => {
 
     return result;
   };
-
-  // Prefetch first 5 PRs in the filtered list
-  createEffect(() => {
-    const prs = filteredPrs().slice(0, 5);
-    prs.forEach((pr) => prefetchPr(pr.url));
-  });
 
   // Batch fetch CI statuses for all visible PRs (debounced)
   let ciStatusTimeout: ReturnType<typeof setTimeout> | undefined;
