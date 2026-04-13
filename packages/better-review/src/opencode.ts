@@ -18,11 +18,16 @@ export class OpencodeService extends ServiceMap.Service<OpencodeService, Opencod
       process.env.OPENCODE_SERVER_USERNAME = OPENCODE_USERNAME;
       process.env.OPENCODE_SERVER_PASSWORD = OPENCODE_PASSWORD;
 
-      const server = yield* Effect.tryPromise(() =>
-        createOpencodeServer({
-          port: process.env.OPENCODE_PORT ? parseInt(process.env.OPENCODE_PORT, 10) : undefined,
-        }),
-      );
+      const server = yield* Effect.tryPromise({
+        try: () =>
+          createOpencodeServer({
+            port: process.env.OPENCODE_PORT ? parseInt(process.env.OPENCODE_PORT, 10) : undefined,
+          }),
+        catch: (error) =>
+          new Error(
+            `[OpenCode] Failed to start server${process.env.OPENCODE_PORT ? ` on port ${process.env.OPENCODE_PORT}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+      });
 
       const client = createOpencodeClient({
         baseUrl: server.url,

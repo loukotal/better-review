@@ -169,7 +169,8 @@ export const opencodeRouter = router({
               },
               agent: input.agent,
               parts: [{ type: "text", text: input.message }],
-              // Disable tools for read-only mode
+              // Disable tools for remote PR review sessions.
+              // The review agent should use pr_metadata / pr_diff instead of webfetch.
               tools: {
                 bash: false,
                 edit: false,
@@ -179,7 +180,7 @@ export const opencodeRouter = router({
                 read: false,
                 todoread: true,
                 todowrite: true,
-                webfetch: true,
+                webfetch: false,
               },
             }),
           );
@@ -226,8 +227,8 @@ export const opencodeRouter = router({
               },
               agent: input.agent,
               parts: [{ type: "text", text: input.message }],
-              // Disable local file tools - they would search the wrong repo
-              // The pr_diff custom tool is enabled by default
+              // Disable local file tools - they would search the wrong repo.
+              // Force remote PR review through pr_metadata / pr_diff instead of webfetch.
               tools: {
                 bash: false,
                 edit: false,
@@ -237,7 +238,7 @@ export const opencodeRouter = router({
                 read: false,
                 todoread: true,
                 todowrite: true,
-                webfetch: true,
+                webfetch: false,
               },
             }),
           );
@@ -285,18 +286,28 @@ export const opencodeRouter = router({
     console.log(`[SSE] Subscription requested`);
 
     // Get the runtime and subscribe to events
-    const services = await opencodeRuntime.services();
+    const services = await opencodeRuntime.services().catch((error) => {
+      throw new Error(
+        `[SSE] Failed to acquire runtime services: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
 
-    const { stream, getState, getSubscriberCount } = await opencodeRuntime.runPromise(
-      Effect.gen(function* () {
-        const broadcaster = yield* EventBroadcaster;
-        return {
-          stream: yield* broadcaster.subscribe(),
-          getState: broadcaster.getState,
-          getSubscriberCount: broadcaster.getSubscriberCount,
-        };
-      }),
-    );
+    const { stream, getState, getSubscriberCount } = await opencodeRuntime
+      .runPromise(
+        Effect.gen(function* () {
+          const broadcaster = yield* EventBroadcaster;
+          return {
+            stream: yield* broadcaster.subscribe(),
+            getState: broadcaster.getState,
+            getSubscriberCount: broadcaster.getSubscriberCount,
+          };
+        }),
+      )
+      .catch((error) => {
+        throw new Error(
+          `[SSE] Failed to initialize broadcaster subscription: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
 
     console.log(`[SSE] Subscription established`);
 

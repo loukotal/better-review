@@ -11,7 +11,7 @@
   "type": "module",
   "module": "index.ts",
   "scripts": {
-    "dev:api": "OPENCODE_PORT=4096 bun run --cwd packages/better-review dev",
+    "dev:api": "bun run --cwd packages/better-review dev",
     "dev:web": "bun run --cwd packages/web dev",
     "dev": "concurrently 'npm:dev:api' 'npm:dev:web' --names api,web --colors",
     "start": "bun run --cwd packages/web build && bun run --cwd packages/better-review start",

@@ -134,6 +134,12 @@ ${relevantFiles.map((f) => `- ${f}`).join("\n")}
 
 You are reviewing a **REMOTE** pull request. The local filesystem contains a DIFFERENT codebase.
 
+Do **not** use local filesystem tools to inspect the PR.
+Do **not** fetch the GitHub PR URL or repository pages.
+For review work, treat \`pr_metadata\` and \`pr_diff\` as the authoritative source of truth.
+Always call \`pr_metadata\` first, then call \`pr_diff\` for the files or hunks you need to inspect.
+If you need more detail, call \`pr_diff\` again with narrower line ranges rather than switching tools.
+
 ## Tools
 
 ### \`pr_metadata\`
@@ -151,8 +157,9 @@ For large files, use the hunk ranges from \`pr_metadata\` to request specific po
 ---
 
 **Your role:**
-- Call \`pr_metadata\` to get an overview of the PR
+- Call \`pr_metadata\` first to get an overview of the PR
 - Call \`pr_diff\` for files you need to review (use line ranges for large files)
+- Prefer repeated \`pr_diff\` calls over any other inspection method
 - Explain what the changes do
 - Identify potential issues or bugs
 - Suggest improvements
