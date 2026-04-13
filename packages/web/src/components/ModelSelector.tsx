@@ -3,6 +3,8 @@ import { createSignal, createEffect, For, Show, onMount, onCleanup } from "solid
 import { ChevronDownFillIcon } from "../icons/chevron-down-icon";
 import { trpc } from "../lib/trpc";
 
+const MODEL_STORAGE_KEY = "better-review:selected-model";
+
 interface ModelEntry {
   providerId: string;
   modelId: string;
@@ -10,6 +12,30 @@ interface ModelEntry {
 
 interface ModelSelectorProps {
   disabled?: boolean;
+}
+
+function loadSavedModel(): ModelEntry | null {
+  const stored = localStorage.getItem(MODEL_STORAGE_KEY);
+  if (!stored) return null;
+
+  try {
+    const parsed = JSON.parse(stored) as Partial<ModelEntry>;
+    if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") {
+      return {
+        providerId: parsed.providerId,
+        modelId: parsed.modelId,
+      };
+    }
+  } catch (err) {
+    console.error("Failed to parse saved model:", err);
+  }
+
+  localStorage.removeItem(MODEL_STORAGE_KEY);
+  return null;
+}
+
+function saveModel(model: ModelEntry) {
+  localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model));
 }
 
 export function ModelSelector(props: ModelSelectorProps) {
@@ -25,10 +51,32 @@ export function ModelSelector(props: ModelSelectorProps) {
 
   // Load current model on mount
   onMount(async () => {
+    const savedModel = loadSavedModel();
+
     try {
+      if (savedModel) {
+        await trpc.models.setCurrent.mutate(savedModel);
+        setCurrentModel(savedModel);
+        return;
+      }
+
       const data = await trpc.models.current.query();
       setCurrentModel(data);
+      saveModel(data);
     } catch (err) {
+      if (savedModel) {
+        localStorage.removeItem(MODEL_STORAGE_KEY);
+        try {
+          const data = await trpc.models.current.query();
+          setCurrentModel(data);
+          saveModel(data);
+          return;
+        } catch (fallbackErr) {
+          console.error("Failed to load current model:", fallbackErr);
+          return;
+        }
+      }
+
       console.error("Failed to load current model:", err);
     }
   });
@@ -78,6 +126,7 @@ export function ModelSelector(props: ModelSelectorProps) {
     try {
       await trpc.models.setCurrent.mutate(model);
       setCurrentModel(model);
+      saveModel(model);
       setIsOpen(false);
     } catch (err) {
       console.error("Failed to set model:", err);
