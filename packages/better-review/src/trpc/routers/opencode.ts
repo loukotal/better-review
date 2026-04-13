@@ -151,7 +151,7 @@ export const opencodeRouter = router({
         Effect.gen(function* () {
           const opencode = yield* OpencodeService;
           const prContext = yield* PrContextService;
-          const currentModel = getCurrentModel();
+          const currentModel = yield* Effect.tryPromise(() => getCurrentModel());
 
           if (input.reviewMode) {
             yield* prContext.setSessionScope(input.sessionId, {
@@ -167,6 +167,7 @@ export const opencodeRouter = router({
                 providerID: currentModel.providerId,
                 modelID: currentModel.modelId,
               },
+              variant: currentModel.variant ?? undefined,
               agent: input.agent,
               parts: [{ type: "text", text: input.message }],
               // Disable tools for remote PR review sessions.
@@ -208,7 +209,7 @@ export const opencodeRouter = router({
         Effect.gen(function* () {
           const opencode = yield* OpencodeService;
           const prContext = yield* PrContextService;
-          const currentModel = getCurrentModel();
+          const currentModel = yield* Effect.tryPromise(() => getCurrentModel());
 
           if (input.reviewMode) {
             yield* prContext.setSessionScope(input.sessionId, {
@@ -225,6 +226,7 @@ export const opencodeRouter = router({
                 providerID: currentModel.providerId,
                 modelID: currentModel.modelId,
               },
+              variant: currentModel.variant ?? undefined,
               agent: input.agent,
               parts: [{ type: "text", text: input.message }],
               // Disable local file tools - they would search the wrong repo.

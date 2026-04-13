@@ -8,22 +8,46 @@ const MODEL_STORAGE_KEY = "better-review:selected-model";
 interface ModelEntry {
   providerId: string;
   modelId: string;
+  name: string;
+  reasoning: boolean;
+  variants: string[];
+  releaseDate: string;
+}
+
+interface SelectedModel extends ModelEntry {
+  variant: string | null;
+  thinking: boolean;
 }
 
 interface ModelSelectorProps {
   disabled?: boolean;
 }
 
-function loadSavedModel(): ModelEntry | null {
+function loadSavedModel(): {
+  providerId: string;
+  modelId: string;
+  variant?: string | null;
+  thinking?: boolean;
+} | null {
   const stored = localStorage.getItem(MODEL_STORAGE_KEY);
   if (!stored) return null;
 
   try {
-    const parsed = JSON.parse(stored) as Partial<ModelEntry>;
+    const parsed = JSON.parse(stored) as {
+      providerId?: unknown;
+      modelId?: unknown;
+      variant?: unknown;
+      thinking?: unknown;
+    };
     if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") {
       return {
         providerId: parsed.providerId,
         modelId: parsed.modelId,
+        variant:
+          typeof parsed.variant === "string" || parsed.variant === null
+            ? parsed.variant
+            : undefined,
+        thinking: typeof parsed.thinking === "boolean" ? parsed.thinking : undefined,
       };
     }
   } catch (err) {
@@ -34,8 +58,16 @@ function loadSavedModel(): ModelEntry | null {
   return null;
 }
 
-function saveModel(model: ModelEntry) {
-  localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model));
+function saveModel(model: SelectedModel) {
+  localStorage.setItem(
+    MODEL_STORAGE_KEY,
+    JSON.stringify({
+      providerId: model.providerId,
+      modelId: model.modelId,
+      variant: model.variant,
+      thinking: model.thinking,
+    }),
+  );
 }
 
 export function ModelSelector(props: ModelSelectorProps) {
@@ -43,7 +75,7 @@ export function ModelSelector(props: ModelSelectorProps) {
   const [searchQuery, setSearchQuery] = createSignal("");
   const [searchResults, setSearchResults] = createSignal<ModelEntry[]>([]);
   const [connectedProvidersCount, setConnectedProvidersCount] = createSignal<number | null>(null);
-  const [currentModel, setCurrentModel] = createSignal<ModelEntry | null>(null);
+  const [currentModel, setCurrentModel] = createSignal<SelectedModel | null>(null);
   const [isLoading, setIsLoading] = createSignal(false);
 
   let containerRef: HTMLDivElement | undefined;
@@ -55,8 +87,9 @@ export function ModelSelector(props: ModelSelectorProps) {
 
     try {
       if (savedModel) {
-        await trpc.models.setCurrent.mutate(savedModel);
-        setCurrentModel(savedModel);
+        const result = await trpc.models.setCurrent.mutate(savedModel);
+        setCurrentModel(result.model);
+        saveModel(result.model);
         return;
       }
 
@@ -124,12 +157,50 @@ export function ModelSelector(props: ModelSelectorProps) {
 
   const handleSelect = async (model: ModelEntry) => {
     try {
-      await trpc.models.setCurrent.mutate(model);
-      setCurrentModel(model);
-      saveModel(model);
+      const result = await trpc.models.setCurrent.mutate({
+        providerId: model.providerId,
+        modelId: model.modelId,
+        thinking: currentModel()?.thinking,
+      });
+      setCurrentModel(result.model);
+      saveModel(result.model);
       setIsOpen(false);
     } catch (err) {
       console.error("Failed to set model:", err);
+    }
+  };
+
+  const handleThinkingChange = async (enabled: boolean) => {
+    const model = currentModel();
+    if (!model) return;
+
+    try {
+      const result = await trpc.models.setCurrent.mutate({
+        providerId: model.providerId,
+        modelId: model.modelId,
+        thinking: enabled,
+      });
+      setCurrentModel(result.model);
+      saveModel(result.model);
+    } catch (err) {
+      console.error("Failed to update thinking mode:", err);
+    }
+  };
+
+  const handleVariantChange = async (variant: string) => {
+    const model = currentModel();
+    if (!model) return;
+
+    try {
+      const result = await trpc.models.setCurrent.mutate({
+        providerId: model.providerId,
+        modelId: model.modelId,
+        variant: variant || null,
+      });
+      setCurrentModel(result.model);
+      saveModel(result.model);
+    } catch (err) {
+      console.error("Failed to update model variant:", err);
     }
   };
 
@@ -137,7 +208,8 @@ export function ModelSelector(props: ModelSelectorProps) {
     const model = currentModel();
     if (!model) return "Loading...";
     // Show shortened model name
-    return model.modelId.length > 20 ? model.modelId.slice(0, 18) + "..." : model.modelId;
+    const label = model.variant ? `${model.modelId}:${model.variant}` : model.modelId;
+    return label.length > 20 ? label.slice(0, 18) + "..." : label;
   };
 
   return (
@@ -158,7 +230,7 @@ export function ModelSelector(props: ModelSelectorProps) {
 
       {/* Dropdown */}
       <Show when={isOpen()}>
-        <div class="absolute top-full left-0 mt-1 w-72 bg-bg-surface border border-border shadow-lg z-50">
+        <div class="absolute top-full left-0 mt-1 w-80 bg-bg-surface border border-border shadow-lg z-50">
           {/* Search input */}
           <div class="p-2 border-b border-border">
             <input
@@ -169,6 +241,46 @@ export function ModelSelector(props: ModelSelectorProps) {
               placeholder="Search models..."
               class="w-full px-2 py-1 text-sm bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent"
             />
+
+            <Show when={currentModel()}>
+              {(model) => (
+                <div class="mt-2 space-y-2 text-xs">
+                  <div
+                    class="text-text-faint truncate"
+                    title={`${model().providerId}/${model().modelId}`}
+                  >
+                    {model().providerId}/{model().modelId}
+                  </div>
+
+                  <Show when={model().reasoning}>
+                    <label class="flex items-center justify-between gap-3 text-text">
+                      <span>Thinking</span>
+                      <input
+                        type="checkbox"
+                        checked={model().thinking}
+                        onChange={(e) => handleThinkingChange(e.currentTarget.checked)}
+                      />
+                    </label>
+                  </Show>
+
+                  <Show when={model().variants.length > 0}>
+                    <label class="flex flex-col gap-1 text-text">
+                      <span>Variant</span>
+                      <select
+                        value={model().variant ?? ""}
+                        onChange={(e) => handleVariantChange(e.currentTarget.value)}
+                        class="w-full px-2 py-1 text-sm bg-bg border border-border text-text"
+                      >
+                        <option value="">Default</option>
+                        <For each={model().variants}>
+                          {(variant) => <option value={variant}>{variant}</option>}
+                        </For>
+                      </select>
+                    </label>
+                  </Show>
+                </div>
+              )}
+            </Show>
           </div>
 
           {/* Results list */}
@@ -197,7 +309,17 @@ export function ModelSelector(props: ModelSelectorProps) {
                     classList={{ "bg-accent/10": isSelected() }}
                   >
                     <span class="text-text font-medium truncate">{model.modelId}</span>
-                    <span class="text-text-faint text-sm">{model.providerId}</span>
+                    <span class="text-text-faint text-xs">{model.providerId}</span>
+                    <Show when={model.variants.length > 0 || model.reasoning}>
+                      <span class="text-[11px] text-text-faint truncate">
+                        {[
+                          model.reasoning ? "thinking" : null,
+                          model.variants.length > 0 ? `${model.variants.length} variants` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" • ")}
+                      </span>
+                    </Show>
                   </button>
                 );
               }}

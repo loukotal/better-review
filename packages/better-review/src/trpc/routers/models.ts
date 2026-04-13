@@ -14,10 +14,32 @@ import { router, publicProcedure } from "../index";
 interface ModelEntry {
   providerId: string;
   modelId: string;
+  name: string;
+  reasoning: boolean;
+  variants: string[];
+  releaseDate: string;
+}
+
+interface ModelSelection {
+  providerId: string;
+  modelId: string;
+  variant: string | null;
+}
+
+type SelectedModel = ModelEntry & {
+  variant: string | null;
+  thinking: boolean;
+};
+
+interface ProviderModelData {
+  name: string;
+  reasoning: boolean;
+  variants: string[];
+  releaseDate: string;
 }
 
 interface ProviderCatalog {
-  providers: Array<{ id: string; models: string[] }>;
+  providers: Array<{ id: string; models: Record<string, ProviderModelData> }>;
   connected: Set<string>;
 }
 
@@ -36,7 +58,17 @@ async function fetchProviderCatalog(opencodeClient: OpencodeClient): Promise<Pro
     const connected = new Set(res.data?.connected ?? []);
     const providers = (res.data?.all ?? []).map((provider) => ({
       id: provider.id,
-      models: Object.keys(provider.models ?? {}),
+      models: Object.fromEntries(
+        Object.entries(provider.models ?? {}).map(([modelId, model]) => [
+          modelId,
+          {
+            name: model.name,
+            reasoning: model.capabilities.reasoning,
+            variants: Object.keys(model.variants ?? {}),
+            releaseDate: model.release_date,
+          },
+        ]),
+      ),
     }));
     return { providers, connected };
   } catch (err) {
@@ -66,11 +98,147 @@ async function getProviderCatalog(): Promise<ProviderCatalog> {
   return catalog;
 }
 
-// Current model selection (in-memory, no persistence for now)
-let currentModel: ModelEntry = {
-  providerId: "anthropic",
-  modelId: "claude-opus-4-5",
-};
+const THINKING_VARIANT_PATTERN = /(think|reason|extended|deep)/i;
+
+let currentModel: ModelSelection | undefined;
+
+function isThinkingVariant(variant: string | null | undefined): boolean {
+  return typeof variant === "string" && THINKING_VARIANT_PATTERN.test(variant);
+}
+
+function pickThinkingVariant(variants: string[]): string | null {
+  return variants.find((variant) => THINKING_VARIANT_PATTERN.test(variant)) ?? null;
+}
+
+function getModelEntry(
+  catalog: ProviderCatalog,
+  providerId: string,
+  modelId: string,
+): ModelEntry | null {
+  const provider = catalog.providers.find((item) => item.id === providerId);
+  const model = provider?.models[modelId];
+  if (!model) return null;
+
+  return {
+    providerId,
+    modelId,
+    name: model.name,
+    reasoning: model.reasoning,
+    variants: model.variants,
+    releaseDate: model.releaseDate,
+  };
+}
+
+function resolveVariant(
+  model: ModelEntry,
+  input: { variant?: string | null; thinking?: boolean },
+): string | null {
+  const variants = model.variants;
+  if (variants.length === 0) return null;
+
+  if (typeof input.variant === "string") {
+    return variants.includes(input.variant) ? input.variant : null;
+  }
+
+  if (input.variant === null) return null;
+
+  if (input.thinking) {
+    return pickThinkingVariant(variants);
+  }
+
+  return null;
+}
+
+function toSelectedModel(model: ModelEntry, variant: string | null): SelectedModel {
+  return {
+    ...model,
+    variant,
+    thinking: isThinkingVariant(variant),
+  };
+}
+
+function resolveDefaultModel(catalog: ProviderCatalog): SelectedModel {
+  const connectedModels: ModelEntry[] = [];
+  for (const provider of catalog.providers) {
+    if (!catalog.connected.has(provider.id)) continue;
+    for (const [modelId, model] of Object.entries(provider.models)) {
+      connectedModels.push({
+        providerId: provider.id,
+        modelId,
+        name: model.name,
+        reasoning: model.reasoning,
+        variants: model.variants,
+        releaseDate: model.releaseDate,
+      });
+    }
+  }
+
+  const preferredModel = connectedModels
+    .filter((model) => /^gpt-/i.test(model.modelId))
+    .sort((a, b) => {
+      const dateCompare = b.releaseDate.localeCompare(a.releaseDate);
+      if (dateCompare !== 0) return dateCompare;
+      return b.modelId.localeCompare(a.modelId);
+    })[0];
+
+  const fallbackModel =
+    preferredModel ??
+    connectedModels.sort((a, b) => {
+      const dateCompare = b.releaseDate.localeCompare(a.releaseDate);
+      if (dateCompare !== 0) return dateCompare;
+      return a.providerId.localeCompare(b.providerId) || a.modelId.localeCompare(b.modelId);
+    })[0];
+
+  if (!fallbackModel) {
+    return {
+      providerId: "anthropic",
+      modelId: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      reasoning: true,
+      variants: [],
+      releaseDate: "",
+      variant: null,
+      thinking: false,
+    };
+  }
+
+  return toSelectedModel(fallbackModel, null);
+}
+
+async function getSelectedModel(): Promise<SelectedModel> {
+  const catalog = await getProviderCatalog();
+  if (!currentModel) {
+    const resolved = resolveDefaultModel(catalog);
+    currentModel = {
+      providerId: resolved.providerId,
+      modelId: resolved.modelId,
+      variant: resolved.variant,
+    };
+    return resolved;
+  }
+
+  const model = getModelEntry(catalog, currentModel.providerId, currentModel.modelId);
+  if (!model) {
+    const resolved = resolveDefaultModel(catalog);
+    currentModel = {
+      providerId: resolved.providerId,
+      modelId: resolved.modelId,
+      variant: resolved.variant,
+    };
+    return resolved;
+  }
+
+  const variant =
+    currentModel.variant && model.variants.includes(currentModel.variant)
+      ? currentModel.variant
+      : null;
+  currentModel = {
+    providerId: model.providerId,
+    modelId: model.modelId,
+    variant,
+  };
+  return toSelectedModel(model, variant);
+}
 
 // =============================================================================
 // Models Router
@@ -92,8 +260,15 @@ export const modelsRouter = router({
     const candidates: ModelEntry[] = [];
     for (const provider of catalog.providers) {
       if (!catalog.connected.has(provider.id)) continue;
-      for (const modelId of provider.models) {
-        candidates.push({ providerId: provider.id, modelId });
+      for (const [modelId, model] of Object.entries(provider.models)) {
+        candidates.push({
+          providerId: provider.id,
+          modelId,
+          name: model.name,
+          reasoning: model.reasoning,
+          variants: model.variants,
+          releaseDate: model.releaseDate,
+        });
       }
     }
 
@@ -116,9 +291,7 @@ export const modelsRouter = router({
   /**
    * Get the currently selected model
    */
-  current: publicProcedure.query(() => {
-    return currentModel;
-  }),
+  current: publicProcedure.query(async () => getSelectedModel()),
 
   /**
    * Set the current model
@@ -129,6 +302,8 @@ export const modelsRouter = router({
       z.object({
         providerId: z.string(),
         modelId: z.string(),
+        variant: z.string().nullable().optional(),
+        thinking: z.boolean().optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -140,8 +315,8 @@ export const modelsRouter = router({
         });
       }
 
-      const provider = catalog.providers.find((p) => p.id === input.providerId);
-      const exists = provider?.models.includes(input.modelId) ?? false;
+      const model = getModelEntry(catalog, input.providerId, input.modelId);
+      const exists = model !== null;
 
       if (!exists) {
         throw new TRPCError({
@@ -150,18 +325,39 @@ export const modelsRouter = router({
         });
       }
 
+      const variant = resolveVariant(model, {
+        variant: input.variant,
+        thinking: input.thinking,
+      });
+
       currentModel = {
         providerId: input.providerId,
         modelId: input.modelId,
+        variant,
       };
 
-      console.log(`[models] Model changed to: ${currentModel.providerId}/${currentModel.modelId}`);
+      console.log(
+        `[models] Model changed to: ${currentModel.providerId}/${currentModel.modelId}${variant ? ` (${variant})` : ""}`,
+      );
 
-      return { success: true, model: currentModel };
+      return { success: true, model: toSelectedModel(model, variant) };
     }),
 });
 
 // Export the current model for use by other modules (e.g., opencode router)
-export function getCurrentModel(): ModelEntry {
-  return currentModel;
+export async function getCurrentModel(): Promise<ModelSelection> {
+  const selected = await getSelectedModel();
+  return {
+    providerId: selected.providerId,
+    modelId: selected.modelId,
+    variant: selected.variant,
+  };
+}
+
+export function getCurrentThinkingVariant(variants: string[]): string | null {
+  return pickThinkingVariant(variants);
+}
+
+export function isThinkingVariantName(variant: string | null | undefined): boolean {
+  return isThinkingVariant(variant);
 }
