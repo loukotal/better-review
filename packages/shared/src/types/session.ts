@@ -28,10 +28,23 @@ export type ReviewSessionMode = "plan" | "message" | "diff";
 
 export type ReviewSessionStatus = "pending" | "approved" | "feedback" | "cancelled";
 
+export interface ReviewSessionDiffVariant {
+  id: string;
+  label: string;
+  description?: string;
+  rawPatch: string;
+}
+
 export type ReviewSessionPayload =
   | { kind: "markdown"; content: string }
   | { kind: "message"; content: string }
-  | { kind: "diff"; rawPatch: string; label?: string };
+  | {
+      kind: "diff";
+      rawPatch: string;
+      label?: string;
+      selectedVariantId?: string;
+      variants?: ReviewSessionDiffVariant[];
+    };
 
 export interface ReviewSessionReturnChannel {
   type: "stdout" | "http";

@@ -17,6 +17,17 @@ const reviewSessionPayloadSchema = z.discriminatedUnion("kind", [
     kind: z.literal("diff"),
     rawPatch: z.string(),
     label: z.string().optional(),
+    selectedVariantId: z.string().optional(),
+    variants: z
+      .array(
+        z.object({
+          id: z.string(),
+          label: z.string(),
+          description: z.string().optional(),
+          rawPatch: z.string(),
+        }),
+      )
+      .optional(),
   }),
 ]);
 

@@ -445,7 +445,18 @@ ${fileStats.join("\n")}`;
           payload?:
             | { kind: "markdown"; content: string }
             | { kind: "message"; content: string }
-            | { kind: "diff"; rawPatch: string; label?: string };
+            | {
+                kind: "diff";
+                rawPatch: string;
+                label?: string;
+                selectedVariantId?: string;
+                variants?: Array<{
+                  id: string;
+                  label: string;
+                  description?: string;
+                  rawPatch: string;
+                }>;
+              };
           returnChannel?: { type: "stdout" | "http"; endpoint?: string };
         };
 

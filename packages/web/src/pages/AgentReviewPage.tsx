@@ -75,6 +75,7 @@ export default function AgentReviewPage() {
   const [feedback, setFeedback] = createSignal("");
   const [annotationComment, setAnnotationComment] = createSignal("");
   const [draftQuote, setDraftQuote] = createSignal<string | null>(null);
+  const [currentDiffVariantId, setCurrentDiffVariantId] = createSignal<string | null>(null);
   const [composerOpen, setComposerOpen] = createSignal(false);
   const [composerPosition, setComposerPosition] = createSignal<FloatingComposerPosition | null>(
     null,
@@ -120,16 +121,40 @@ export default function AgentReviewPage() {
 
   const isDiffSession = createMemo(() => session()?.payload.kind === "diff");
 
-  const diffLabel = createMemo(() => {
+  const availableDiffVariants = createMemo(() => {
     const value = session();
-    if (!value || value.payload.kind !== "diff") return undefined;
-    return value.payload.label;
+    if (!value || value.payload.kind !== "diff") return [];
+    return value.payload.variants ?? [];
   });
 
-  const diffRawPatch = createMemo(() => {
+  const selectedDiffVariant = createMemo(() => {
     const value = session();
-    if (!value || value.payload.kind !== "diff") return "";
-    return value.payload.rawPatch;
+    if (!value || value.payload.kind !== "diff") return null;
+
+    const variants = value.payload.variants ?? [];
+    const selectedId = currentDiffVariantId() ?? value.payload.selectedVariantId;
+    const selectedVariant = variants.find((variant) => variant.id === selectedId);
+
+    if (selectedVariant) return selectedVariant;
+    if (variants.length > 0) return variants[0] ?? null;
+
+    return {
+      id: "default",
+      label: value.payload.label ?? "Diff",
+      rawPatch: value.payload.rawPatch,
+    };
+  });
+
+  const diffLabel = createMemo(() => selectedDiffVariant()?.label ?? undefined);
+
+  const diffRawPatch = createMemo(() => selectedDiffVariant()?.rawPatch ?? "");
+
+  createEffect(() => {
+    const value = session();
+    if (!value || value.payload.kind !== "diff") return;
+    setCurrentDiffVariantId(
+      value.payload.selectedVariantId ?? value.payload.variants?.[0]?.id ?? null,
+    );
   });
 
   const scrollToFile = (fileName: string) => {
@@ -375,6 +400,31 @@ export default function AgentReviewPage() {
                     <Show when={loadedSession().cwd}>{(cwd) => <span> • cwd: {cwd()}</span>}</Show>
                   </div>
                 </div>
+
+                <Show when={isDiffSession() && availableDiffVariants().length > 0}>
+                  <div class="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-bg-muted/40 px-3 py-3">
+                    <label class="flex min-w-64 flex-col gap-1 text-sm text-text">
+                      <span class="text-xs uppercase tracking-[0.2em] text-text-faint">
+                        Review scope
+                      </span>
+                      <select
+                        class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text"
+                        value={currentDiffVariantId() ?? ""}
+                        onInput={(event) => setCurrentDiffVariantId(event.currentTarget.value)}
+                      >
+                        <For each={availableDiffVariants()}>
+                          {(variant) => <option value={variant.id}>{variant.label}</option>}
+                        </For>
+                      </select>
+                    </label>
+                    <Show when={selectedDiffVariant()?.description}>
+                      {(description) => <div class="text-xs text-text-muted">{description()}</div>}
+                    </Show>
+                    <Show when={diffLabel()}>
+                      {(label) => <Badge variant="accent">{label()}</Badge>}
+                    </Show>
+                  </div>
+                </Show>
 
                 <div
                   ref={(element) => {

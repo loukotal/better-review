@@ -52,7 +52,7 @@ Currently you need to pull the repo and run it locally.
 1. `bun install`
 2. `bun run dev` or `bun start`
 
-You can update ports with `API_PORT`, `WEB_PORT` (for dev), `OPENCODE_PORT` environment variables. Defaults are `3000`, `3001` and `4096`
+You can update ports with `API_PORT`, `WEB_PORT` (for dev), `OPENCODE_PORT` environment variables. Defaults are `3000` and `3001`; OpenCode uses a random local port unless you explicitly set `OPENCODE_PORT`.
 
 ## Agent Review CLI
 

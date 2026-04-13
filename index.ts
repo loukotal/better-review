@@ -6,6 +6,7 @@ import {
   exportReviewFeedback,
   formatReviewFeedbackForAgent,
   type ReviewSession,
+  type ReviewSessionDiffVariant,
   type ReviewSessionMode as ReviewMode,
   type ReviewSessionPayload,
   type ReviewSessionResult,
@@ -87,8 +88,11 @@ async function readInput(file?: string): Promise<string> {
   return await readStdin();
 }
 
-async function getGitDiff(cwd: string): Promise<string> {
-  const proc = Bun.spawn(["git", "diff", "--no-ext-diff", "--binary"], {
+async function runGit(
+  cwd: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(["git", ...args], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
@@ -100,11 +104,105 @@ async function getGitDiff(cwd: string): Promise<string> {
     proc.exited,
   ]);
 
+  return { stdout, stderr, exitCode };
+}
+
+async function getGitDiff(cwd: string, args: string[] = []): Promise<string> {
+  const { stdout, stderr, exitCode } = await runGit(cwd, [
+    "diff",
+    "--no-ext-diff",
+    "--binary",
+    ...args,
+  ]);
+
   if (exitCode !== 0) {
     throw new Error(stderr.trim() || "git diff failed");
   }
 
   return stdout;
+}
+
+async function gitRefExists(cwd: string, ref: string): Promise<boolean> {
+  const { exitCode } = await runGit(cwd, ["rev-parse", "--verify", "--quiet", ref]);
+  return exitCode === 0;
+}
+
+async function hasHeadCommit(cwd: string): Promise<boolean> {
+  return await gitRefExists(cwd, "HEAD");
+}
+
+async function hasParentCommit(cwd: string): Promise<boolean> {
+  const { exitCode } = await runGit(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^"]);
+  return exitCode === 0;
+}
+
+async function getEmptyTreeSha(cwd: string): Promise<string> {
+  const { stdout, stderr, exitCode } = await runGit(cwd, [
+    "hash-object",
+    "-t",
+    "tree",
+    "/dev/null",
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || "git hash-object failed");
+  }
+  return stdout.trim();
+}
+
+async function resolvePreferredBaseRef(cwd: string, refs: string[]): Promise<string | undefined> {
+  for (const ref of refs) {
+    if (await gitRefExists(cwd, ref)) return ref;
+  }
+  return undefined;
+}
+
+async function buildDiffVariants(cwd: string): Promise<ReviewSessionDiffVariant[]> {
+  const variants: ReviewSessionDiffVariant[] = [
+    {
+      id: "unstaged",
+      label: "Unstaged changes",
+      description: "git diff",
+      rawPatch: await getGitDiff(cwd),
+    },
+    {
+      id: "staged",
+      label: "Staged changes",
+      description: "git diff --cached",
+      rawPatch: await getGitDiff(cwd, ["--cached"]),
+    },
+  ];
+
+  const headExists = await hasHeadCommit(cwd);
+
+  if (headExists) {
+    const hasParent = await hasParentCommit(cwd);
+    const lastCommitRawPatch = hasParent
+      ? await getGitDiff(cwd, ["HEAD^..HEAD"])
+      : await getGitDiff(cwd, [`${await getEmptyTreeSha(cwd)}..HEAD`]);
+
+    variants.push({
+      id: "last-commit",
+      label: "Latest commit",
+      description: hasParent ? "git diff HEAD^..HEAD" : "git diff <empty-tree>..HEAD",
+      rawPatch: lastCommitRawPatch,
+    });
+
+    for (const [baseName, candidates] of [
+      ["main", ["main", "origin/main"]],
+      ["develop", ["develop", "origin/develop"]],
+    ] as const) {
+      const baseRef = await resolvePreferredBaseRef(cwd, candidates);
+      if (!baseRef) continue;
+      variants.push({
+        id: `branch-${baseName}`,
+        label: `Branch vs ${baseName}`,
+        description: `git diff ${baseRef}...HEAD`,
+        rawPatch: await getGitDiff(cwd, [`${baseRef}...HEAD`]),
+      });
+    }
+  }
+
+  return variants;
 }
 
 async function tryGitRepoRoot(cwd: string): Promise<string | undefined> {
@@ -127,14 +225,28 @@ function buildDefaultTitle(mode: ReviewMode, cwd: string): string {
   return `Diff Review: ${name}`;
 }
 
-function buildPayload(mode: ReviewMode, content: string, label?: string): ReviewSessionPayload {
+function buildPayload(
+  mode: ReviewMode,
+  content: string,
+  label?: string,
+  diffVariants?: ReviewSessionDiffVariant[],
+): ReviewSessionPayload {
   if (mode === "plan") {
     return { kind: "markdown", content };
   }
   if (mode === "message") {
     return { kind: "message", content };
   }
-  return { kind: "diff", rawPatch: content, label };
+
+  const selectedVariant = diffVariants?.find((variant) => variant.rawPatch === content);
+
+  return {
+    kind: "diff",
+    rawPatch: content,
+    label: selectedVariant?.label ?? label,
+    selectedVariantId: selectedVariant?.id,
+    variants: diffVariants,
+  };
 }
 
 async function ensureApiAvailable(apiUrl: string): Promise<void> {
@@ -321,12 +433,26 @@ async function handleCreateCommand(mode: ReviewMode, options: CliOptions): Promi
   const cwd = options.cwd ?? process.cwd();
   const repoRoot = options.repoRoot ?? (await tryGitRepoRoot(cwd));
 
-  const content =
-    mode === "diff"
-      ? options.file
-        ? await readInput(options.file)
-        : await getGitDiff(cwd)
-      : await readInput(options.file);
+  let content: string;
+  let diffVariants: ReviewSessionDiffVariant[] | undefined;
+
+  if (mode === "diff") {
+    if (options.file) {
+      content = await readInput(options.file);
+    } else {
+      diffVariants = await buildDiffVariants(cwd);
+      const selectedVariant = diffVariants.find((variant) => variant.rawPatch.trim().length > 0);
+      if (!selectedVariant) {
+        throw new Error(
+          "No diff content found for unstaged, staged, latest commit, or branch comparisons",
+        );
+      }
+      content = selectedVariant.rawPatch;
+      options.label = selectedVariant.label;
+    }
+  } else {
+    content = await readInput(options.file);
+  }
 
   if (content.trim().length === 0) {
     throw new Error(mode === "diff" ? "No diff content found" : "Input content was empty");
@@ -340,7 +466,7 @@ async function handleCreateCommand(mode: ReviewMode, options: CliOptions): Promi
     title: options.title ?? buildDefaultTitle(mode, cwd),
     cwd,
     repoRoot,
-    payload: buildPayload(mode, content, options.label),
+    payload: buildPayload(mode, content, options.label, diffVariants),
     returnChannel: {
       type: "stdout",
     },

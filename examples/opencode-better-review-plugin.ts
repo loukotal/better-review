@@ -166,7 +166,7 @@ export const BetterReviewPlugin: Plugin = async () => {
 
       review_working_diff: tool({
         description:
-          "Send the current git diff to better-review and wait for human code review feedback.",
+          "Open better-review for the current repo and let the reviewer choose the diff scope (unstaged, staged, latest commit, branch comparison).",
         args: {
           title: tool.schema.string().optional(),
         },
