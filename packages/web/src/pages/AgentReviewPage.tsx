@@ -1,6 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useParams } from "@solidjs/router";
 import {
+  type Resource,
   createMemo,
   createResource,
   createSignal,
@@ -19,7 +20,7 @@ import type {
   ReviewSessionResult,
 } from "@better-review/shared";
 
-import { Badge, Button, Card, Textarea } from "../design-system";
+import { Badge, Button, Card, Select, Textarea } from "../design-system";
 import {
   DiffViewer,
   DEFAULT_DIFF_SETTINGS,
@@ -63,6 +64,28 @@ function createAnnotationId(quote: string, comment: string): string {
     hash |= 0;
   }
   return `review-annotation-${Math.abs(hash).toString(36)}`;
+}
+
+function annotationLabel(annotation: ReviewSessionAnnotation): string {
+  if (annotation.filePath && annotation.startLine && annotation.endLine) {
+    if (annotation.startLine !== annotation.endLine) {
+      return `${annotation.filePath}:${annotation.startLine}-${annotation.endLine}`;
+    }
+
+    return `${annotation.filePath}:${annotation.endLine}`;
+  }
+
+  if (annotation.filePath && annotation.line) {
+    return `${annotation.filePath}:${annotation.line}`;
+  }
+
+  if (annotation.filePath) {
+    return annotation.filePath;
+  }
+
+  if (annotation.kind === "line-range") return "Line range";
+  if (annotation.kind === "file") return "File note";
+  return "Selection note";
 }
 
 interface FloatingComposerPosition {
@@ -148,6 +171,13 @@ export default function AgentReviewPage() {
   const diffLabel = createMemo(() => selectedDiffVariant()?.label ?? undefined);
 
   const diffRawPatch = createMemo(() => selectedDiffVariant()?.rawPatch ?? "");
+
+  const annotationCount = createMemo(() => annotations().length);
+
+  const contentHeading = createMemo(() => {
+    if (isDiffSession()) return diffLabel() ?? "Patch under review";
+    return "Agent output";
+  });
 
   createEffect(() => {
     const value = session();
@@ -361,253 +391,153 @@ export default function AgentReviewPage() {
 
   return (
     <div class="min-h-screen bg-bg text-text">
-      <div class="w-full px-6 py-8">
-        <Show
-          when={session()}
-          fallback={
-            <Card class="max-w-2xl mx-auto mt-24">
-              <div class="text-sm text-text-muted">Loading review session...</div>
+      <Show
+        when={session()}
+        fallback={
+          <div class="mx-auto mt-20 max-w-3xl">
+            <Card>
+              <div class="text-sm text-text-faint">Loading review session...</div>
             </Card>
-          }
-        >
-          {(loadedSession) => (
-            <div
-              class={
-                isDiffSession()
-                  ? "grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)_360px]"
-                  : "grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]"
-              }
-            >
-              <Show when={isDiffSession()}>
-                <FileTreePanel files={files()} onFileSelect={scrollToFile} />
-              </Show>
-
-              <div class="space-y-4">
-                <div class="flex flex-wrap items-center gap-3">
+          </div>
+        }
+      >
+        {(loadedSession) => (
+          <div class="flex flex-col" classList={{ "h-screen": isDiffSession() }}>
+            <header class="border-b border-border bg-bg-surface flex-shrink-0">
+              <div class="flex items-center justify-between gap-4 px-4 py-3">
+                <div class="flex items-center gap-3 min-w-0">
+                  <h1 class="text-sm text-text truncate">{loadedSession().title}</h1>
                   <Badge variant={statusVariant(loadedSession().status)}>
                     {loadedSession().status}
                   </Badge>
                   <Badge variant="neutral">{loadedSession().mode}</Badge>
-                  <span class="text-xs text-text-faint">
-                    Created {formatTimestamp(loadedSession().createdAt)}
-                  </span>
+                </div>
+                <div class="flex items-center gap-3 text-xs text-text-faint flex-shrink-0">
+                  <span>Created {formatTimestamp(loadedSession().createdAt)}</span>
+                  <span class="text-text-faint">·</span>
+                  <span>{loadedSession().origin}</span>
+                  <Show when={loadedSession().cwd}>
+                    {(cwd) => (
+                      <>
+                        <span class="text-text-faint">·</span>
+                        <span class="truncate max-w-48">{cwd()}</span>
+                      </>
+                    )}
+                  </Show>
+                </div>
+              </div>
+            </header>
+
+            <Show when={isDiffSession()}>
+              <div class="flex flex-1 min-h-0">
+                <div class="flex-shrink-0 border-r border-border">
+                  <FileTreePanel files={files()} onFileSelect={scrollToFile} />
                 </div>
 
-                <div>
-                  <h1 class="m-0 text-2xl text-text">{loadedSession().title}</h1>
-                  <div class="mt-2 text-sm text-text-muted">
-                    Origin: {loadedSession().origin}
-                    <Show when={loadedSession().cwd}>{(cwd) => <span> • cwd: {cwd()}</span>}</Show>
-                  </div>
-                </div>
-
-                <Show when={isDiffSession() && availableDiffVariants().length > 0}>
-                  <div class="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-bg-muted/40 px-3 py-3">
-                    <label class="flex min-w-64 flex-col gap-1 text-sm text-text">
-                      <span class="text-xs uppercase tracking-[0.2em] text-text-faint">
-                        Review scope
-                      </span>
-                      <select
-                        class="rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text"
+                <div class="flex-1 min-w-0 flex flex-col">
+                  <Show when={availableDiffVariants().length > 0}>
+                    <div class="flex items-center gap-2 border-b border-border px-3 py-2 bg-bg-surface flex-shrink-0">
+                      <Select
+                        compact
                         value={currentDiffVariantId() ?? ""}
                         onInput={(event) => setCurrentDiffVariantId(event.currentTarget.value)}
                       >
                         <For each={availableDiffVariants()}>
                           {(variant) => <option value={variant.id}>{variant.label}</option>}
                         </For>
-                      </select>
-                    </label>
-                    <Show when={selectedDiffVariant()?.description}>
-                      {(description) => <div class="text-xs text-text-muted">{description()}</div>}
-                    </Show>
-                    <Show when={diffLabel()}>
-                      {(label) => <Badge variant="accent">{label()}</Badge>}
-                    </Show>
-                  </div>
-                </Show>
-
-                <div
-                  ref={(element) => {
-                    contentRef = element;
-                  }}
-                  class="max-h-[78vh] overflow-auto"
-                  onMouseUp={captureSelection}
-                  onKeyUp={captureSelection}
-                >
-                  <Show
-                    when={isDiffSession()}
-                    fallback={
-                      <div
-                        class="markdown-content px-1 text-sm leading-7"
-                        innerHTML={renderedContent()}
-                      />
-                    }
-                  >
-                    <DiffViewer
-                      rawDiff={diffRawPatch()}
-                      comments={[]}
-                      settings={DEFAULT_DIFF_SETTINGS}
-                      onFilesLoaded={setFiles}
-                      onAddComment={addDiffAnnotation}
-                      onReplyToComment={async () => ({ success: true })}
-                      onEditComment={async () => ({ success: true })}
-                      onDeleteComment={async () => ({ success: true })}
-                    />
-                  </Show>
-                </div>
-              </div>
-
-              <div class="space-y-4">
-                <Card>
-                  <div class="mb-3 text-sm text-text">Review Outcome</div>
-
-                  <Show when={result.error}>
-                    <div class="mb-3 border border-error/50 bg-error/10 px-3 py-2 text-sm text-error">
-                      {result.error?.message}
+                      </Select>
+                      <Show when={diffLabel()}>
+                        {(label) => <Badge variant="accent">{label()}</Badge>}
+                      </Show>
                     </div>
                   </Show>
 
-                  <Switch>
-                    <Match when={result.loading}>
-                      <div class="text-sm text-text-muted">Loading existing result...</div>
-                    </Match>
-                    <Match when={result()}>
-                      {(existingResult) => (
-                        <div class="space-y-3">
-                          <Badge variant={existingResult().approved ? "success" : "warning"}>
-                            {existingResult().approved ? "Approved" : "Changes Requested"}
-                          </Badge>
-                          <div class="border border-accent/30 bg-accent/8 px-3 py-3 text-sm text-text">
-                            Review submitted. The CLI should continue now. You can close this tab.
-                          </div>
-                          <div class="text-xs text-text-faint">
-                            Submitted {formatTimestamp(existingResult().submittedAt)}
-                          </div>
-                          <pre class="m-0 overflow-auto border border-border bg-bg px-3 py-3 text-sm text-text whitespace-pre-wrap">
-                            {existingResult().feedback || "(no feedback)"}
-                          </pre>
-                          <Show when={existingResult().annotations.length > 0}>
-                            <div class="space-y-2">
-                              <div class="text-xs uppercase tracking-[0.2em] text-text-faint">
-                                Annotations
-                              </div>
-                              <For each={existingResult().annotations}>
-                                {(annotation) => (
-                                  <div class="border border-border bg-bg px-3 py-3">
-                                    <blockquote class="m-0 border-l-2 border-accent/60 pl-3 text-sm text-text">
-                                      {annotation.quote}
-                                    </blockquote>
-                                    <p class="mb-0 mt-2 whitespace-pre-wrap text-sm text-text-muted">
-                                      {annotation.comment}
-                                    </p>
-                                  </div>
-                                )}
-                              </For>
-                            </div>
-                          </Show>
-                        </div>
-                      )}
-                    </Match>
-                    <Match when={true}>
-                      <div class="space-y-3">
-                        <Textarea
-                          value={feedback()}
-                          onInput={(event) => setFeedback(event.currentTarget.value)}
-                          placeholder="Summarize approval or request changes..."
-                          class="min-h-40"
-                        />
+                  <div class="flex-1 min-h-0 flex">
+                    <div
+                      ref={(element) => {
+                        contentRef = element;
+                      }}
+                      class="flex-1 overflow-auto"
+                    >
+                      <DiffViewer
+                        rawDiff={diffRawPatch()}
+                        comments={[]}
+                        settings={DEFAULT_DIFF_SETTINGS}
+                        onFilesLoaded={setFiles}
+                        onAddComment={addDiffAnnotation}
+                        onReplyToComment={async () => ({ success: true })}
+                        onEditComment={async () => ({ success: true })}
+                        onDeleteComment={async () => ({ success: true })}
+                      />
+                    </div>
 
-                        <Card class="space-y-3 bg-bg">
-                          <div class="flex items-center justify-between gap-2">
-                            <div class="text-sm text-text">Annotations</div>
-                            <span class="text-xs text-text-faint">
-                              Select text to open the floating composer
-                            </span>
-                          </div>
+                    <div class="w-72 flex-shrink-0 border-l border-border overflow-y-auto bg-bg-surface">
+                      <AnnotationsPanel
+                        annotations={annotations()}
+                        result={result}
+                        isDiffSession={true}
+                        onRemove={removeAnnotation}
+                      />
+                    </div>
+                  </div>
 
-                          <Show
-                            when={annotations().length > 0}
-                            fallback={
-                              <div class="border border-dashed border-border px-3 py-3 text-sm text-text-faint">
-                                No annotations yet.
-                              </div>
-                            }
-                          >
-                            <div class="space-y-2">
-                              <For each={annotations()}>
-                                {(annotation) => (
-                                  <div class="border border-border bg-bg-surface/40 px-3 py-3">
-                                    <div class="flex items-start justify-between gap-3">
-                                      <div class="min-w-0 flex-1">
-                                        <blockquote class="m-0 border-l-2 border-accent/60 pl-3 text-sm text-text">
-                                          {annotation.quote}
-                                        </blockquote>
-                                        <p class="mb-0 mt-2 whitespace-pre-wrap text-sm text-text-muted">
-                                          {annotation.comment}
-                                        </p>
-                                      </div>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="xs"
-                                        onClick={() => removeAnnotation(annotation.id)}
-                                      >
-                                        Remove
-                                      </Button>
-                                    </div>
-                                  </div>
-                                )}
-                              </For>
-                            </div>
-                          </Show>
-                        </Card>
+                  <div class="border-t border-border bg-bg-surface flex-shrink-0">
+                    <SubmitBar
+                      feedback={feedback()}
+                      setFeedback={setFeedback}
+                      submitting={submitting()}
+                      submitError={submitError()}
+                      canSubmit={canSubmit()}
+                      result={result}
+                      onSubmit={submit}
+                    />
+                  </div>
+                </div>
+              </div>
+            </Show>
 
-                        <Show when={submitError()}>
-                          <div class="border border-error/50 bg-error/10 px-3 py-2 text-sm text-error">
-                            {submitError()}
-                          </div>
-                        </Show>
-
-                        <div class="flex gap-2">
-                          <Button
-                            type="button"
-                            variant="success"
-                            size="md"
-                            disabled={!canSubmit()}
-                            onClick={() => void submit(true)}
-                          >
-                            {submitting() ? "Submitting..." : "Approve"}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="danger"
-                            size="md"
-                            disabled={!canSubmit()}
-                            onClick={() => void submit(false)}
-                          >
-                            {submitting() ? "Submitting..." : "Request Changes"}
-                          </Button>
-                        </div>
-                      </div>
-                    </Match>
-                  </Switch>
-                </Card>
-
-                <Card>
-                  <div class="mb-2 text-sm text-text">Session</div>
-                  <div class="space-y-1 text-xs text-text-faint">
-                    <div>ID: {loadedSession().id}</div>
-                    <Show when={loadedSession().repoRoot}>
-                      {(repoRoot) => <div>Repo: {repoRoot()}</div>}
-                    </Show>
-                    <Show when={diffLabel()}>{(label) => <div>Label: {label()}</div>}</Show>
+            <Show when={!isDiffSession()}>
+              <div class="mx-auto w-full max-w-4xl px-6 py-6 space-y-4">
+                <Card padding="sm">
+                  <div
+                    ref={(element) => {
+                      contentRef = element;
+                    }}
+                    class="max-h-[calc(100vh-24rem)] overflow-auto px-3 py-3"
+                    onMouseUp={captureSelection}
+                    onKeyUp={captureSelection}
+                  >
+                    <div
+                      class="markdown-content px-1 text-sm leading-7 text-text [&_blockquote]:border-l-2 [&_blockquote]:border-accent [&_blockquote]:bg-accent/5 [&_blockquote]:py-2 [&_blockquote]:pr-4 [&_h1]:text-lg [&_h1]:font-medium [&_h2]:text-base [&_h3]:text-sm [&_pre]:border [&_pre]:border-border [&_pre]:bg-bg-surface [&_pre]:p-3"
+                      innerHTML={renderedContent()}
+                    />
                   </div>
                 </Card>
+
+                <AnnotationsPanel
+                  annotations={annotations()}
+                  result={result}
+                  isDiffSession={false}
+                  onRemove={removeAnnotation}
+                />
+
+                <Card>
+                  <SubmitBar
+                    feedback={feedback()}
+                    setFeedback={setFeedback}
+                    submitting={submitting()}
+                    submitError={submitError()}
+                    canSubmit={canSubmit()}
+                    result={result}
+                    onSubmit={submit}
+                  />
+                </Card>
               </div>
-            </div>
-          )}
-        </Show>
-      </div>
+            </Show>
+          </div>
+        )}
+      </Show>
+
       <Show when={!isDiffSession() && draftQuote() && !composerOpen()}>
         {(quote) => (
           <Show when={composerPosition()}>
@@ -617,24 +547,29 @@ export default function AgentReviewPage() {
                   composerRef = element;
                   return undefined;
                 }}
-                class="fixed z-50 flex items-center gap-2 rounded-full border border-accent/40 bg-[#111111]/96 px-2 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur"
+                class="fixed z-50 flex items-center gap-2 border border-accent/30 bg-bg px-3 py-2 shadow-lg"
                 style={{
                   top: `${position().top}px`,
                   left: `${position().left}px`,
                 }}
               >
+                <div class="text-xs text-accent">Quote captured</div>
                 <button
                   type="button"
                   onClick={openComposer}
                   title="Add annotation"
-                  class="inline-flex h-9 w-9 items-center justify-center rounded-full border border-accent/50 bg-accent text-black transition-colors hover:bg-accent-bright"
+                  class="inline-flex h-7 w-7 items-center justify-center border border-accent/50 bg-accent text-black transition-colors hover:bg-accent-bright"
                 >
-                  <PlusIcon size={14} />
+                  <PlusIcon size={12} />
                 </button>
-                <div class="max-w-36 truncate pr-1 text-[11px] uppercase tracking-[0.14em] text-accent/90">
-                  {quote()}
-                </div>
-                <Button type="button" variant="ghost" size="xs" onClick={clearDraftSelection}>
+                <div class="max-w-44 truncate text-xs text-text-muted">{quote()}</div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  class="px-1"
+                  onClick={clearDraftSelection}
+                >
                   ×
                 </Button>
               </div>
@@ -642,6 +577,7 @@ export default function AgentReviewPage() {
           </Show>
         )}
       </Show>
+
       <Show when={!isDiffSession() && draftQuote() && composerOpen()}>
         {(quote) => (
           <Show when={composerPosition()}>
@@ -651,19 +587,20 @@ export default function AgentReviewPage() {
                   composerRef = element;
                   return undefined;
                 }}
-                class="fixed z-50 w-[min(360px,calc(100vw-2rem))] overflow-hidden border border-accent/30 bg-[#111111]/96 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur"
+                class="fixed z-50 w-[min(380px,calc(100vw-2rem))] border border-accent/30 bg-bg shadow-lg"
                 style={{
                   top: `${position().top}px`,
                   left: `${position().left}px`,
                 }}
               >
-                <div class="border-b border-accent/20 bg-accent/8 px-4 py-3">
-                  <div class="text-[11px] uppercase tracking-[0.2em] text-accent">
-                    New Annotation
+                <div class="border-b border-accent/20 bg-accent/5 px-4 py-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="text-xs text-accent">Attach Note</div>
+                    <div class="text-xs text-text-faint">Cmd/Ctrl+Enter to save</div>
                   </div>
                 </div>
                 <div class="space-y-3 px-4 py-4">
-                  <blockquote class="m-0 border-l-2 border-accent pl-3 text-sm leading-6 text-text">
+                  <blockquote class="m-0 border-l-2 border-accent bg-accent/5 px-3 py-2 text-sm text-text">
                     {quote()}
                   </blockquote>
                   <Textarea
@@ -683,10 +620,10 @@ export default function AgentReviewPage() {
                       }
                     }}
                     placeholder="Attach a comment to this selection..."
-                    class="min-h-28 border-accent/30 bg-bg-surface"
+                    class="min-h-24"
                   />
                   <div class="flex items-center justify-between gap-3">
-                    <div class="text-xs text-text-faint">Cmd/Ctrl+Enter to save</div>
+                    <div class="text-xs text-text-faint">Esc to cancel</div>
                     <div class="flex gap-2">
                       <Button type="button" variant="ghost" size="sm" onClick={clearDraftSelection}>
                         Cancel
@@ -709,5 +646,141 @@ export default function AgentReviewPage() {
         )}
       </Show>
     </div>
+  );
+}
+
+function AnnotationsPanel(props: {
+  annotations: ReviewSessionAnnotation[];
+  result: Resource<ReviewSessionResult | null>;
+  isDiffSession: boolean;
+  onRemove: (id: string) => void;
+}) {
+  const items = () => props.result()?.annotations ?? props.annotations;
+
+  return (
+    <div class="p-3 space-y-3">
+      <div class="text-xs text-text-faint">
+        {items().length} annotation{items().length === 1 ? "" : "s"}
+      </div>
+
+      <Show
+        when={items().length > 0}
+        fallback={
+          <div class="text-xs text-text-faint py-3">
+            {props.isDiffSession
+              ? "Add comments on lines as you review."
+              : "Highlight text to attach notes."}
+          </div>
+        }
+      >
+        <div class="space-y-2">
+          <For each={items()}>
+            {(annotation) => (
+              <div class="border border-border p-3">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-xs text-text-faint">{annotationLabel(annotation)}</div>
+                    <blockquote class="m-0 mt-1.5 border-l-2 border-accent/60 pl-2 text-xs text-text">
+                      {annotation.quote}
+                    </blockquote>
+                    <p class="m-0 mt-1.5 whitespace-pre-wrap text-xs text-text-muted">
+                      {annotation.comment}
+                    </p>
+                  </div>
+                  <Show when={!props.result()}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => props.onRemove(annotation.id)}
+                    >
+                      ×
+                    </Button>
+                  </Show>
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+function SubmitBar(props: {
+  feedback: string;
+  setFeedback: (v: string) => void;
+  submitting: boolean;
+  submitError: string | null;
+  canSubmit: boolean;
+  result: Resource<ReviewSessionResult | null>;
+  onSubmit: (approved: boolean) => void;
+}) {
+  return (
+    <Switch>
+      <Match when={props.result.loading}>
+        <div class="px-4 py-3 text-sm text-text-faint">Loading existing result...</div>
+      </Match>
+      <Match when={props.result()}>
+        {(existingResult) => (
+          <div class="px-4 py-3 space-y-2">
+            <div class="flex items-center gap-3">
+              <Badge variant={existingResult().approved ? "success" : "warning"}>
+                {existingResult().approved ? "Approved" : "Changes Requested"}
+              </Badge>
+              <span class="text-xs text-text-faint">
+                Submitted {formatTimestamp(existingResult().submittedAt)}
+              </span>
+            </div>
+            <p class="text-sm text-text-muted">
+              Review submitted. The CLI should continue now. You can close this tab.
+            </p>
+          </div>
+        )}
+      </Match>
+      <Match when={true}>
+        <div class="space-y-3 px-4 py-3">
+          <Show when={props.result.error}>
+            <div class="border border-error/50 bg-error/10 px-3 py-2 text-sm text-error">
+              {props.result.error?.message}
+            </div>
+          </Show>
+
+          <Textarea
+            value={props.feedback}
+            onInput={(event) => props.setFeedback(event.currentTarget.value)}
+            placeholder="Write your verdict..."
+            class="min-h-20"
+          />
+
+          <Show when={props.submitError}>
+            <div class="border border-error/50 bg-error/10 px-3 py-2 text-sm text-error">
+              {props.submitError}
+            </div>
+          </Show>
+
+          <div class="flex gap-2">
+            <Button
+              type="button"
+              variant="success"
+              size="sm"
+              disabled={!props.canSubmit}
+              onClick={() => void props.onSubmit(true)}
+            >
+              {props.submitting ? "Submitting..." : "Approve"}
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              disabled={!props.canSubmit}
+              onClick={() => void props.onSubmit(false)}
+            >
+              {props.submitting ? "Submitting..." : "Request Changes"}
+            </Button>
+          </div>
+        </div>
+      </Match>
+    </Switch>
   );
 }
