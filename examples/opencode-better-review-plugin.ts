@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 
 import { tool, type Plugin } from "@opencode-ai/plugin";
 
+type PluginClient = Parameters<Plugin>[0]["client"];
+
 type ReviewResult = {
   approved: boolean;
   feedback: string;
@@ -98,10 +100,46 @@ function formatResult(result: ReviewResult): string {
   return lines.join("\n");
 }
 
-function formatToolResult(result: ReviewResult): string {
-  const agentMessage = result.agentMessage?.trim();
+function getReviewUserMessage(result: ReviewResult): string {
+  return result.agentMessage?.trim() || formatResult(result);
+}
+
+async function submitReviewAsUserMessage(
+  client: PluginClient,
+  sessionID: string,
+  agent: string,
+  result: ReviewResult,
+): Promise<string | undefined> {
+  const text = getReviewUserMessage(result).trim();
+  if (!text) return undefined;
+
+  try {
+    await client.session.promptAsync({
+      path: { id: sessionID },
+      body: {
+        agent,
+        parts: [{ type: "text", text }],
+      },
+    });
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+function formatToolResult(result: ReviewResult, submitError?: string): string {
+  if (!submitError) {
+    return [
+      "Human review completed and was submitted back into the chat as a user message.",
+      `Status: ${result.approved ? "approved" : "changes requested"}`,
+      `Session: ${result.sessionId}`,
+    ].join("\n");
+  }
+
   return [
-    agentMessage || formatResult(result),
+    `Human review completed, but submitting it back into the chat failed: ${submitError}`,
+    "",
+    getReviewUserMessage(result),
     "",
     "Raw result:",
     "```json",
@@ -134,45 +172,66 @@ function formatToolResult(result: ReviewResult): string {
  *     "@opencode-ai/plugin": "latest"
  *   }
  * }
+ *
+ * Review output is posted back into the active session as a user message so
+ * OpenCode can react to it in the next turn.
  */
-export const BetterReviewPlugin: Plugin = async () => {
+export const BetterReviewPlugin: Plugin = async ({ client }) => {
   return {
     tool: {
       submit_plan: tool({
         description:
-          "Send a markdown plan to better-review and wait for human approval or feedback.",
+          "Send a markdown plan to better-review, then post the reviewed result back into the chat as a user message.",
         args: {
           markdown: tool.schema.string(),
           title: tool.schema.string().optional(),
         },
-        async execute(args) {
+        async execute(args, context) {
           const result = await runBetterReview("plan", args.markdown, args.title);
-          return formatToolResult(result);
+          const submitError = await submitReviewAsUserMessage(
+            client,
+            context.sessionID,
+            context.agent,
+            result,
+          );
+          return formatToolResult(result, submitError);
         },
       }),
 
       review_last_message: tool({
         description:
-          "Send the latest assistant message to better-review and wait for human feedback.",
+          "Send the latest assistant message to better-review, then post the reviewed result back into the chat as a user message.",
         args: {
           content: tool.schema.string(),
           title: tool.schema.string().optional(),
         },
-        async execute(args) {
+        async execute(args, context) {
           const result = await runBetterReview("last", args.content, args.title);
-          return formatToolResult(result);
+          const submitError = await submitReviewAsUserMessage(
+            client,
+            context.sessionID,
+            context.agent,
+            result,
+          );
+          return formatToolResult(result, submitError);
         },
       }),
 
       review_working_diff: tool({
         description:
-          "Open better-review for the current repo and let the reviewer choose the diff scope (unstaged, staged, latest commit, branch comparison).",
+          "Open better-review for the current repo, let the reviewer choose the diff scope, then post the reviewed result back into the chat as a user message.",
         args: {
           title: tool.schema.string().optional(),
         },
-        async execute(args) {
+        async execute(args, context) {
           const result = await runBetterReview("review", undefined, args.title);
-          return formatToolResult(result);
+          const submitError = await submitReviewAsUserMessage(
+            client,
+            context.sessionID,
+            context.agent,
+            result,
+          );
+          return formatToolResult(result, submitError);
         },
       }),
     },

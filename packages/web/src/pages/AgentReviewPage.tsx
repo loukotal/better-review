@@ -198,7 +198,7 @@ export default function AgentReviewPage() {
 
     const timeout = window.setTimeout(() => {
       window.close();
-    }, 300);
+    }, 1000);
 
     onCleanup(() => {
       window.clearTimeout(timeout);
@@ -471,26 +471,27 @@ export default function AgentReviewPage() {
                       />
                     </div>
 
-                    <div class="w-72 flex-shrink-0 border-l border-border overflow-y-auto bg-bg-surface">
-                      <AnnotationsPanel
-                        annotations={annotations()}
-                        result={result}
-                        isDiffSession={true}
-                        onRemove={removeAnnotation}
-                      />
+                    <div class="w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface">
+                      <div class="flex-1 overflow-y-auto">
+                        <AnnotationsPanel
+                          annotations={annotations()}
+                          result={result}
+                          isDiffSession={true}
+                          onRemove={removeAnnotation}
+                        />
+                      </div>
+                      <div class="border-t border-border flex-shrink-0">
+                        <SubmitBar
+                          feedback={feedback()}
+                          setFeedback={setFeedback}
+                          submitting={submitting()}
+                          submitError={submitError()}
+                          canSubmit={canSubmit()}
+                          result={result}
+                          onSubmit={submit}
+                        />
+                      </div>
                     </div>
-                  </div>
-
-                  <div class="border-t border-border bg-bg-surface flex-shrink-0">
-                    <SubmitBar
-                      feedback={feedback()}
-                      setFeedback={setFeedback}
-                      submitting={submitting()}
-                      submitError={submitError()}
-                      canSubmit={canSubmit()}
-                      result={result}
-                      onSubmit={submit}
-                    />
                   </div>
                 </div>
               </div>
