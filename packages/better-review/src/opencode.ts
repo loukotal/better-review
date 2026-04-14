@@ -20,9 +20,7 @@ export class OpencodeService extends ServiceMap.Service<OpencodeService, Opencod
 
       const server = yield* Effect.tryPromise({
         try: () =>
-          createOpencodeServer({
-            port: process.env.OPENCODE_PORT ? parseInt(process.env.OPENCODE_PORT, 10) : undefined,
-          }),
+          createOpencodeServer((process.env.OPENCODE_PORT ? { port: parseInt(process.env.OPENCODE_PORT, 10) } : {})),
         catch: (error) =>
           new Error(
             `[OpenCode] Failed to start server${process.env.OPENCODE_PORT ? ` on port ${process.env.OPENCODE_PORT}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
