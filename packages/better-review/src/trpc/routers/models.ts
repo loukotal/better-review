@@ -28,7 +28,6 @@ interface ModelSelection {
 
 type SelectedModel = ModelEntry & {
   variant: string | null;
-  thinking: boolean;
 };
 
 interface ProviderModelData {
@@ -98,17 +97,10 @@ async function getProviderCatalog(): Promise<ProviderCatalog> {
   return catalog;
 }
 
-const THINKING_VARIANT_PATTERN = /(think|reason|extended|deep)/i;
+const DEPRIORITIZED_GPT_MODEL_PATTERN = /(mini|fast|nano|flash|haiku|instant|lite|economy)/i;
+const DEPRIORITIZED_PROVIDER_PATTERN = /(copilot|github)/i;
 
 let currentModel: ModelSelection | undefined;
-
-function isThinkingVariant(variant: string | null | undefined): boolean {
-  return typeof variant === "string" && THINKING_VARIANT_PATTERN.test(variant);
-}
-
-function pickThinkingVariant(variants: string[]): string | null {
-  return variants.find((variant) => THINKING_VARIANT_PATTERN.test(variant)) ?? null;
-}
 
 function getModelEntry(
   catalog: ProviderCatalog,
@@ -129,10 +121,7 @@ function getModelEntry(
   };
 }
 
-function resolveVariant(
-  model: ModelEntry,
-  input: { variant?: string | null; thinking?: boolean },
-): string | null {
+function resolveVariant(model: ModelEntry, input: { variant?: string | null }): string | null {
   const variants = model.variants;
   if (variants.length === 0) return null;
 
@@ -142,10 +131,6 @@ function resolveVariant(
 
   if (input.variant === null) return null;
 
-  if (input.thinking) {
-    return pickThinkingVariant(variants);
-  }
-
   return null;
 }
 
@@ -153,8 +138,31 @@ function toSelectedModel(model: ModelEntry, variant: string | null): SelectedMod
   return {
     ...model,
     variant,
-    thinking: isThinkingVariant(variant),
   };
+}
+
+function compareModelRecency(a: ModelEntry, b: ModelEntry): number {
+  const dateCompare = b.releaseDate.localeCompare(a.releaseDate);
+  if (dateCompare !== 0) return dateCompare;
+  return b.modelId.localeCompare(a.modelId);
+}
+
+function getGptPreferenceScore(model: ModelEntry): number {
+  let score = 0;
+
+  if (!DEPRIORITIZED_PROVIDER_PATTERN.test(model.providerId)) {
+    score += 1000;
+  }
+
+  if (!DEPRIORITIZED_GPT_MODEL_PATTERN.test(model.modelId)) {
+    score += 100;
+  }
+
+  if (model.reasoning) {
+    score += 10;
+  }
+
+  return score;
 }
 
 function resolveDefaultModel(catalog: ProviderCatalog): SelectedModel {
@@ -176,15 +184,20 @@ function resolveDefaultModel(catalog: ProviderCatalog): SelectedModel {
   const preferredModel = connectedModels
     .filter((model) => /^gpt-/i.test(model.modelId))
     .sort((a, b) => {
-      const dateCompare = b.releaseDate.localeCompare(a.releaseDate);
-      if (dateCompare !== 0) return dateCompare;
-      return b.modelId.localeCompare(a.modelId);
+      const scoreCompare = getGptPreferenceScore(b) - getGptPreferenceScore(a);
+      if (scoreCompare !== 0) return scoreCompare;
+      return compareModelRecency(a, b);
     })[0];
 
   const fallbackModel =
     preferredModel ??
     connectedModels.sort((a, b) => {
-      const dateCompare = b.releaseDate.localeCompare(a.releaseDate);
+      const providerCompare =
+        Number(DEPRIORITIZED_PROVIDER_PATTERN.test(a.providerId)) -
+        Number(DEPRIORITIZED_PROVIDER_PATTERN.test(b.providerId));
+      if (providerCompare !== 0) return providerCompare;
+
+      const dateCompare = compareModelRecency(a, b);
       if (dateCompare !== 0) return dateCompare;
       return a.providerId.localeCompare(b.providerId) || a.modelId.localeCompare(b.modelId);
     })[0];
@@ -198,7 +211,6 @@ function resolveDefaultModel(catalog: ProviderCatalog): SelectedModel {
       variants: [],
       releaseDate: "",
       variant: null,
-      thinking: false,
     };
   }
 
@@ -303,7 +315,6 @@ export const modelsRouter = router({
         providerId: z.string(),
         modelId: z.string(),
         variant: z.string().nullable().optional(),
-        thinking: z.boolean().optional(),
       }),
     )
     .mutation(async ({ input }) => {
@@ -325,10 +336,7 @@ export const modelsRouter = router({
         });
       }
 
-      const variant = resolveVariant(model, {
-        variant: input.variant,
-        thinking: input.thinking,
-      });
+      const variant = resolveVariant(model, { variant: input.variant });
 
       currentModel = {
         providerId: input.providerId,
@@ -352,12 +360,4 @@ export async function getCurrentModel(): Promise<ModelSelection> {
     modelId: selected.modelId,
     variant: selected.variant,
   };
-}
-
-export function getCurrentThinkingVariant(variants: string[]): string | null {
-  return pickThinkingVariant(variants);
-}
-
-export function isThinkingVariantName(variant: string | null | undefined): boolean {
-  return isThinkingVariant(variant);
 }

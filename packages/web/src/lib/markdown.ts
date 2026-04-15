@@ -55,6 +55,16 @@ export function escapeHtmlText(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+export function normalizeMalformedInlineCode(text: string): string {
+  return text.replace(
+    /(^|\n)([ \t]*[-*•]\s*)?`\s*\n([^\n`][^\n]*?)\n[ \t]*`(?=\n|$)/g,
+    (_match, prefix: string, bullet: string | undefined, content: string) => {
+      const trimmed = content.trim();
+      return `${prefix}${bullet ?? ""}\`${trimmed}\``;
+    },
+  );
+}
+
 function escapeHtmlAttribute(value: string): string {
   return escapeHtmlText(value).replace(/"/g, "&quot;");
 }
@@ -253,8 +263,9 @@ function convertMediaLinksToMedia(html: string): string {
 
 // Parse markdown with GitHub extensions
 export function parseMarkdown(text: string, context?: GitHubContext | null): string {
+  const normalizedText = normalizeMalformedInlineCode(text);
   // First parse with marked
-  let html = marked.parse(text, { async: false }) as string;
+  let html = marked.parse(normalizedText, { async: false }) as string;
 
   // Convert auto-linked media URLs to actual media elements (images/videos)
   html = convertMediaLinksToMedia(html);

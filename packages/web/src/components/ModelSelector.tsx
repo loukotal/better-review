@@ -16,7 +16,6 @@ interface ModelEntry {
 
 interface SelectedModel extends ModelEntry {
   variant: string | null;
-  thinking: boolean;
 }
 
 interface ModelSelectorProps {
@@ -27,7 +26,6 @@ function loadSavedModel(): {
   providerId: string;
   modelId: string;
   variant?: string | null;
-  thinking?: boolean;
 } | null {
   const stored = localStorage.getItem(MODEL_STORAGE_KEY);
   if (!stored) return null;
@@ -37,7 +35,6 @@ function loadSavedModel(): {
       providerId?: unknown;
       modelId?: unknown;
       variant?: unknown;
-      thinking?: unknown;
     };
     if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") {
       return {
@@ -47,7 +44,6 @@ function loadSavedModel(): {
           typeof parsed.variant === "string" || parsed.variant === null
             ? parsed.variant
             : undefined,
-        thinking: typeof parsed.thinking === "boolean" ? parsed.thinking : undefined,
       };
     }
   } catch (err) {
@@ -65,7 +61,6 @@ function saveModel(model: SelectedModel) {
       providerId: model.providerId,
       modelId: model.modelId,
       variant: model.variant,
-      thinking: model.thinking,
     }),
   );
 }
@@ -160,30 +155,12 @@ export function ModelSelector(props: ModelSelectorProps) {
       const result = await trpc.models.setCurrent.mutate({
         providerId: model.providerId,
         modelId: model.modelId,
-        thinking: currentModel()?.thinking,
       });
       setCurrentModel(result.model);
       saveModel(result.model);
       setIsOpen(false);
     } catch (err) {
       console.error("Failed to set model:", err);
-    }
-  };
-
-  const handleThinkingChange = async (enabled: boolean) => {
-    const model = currentModel();
-    if (!model) return;
-
-    try {
-      const result = await trpc.models.setCurrent.mutate({
-        providerId: model.providerId,
-        modelId: model.modelId,
-        thinking: enabled,
-      });
-      setCurrentModel(result.model);
-      saveModel(result.model);
-    } catch (err) {
-      console.error("Failed to update thinking mode:", err);
     }
   };
 
@@ -252,17 +229,6 @@ export function ModelSelector(props: ModelSelectorProps) {
                     {model().providerId}/{model().modelId}
                   </div>
 
-                  <Show when={model().reasoning}>
-                    <label class="flex items-center justify-between gap-3 text-text">
-                      <span>Thinking</span>
-                      <input
-                        type="checkbox"
-                        checked={model().thinking}
-                        onChange={(e) => handleThinkingChange(e.currentTarget.checked)}
-                      />
-                    </label>
-                  </Show>
-
                   <Show when={model().variants.length > 0}>
                     <label class="flex flex-col gap-1 text-text">
                       <span>Variant</span>
@@ -313,7 +279,7 @@ export function ModelSelector(props: ModelSelectorProps) {
                     <Show when={model.variants.length > 0 || model.reasoning}>
                       <span class="text-[11px] text-text-faint truncate">
                         {[
-                          model.reasoning ? "thinking" : null,
+                          model.reasoning ? "reasoning" : null,
                           model.variants.length > 0 ? `${model.variants.length} variants` : null,
                         ]
                           .filter(Boolean)

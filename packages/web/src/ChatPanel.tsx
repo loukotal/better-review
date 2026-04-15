@@ -26,7 +26,11 @@ import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { CheckIcon } from "./icons/check-icon";
 import { CopyIcon } from "./icons/copy-icon";
 import { SpinnerIcon } from "./icons/spinner-icon";
-import { applySafeMarkdownRenderer, escapeHtmlText } from "./lib/markdown";
+import {
+  applySafeMarkdownRenderer,
+  escapeHtmlText,
+  normalizeMalformedInlineCode,
+} from "./lib/markdown";
 import { highlightCode, clearHighlightCache } from "./lib/shiki";
 import { trpc } from "./lib/trpc";
 import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
@@ -559,7 +563,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
       try {
         // Use remend to complete incomplete markdown during streaming
-        const preprocessed = streaming ? remend(content) : content;
+        const preprocessed = normalizeMalformedInlineCode(streaming ? remend(content) : content);
         const parsedHtml = marked.parse(preprocessed, {
           async: false,
           renderer,

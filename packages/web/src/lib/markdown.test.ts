@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { parseMarkdown } from "./markdown";
+import { normalizeMalformedInlineCode, parseMarkdown } from "./markdown";
 
 test("sanitizes dangerous markdown html", () => {
   const html = parseMarkdown('![x" onerror="alert(1)](https://example.com/x.png)');
@@ -25,4 +25,10 @@ test("rewrites GitHub asset links through the local proxy", () => {
   );
 
   expect(html).toContain(`/api/github-asset/${assetId}`);
+});
+
+test("normalizes multiline inline code wrappers", () => {
+  const markdown = ".\n\n`\nen-CA.json\n`\n\n.\n\n`\nfr-CA.json\n`";
+
+  expect(normalizeMalformedInlineCode(markdown)).toBe(".\n\n`en-CA.json`\n\n.\n\n`fr-CA.json`");
 });
