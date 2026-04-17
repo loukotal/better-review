@@ -1,5 +1,6 @@
 import {
   FileDiff,
+  parseDiffFromFile,
   type FileDiffMetadata,
   type AnnotationSide,
   type SelectedLineRange,
@@ -23,9 +24,6 @@ import {
   FONT_FAMILY_MAP,
   THEME_SELECTION_COLORS,
 } from "./types";
-
-/** Regex to split file content preserving newlines (matches @pierre/diffs internals) */
-const SPLIT_WITH_NEWLINES = /(?<=\n)/;
 
 // Large file thresholds
 const LARGE_FILE_LINE_THRESHOLD = 2000;
@@ -344,10 +342,31 @@ export function FileDiffView(props: FileDiffViewProps) {
 
       // Clone the FileDiffMetadata so the renderer sees a new reference and
       // invalidates its render cache (which was built without oldLines/newLines).
+      const fullOldFile = {
+        name: props.file.prevName ?? props.file.name,
+        contents: oldContent ?? "",
+        cacheKey: `${props.file.prevName ?? props.file.name}:${oldContent?.length ?? 0}:full-old`,
+      };
+      const fullNewFile = {
+        name: props.file.name,
+        contents: newContent ?? "",
+        cacheKey: `${props.file.name}:${newContent?.length ?? 0}:full-new`,
+      };
+
+      // Rebuild the diff from the complete file contents instead of mutating the
+      // patch-parsed diff in-place. The hunk metadata in props.file references the
+      // partial patch line arrays, so swapping in full-file line arrays produces
+      // duplicated/misaligned hunks when expanding.
+      enrichedFile = parseDiffFromFile(fullOldFile, fullNewFile);
+
+      // Preserve metadata used elsewhere in the app.
       enrichedFile = {
-        ...props.file,
-        oldLines: oldContent ? oldContent.split(SPLIT_WITH_NEWLINES) : [],
-        newLines: newContent ? newContent.split(SPLIT_WITH_NEWLINES) : [],
+        ...enrichedFile,
+        prevName: props.file.prevName,
+        mode: props.file.mode,
+        prevMode: props.file.prevMode,
+        newObjectId: props.file.newObjectId,
+        prevObjectId: props.file.prevObjectId,
       };
       fileContentLoaded = true;
       return true;
