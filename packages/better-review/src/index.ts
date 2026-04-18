@@ -190,6 +190,36 @@ function parseOptionalPositiveInt(value: string | null): number | undefined {
   return n;
 }
 
+async function gitShowFile(
+  repoRoot: string,
+  ref: string,
+  filePath: string,
+): Promise<string | null> {
+  const process = Bun.spawn(["git", "-C", repoRoot, "show", `${ref}:${filePath}`], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, code] = await Promise.all([new Response(process.stdout).text(), process.exited]);
+  return code === 0 ? stdout : null;
+}
+
+async function gitShowIndexFile(repoRoot: string, filePath: string): Promise<string | null> {
+  const process = Bun.spawn(["git", "-C", repoRoot, "show", `:${filePath}`], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, code] = await Promise.all([new Response(process.stdout).text(), process.exited]);
+  return code === 0 ? stdout : null;
+}
+
+async function readWorkingTreeFile(repoRoot: string, filePath: string): Promise<string | null> {
+  const file = Bun.file(path.join(repoRoot, filePath));
+  if (!(await file.exists())) return null;
+  return await file.text();
+}
+
 type RouteServices = {
   gh: ServiceMap.Service.Shape<typeof GhService>;
   diffCache: ServiceMap.Service.Shape<typeof DiffCacheService>;
@@ -503,6 +533,121 @@ ${fileStats.join("\n")}`;
           return Response.json(result);
         }
 
+        if (resource === "file-content") {
+          const filePath = url.searchParams.get("path");
+          const prevPath = url.searchParams.get("prevPath") ?? undefined;
+          const variantId = url.searchParams.get("variantId") ?? undefined;
+
+          if (!filePath) {
+            return Response.json({ error: "Missing path" }, { status: 400 });
+          }
+
+          const session = await runtime.runPromise(reviewSessions.getSession(sessionId));
+          if (!session) {
+            return Response.json({ error: "Session not found" }, { status: 404 });
+          }
+
+          const prUrl = await runtime.runPromise(prContext.getPrUrlBySessionId(sessionId));
+          const repoRoot = session.repoRoot ?? session.cwd;
+          const sessionScope = await runtime.runPromise(prContext.getSessionScope(sessionId));
+
+          const selectedVariant =
+            session.payload.kind === "diff"
+              ? (session.payload.variants ?? []).find((variant) => variant.id === variantId)
+              : undefined;
+          const contentSource = selectedVariant?.contentSource;
+
+          if (repoRoot && contentSource) {
+            if (contentSource.kind === "unstaged") {
+              const [oldContent, newContent] = await Promise.all([
+                gitShowIndexFile(repoRoot, prevPath ?? filePath),
+                readWorkingTreeFile(repoRoot, filePath),
+              ]);
+              if (oldContent !== null || newContent !== null) {
+                return Response.json({ oldContent, newContent, source: "local-unstaged" });
+              }
+            }
+
+            if (contentSource.kind === "staged") {
+              const headSha = contentSource.headSha;
+              const [oldContent, newContent] = await Promise.all([
+                headSha
+                  ? gitShowFile(repoRoot, headSha, prevPath ?? filePath)
+                  : Promise.resolve(null),
+                gitShowIndexFile(repoRoot, filePath),
+              ]);
+              if (oldContent !== null || newContent !== null) {
+                return Response.json({ oldContent, newContent, source: "local-staged" });
+              }
+            }
+
+            if (contentSource.kind === "commit" || contentSource.kind === "git-refs") {
+              const [oldContent, newContent] = await Promise.all([
+                gitShowFile(repoRoot, contentSource.baseSha, prevPath ?? filePath),
+                gitShowFile(repoRoot, contentSource.headSha, filePath),
+              ]);
+              if (oldContent !== null || newContent !== null) {
+                return Response.json({ oldContent, newContent, source: "local-git" });
+              }
+            }
+          }
+
+          let oldRef: string | null = null;
+          let newRef: string | null = null;
+
+          if (
+            contentSource &&
+            (contentSource.kind === "commit" || contentSource.kind === "git-refs")
+          ) {
+            oldRef = contentSource.baseSha;
+            newRef = contentSource.headSha;
+          } else if (sessionScope.mode === "commit" && sessionScope.commitSha) {
+            oldRef = `${sessionScope.commitSha}^`;
+            newRef = sessionScope.commitSha;
+          } else if (prUrl) {
+            [oldRef, newRef] = await runtime.runPromise(
+              Effect.all([gh.getBaseSha(prUrl), gh.getHeadSha(prUrl)], { concurrency: 2 }),
+            );
+          }
+
+          if (repoRoot && oldRef && newRef) {
+            const [oldContent, newContent] = await Promise.all([
+              gitShowFile(repoRoot, oldRef, prevPath ?? filePath),
+              gitShowFile(repoRoot, newRef, filePath),
+            ]);
+
+            if (oldContent !== null || newContent !== null) {
+              return Response.json({ oldContent, newContent, source: "local" });
+            }
+          }
+
+          if (prUrl && oldRef && newRef) {
+            const { owner, repo } = await runtime.runPromise(gh.getPrInfo(prUrl));
+            const oldPath = prevPath ?? filePath;
+
+            const [oldContent, newContent] = await runtime.runPromise(
+              Effect.all(
+                [
+                  gh
+                    .getFileContent({ owner, repo, path: oldPath, ref: oldRef })
+                    .pipe(Effect.catch(() => Effect.succeed(null))),
+                  gh
+                    .getFileContent({ owner, repo, path: filePath, ref: newRef })
+                    .pipe(Effect.catch(() => Effect.succeed(null))),
+                ],
+                { concurrency: 2 },
+              ),
+            );
+
+            return Response.json({ oldContent, newContent, source: "github" });
+          }
+
+          return Response.json(
+            { error: "Unable to resolve file contents for this session" },
+            { status: 404 },
+          );
+        }
+
         if (resource) {
           return Response.json({ error: "Not found" }, { status: 404 });
         }
@@ -512,7 +657,12 @@ ${fileStats.join("\n")}`;
           return Response.json({ error: "Session not found" }, { status: 404 });
         }
 
-        return Response.json(session);
+        const prUrl = await runtime.runPromise(prContext.getPrUrlBySessionId(sessionId));
+
+        return Response.json({
+          ...session,
+          prUrl,
+        });
       } catch (error) {
         return Response.json({ error: getErrorMessage(error) }, { status: 500 });
       }

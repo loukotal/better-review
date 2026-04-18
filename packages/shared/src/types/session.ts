@@ -33,6 +33,11 @@ export interface ReviewSessionDiffVariant {
   label: string;
   description?: string;
   rawPatch: string;
+  contentSource?:
+    | { kind: "unstaged"; headSha?: string | null }
+    | { kind: "staged"; headSha?: string | null }
+    | { kind: "commit"; baseSha: string; headSha: string }
+    | { kind: "git-refs"; baseSha: string; headSha: string };
 }
 
 export type ReviewSessionPayload =

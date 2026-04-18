@@ -80,6 +80,10 @@ export const queryKeys = {
   prs: {
     list: ["prs", "list"] as const,
   },
+  session: {
+    fileContent: (sessionId: string, path: string, variantId?: string | null) =>
+      ["session", "fileContent", sessionId, path, variantId ?? "default"] as const,
+  },
   projects: {
     list: (owner: string) => ["projects", "list", owner] as const,
     board: (owner: string, number: number, itemQuery?: string) =>
@@ -230,6 +234,32 @@ export const api = {
     return await trpc.pr.fileContent.query({ url, path, prevPath });
   },
 
+  async fetchSessionFileContent(
+    sessionId: string,
+    path: string,
+    prevPath?: string,
+    variantId?: string | null,
+  ): Promise<{ oldContent: string | null; newContent: string | null }> {
+    const url = new URL(
+      `/api/sessions/${encodeURIComponent(sessionId)}/file-content`,
+      window.location.origin,
+    );
+    url.searchParams.set("path", path);
+    if (prevPath) {
+      url.searchParams.set("prevPath", prevPath);
+    }
+    if (variantId) {
+      url.searchParams.set("variantId", variantId);
+    }
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    return (await response.json()) as { oldContent: string | null; newContent: string | null };
+  },
+
   async fetchCurrentUser(_signal?: AbortSignal): Promise<string | null> {
     const result = await trpc.user.current.query();
     return result.login ?? null;
@@ -318,11 +348,17 @@ export async function prefetchCiStatuses(urls: string[]): Promise<void> {
  * Used by FileDiffView to lazily load full file contents for expanding unchanged lines.
  */
 export async function fetchFileContentCached(
-  prUrl: string,
+  source: { sessionId?: string | null; prUrl?: string | null; variantId?: string | null },
   path: string,
   prevPath?: string,
 ): Promise<{ oldContent: string | null; newContent: string | null }> {
-  const key = queryKeys.pr.fileContent(prUrl, path);
+  const sessionId = source.sessionId ?? null;
+  const prUrl = source.prUrl ?? null;
+  const variantId = source.variantId ?? null;
+
+  const key = sessionId
+    ? queryKeys.session.fileContent(sessionId, path, variantId)
+    : queryKeys.pr.fileContent(prUrl ?? "", path);
 
   // Check if already cached
   const existing = queryClient.getQueryData<{
@@ -331,10 +367,17 @@ export async function fetchFileContentCached(
   }>(key);
   if (existing) return existing;
 
+  if (!sessionId && !prUrl) {
+    throw new Error("Missing sessionId or prUrl for file content fetch");
+  }
+
   // Fetch and cache
   const result = await queryClient.fetchQuery({
     queryKey: key,
-    queryFn: () => api.fetchFileContent(prUrl, path, prevPath),
+    queryFn: () =>
+      sessionId
+        ? api.fetchSessionFileContent(sessionId, path, prevPath, variantId)
+        : api.fetchFileContent(prUrl!, path, prevPath),
     staleTime: Infinity, // File content at a specific SHA never changes
   });
 

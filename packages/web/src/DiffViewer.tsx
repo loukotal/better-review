@@ -42,7 +42,11 @@ interface Props {
   repoName?: string | null;
   readFiles?: Set<string>;
   onToggleRead?: (fileName: string) => void;
-  /** PR URL for fetching full file contents (expand unchanged lines) */
+  /** Session ID for fetching full file contents from local repo context when available */
+  sessionId?: string | null;
+  /** Current diff variant ID for local/manual session expansion */
+  variantId?: string | null;
+  /** PR URL fallback for fetching full file contents (expand unchanged lines) */
   prUrl?: string | null;
 }
 
@@ -149,6 +153,8 @@ export function DiffViewer(props: Props) {
                   onToggleRead={
                     props.onToggleRead ? () => props.onToggleRead!(file.name) : undefined
                   }
+                  sessionId={props.sessionId}
+                  variantId={props.variantId}
                   prUrl={props.prUrl}
                 />
               </div>

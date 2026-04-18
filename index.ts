@@ -156,35 +156,56 @@ async function resolvePreferredBaseRef(cwd: string, refs: string[]): Promise<str
   return undefined;
 }
 
+async function resolveCommitSha(cwd: string, ref: string): Promise<string> {
+  const { stdout, stderr, exitCode } = await runGit(cwd, ["rev-parse", ref]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || `git rev-parse ${ref} failed`);
+  }
+  return stdout.trim();
+}
+
+async function resolveMergeBaseSha(cwd: string, left: string, right: string): Promise<string> {
+  const { stdout, stderr, exitCode } = await runGit(cwd, ["merge-base", left, right]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || `git merge-base ${left} ${right} failed`);
+  }
+  return stdout.trim();
+}
+
 async function buildDiffVariants(cwd: string): Promise<ReviewSessionDiffVariant[]> {
+  const headExists = await hasHeadCommit(cwd);
+  const headSha = headExists ? await resolveCommitSha(cwd, "HEAD") : null;
+
   const variants: ReviewSessionDiffVariant[] = [
     {
       id: "unstaged",
       label: "Unstaged changes",
       description: "git diff",
       rawPatch: await getGitDiff(cwd),
+      contentSource: { kind: "unstaged", headSha },
     },
     {
       id: "staged",
       label: "Staged changes",
       description: "git diff --cached",
       rawPatch: await getGitDiff(cwd, ["--cached"]),
+      contentSource: { kind: "staged", headSha },
     },
   ];
 
-  const headExists = await hasHeadCommit(cwd);
-
-  if (headExists) {
+  if (headExists && headSha) {
     const hasParent = await hasParentCommit(cwd);
+    const baseSha = hasParent ? await resolveCommitSha(cwd, "HEAD^") : await getEmptyTreeSha(cwd);
     const lastCommitRawPatch = hasParent
       ? await getGitDiff(cwd, ["HEAD^..HEAD"])
-      : await getGitDiff(cwd, [`${await getEmptyTreeSha(cwd)}..HEAD`]);
+      : await getGitDiff(cwd, [`${baseSha}..HEAD`]);
 
     variants.push({
       id: "last-commit",
       label: "Latest commit",
       description: hasParent ? "git diff HEAD^..HEAD" : "git diff <empty-tree>..HEAD",
       rawPatch: lastCommitRawPatch,
+      contentSource: { kind: "commit", baseSha, headSha },
     });
 
     for (const [baseName, candidates] of [
@@ -193,11 +214,13 @@ async function buildDiffVariants(cwd: string): Promise<ReviewSessionDiffVariant[
     ] as const) {
       const baseRef = await resolvePreferredBaseRef(cwd, candidates);
       if (!baseRef) continue;
+      const mergeBaseSha = await resolveMergeBaseSha(cwd, baseRef, "HEAD");
       variants.push({
         id: `branch-${baseName}`,
         label: `Branch vs ${baseName}`,
         description: `git diff ${baseRef}...HEAD`,
         rawPatch: await getGitDiff(cwd, [`${baseRef}...HEAD`]),
+        contentSource: { kind: "git-refs", baseSha: mergeBaseSha, headSha },
       });
     }
   }

@@ -93,6 +93,10 @@ interface FloatingComposerPosition {
   left: number;
 }
 
+type ReviewSessionWithContext = ReviewSession & {
+  prUrl?: string | null;
+};
+
 export default function AgentReviewPage() {
   const params = useParams<{ sessionId: string }>();
   const [feedback, setFeedback] = createSignal("");
@@ -113,7 +117,7 @@ export default function AgentReviewPage() {
   let composerTextareaRef: HTMLTextAreaElement | undefined;
 
   const [session, { refetch: refetchSession }] = createResource(async () =>
-    fetchJson<ReviewSession>(`/api/sessions/${encodeURIComponent(params.sessionId)}`),
+    fetchJson<ReviewSessionWithContext>(`/api/sessions/${encodeURIComponent(params.sessionId)}`),
   );
 
   const [result, { refetch: refetchResult }] = createResource(
@@ -173,6 +177,7 @@ export default function AgentReviewPage() {
   const diffRawPatch = createMemo(() => selectedDiffVariant()?.rawPatch ?? "");
 
   const annotationCount = createMemo(() => annotations().length);
+  const sessionPrUrl = createMemo(() => session()?.prUrl ?? null);
 
   const contentHeading = createMemo(() => {
     if (isDiffSession()) return diffLabel() ?? "Patch under review";
@@ -468,6 +473,9 @@ export default function AgentReviewPage() {
                         onReplyToComment={async () => ({ success: true })}
                         onEditComment={async () => ({ success: true })}
                         onDeleteComment={async () => ({ success: true })}
+                        sessionId={params.sessionId}
+                        variantId={currentDiffVariantId()}
+                        prUrl={sessionPrUrl()}
                       />
                     </div>
 

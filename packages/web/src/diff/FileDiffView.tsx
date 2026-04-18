@@ -55,7 +55,11 @@ interface FileDiffViewProps {
   repoName?: string | null;
   isRead?: boolean;
   onToggleRead?: () => void;
-  /** PR URL needed for fetching full file contents (for expanding unchanged lines) */
+  /** Session ID used to fetch full file contents from local repo context when available */
+  sessionId?: string | null;
+  /** Current diff variant ID for local/manual session expansion */
+  variantId?: string | null;
+  /** PR URL fallback for fetching full file contents (for expanding unchanged lines) */
   prUrl?: string | null;
 }
 
@@ -330,12 +334,12 @@ export function FileDiffView(props: FileDiffViewProps) {
   const ensureFileContent = async (): Promise<boolean> => {
     if (fileContentLoaded) return true;
     if (fileContentLoading) return false;
-    if (!props.prUrl) return false;
+    if (!props.sessionId && !props.prUrl) return false;
 
     fileContentLoading = true;
     try {
       const { oldContent, newContent } = await fetchFileContentCached(
-        props.prUrl,
+        { sessionId: props.sessionId, prUrl: props.prUrl, variantId: props.variantId },
         props.file.name,
         props.file.prevName ?? undefined,
       );
