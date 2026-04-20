@@ -139,7 +139,7 @@ function TreeNodeView(props: {
               >
                 ▶
               </span>
-              <span class="text-text-faint group-hover:text-text-muted truncate">
+              <span class="text-text-faint group-hover:text-text-muted truncate font-mono">
                 {props.node.name}
               </span>
             </button>
@@ -170,7 +170,7 @@ function TreeNodeView(props: {
           >
             <FileStatusIndicator type={props.node.file!.type} />
             <span
-              class="flex-1 truncate"
+              class="flex-1 truncate font-mono"
               classList={{
                 "text-text-muted group-hover:text-text": !isRead(),
                 "text-text-faint": isRead(),
@@ -276,7 +276,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
           value={searchQuery()}
           onInput={(e) => setSearchQuery(e.currentTarget.value)}
           placeholder="Filter..."
-          class="w-full px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent"
+          class="w-full px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent font-mono"
         />
       </div>
 

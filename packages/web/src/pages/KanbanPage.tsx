@@ -115,6 +115,7 @@ const KanbanPage: Component = () => {
   const [selectedAssignee, setSelectedAssignee] = createSignal("");
   const [targetWeekFilter, setTargetWeekFilter] = createSignal<"all" | "lte-next">("all");
   const [cardStyle, setCardStyle] = createSignal<KanbanCardStyle>("readable");
+  const [showFilters, setShowFilters] = createSignal(false);
   const [selectedItemId, setSelectedItemId] = createSignal<string | null>(null);
   const [pendingMoves, setPendingMoves] = createSignal<QueuedMove[]>([]);
   const [isFlushingQueue, setIsFlushingQueue] = createSignal(false);
@@ -243,6 +244,15 @@ const KanbanPage: Component = () => {
       }),
     }));
   });
+
+  const hasActiveSecondaryFilters = createMemo(
+    () =>
+      selectedRepo().length > 0 ||
+      selectedAssignee().length > 0 ||
+      targetWeekFilter() !== "all" ||
+      cardStyle() !== "readable" ||
+      pendingMoves().length > 0,
+  );
 
   const allBoardItems = createMemo(
     () => boardQuery.data?.columns.flatMap((column) => column.items) ?? [],
@@ -535,13 +545,14 @@ const KanbanPage: Component = () => {
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <div class="w-44">
               <TextInput
                 value={ownerInput()}
                 onInput={(e) => setOwnerInput(e.currentTarget.value)}
                 placeholder="@me or org"
                 size="sm"
+                class="font-mono"
               />
             </div>
             <Button variant="secondary" size="sm" onClick={handleOwnerSubmit}>
@@ -578,34 +589,16 @@ const KanbanPage: Component = () => {
                 </For>
               </Select>
             </Show>
-
-            <Select
-              compact
-              value={selectedRepo()}
-              onChange={(e) => setSelectedRepo(e.currentTarget.value)}
-              class="min-w-[260px]"
-              disabled={!boardQuery.data}
-            >
-              <option value="">All repos</option>
-              <For each={repoOptions()}>{(repo) => <option value={repo}>{repo}</option>}</For>
-            </Select>
-
-            <Select
-              compact
-              value={cardStyle()}
-              onChange={(e) => setCardStyle(e.currentTarget.value as KanbanCardStyle)}
-              class="min-w-[220px]"
-            >
-              <option value="readable">Card style: Readable</option>
-              <option value="compact">Card style: Compact</option>
-              <option value="split">Card style: Split</option>
-            </Select>
-
-            <Button variant="secondary" size="sm" onClick={() => projectsQuery.refetch()}>
-              Refresh projects
-            </Button>
             <Button variant="secondary" size="sm" onClick={refreshBoard}>
               Refresh board
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowFilters(!showFilters())}
+              class={hasActiveSecondaryFilters() ? "border-accent/50 text-accent" : undefined}
+            >
+              {showFilters() ? "Hide filters" : "Filters"}
             </Button>
           </div>
 
@@ -629,96 +622,117 @@ const KanbanPage: Component = () => {
             )}
           </Show>
 
-          <Show when={quotaQuery.data}>
-            {(quota) => (
-              <div class="text-xs text-text-faint flex items-center gap-2 flex-wrap">
-                <span>
-                  GraphQL: <span class="text-text">{quota().remaining}</span> / {quota().limit}
-                </span>
-                <Show when={graphqlResetLabel()}>
-                  {(label) => (
-                    <span>
-                      reset ~ <span class="text-text">{label()}</span>
-                    </span>
-                  )}
-                </Show>
+          <Show when={showFilters() || hasActiveSecondaryFilters()}>
+            <div class="border border-border bg-bg px-3 py-3 space-y-3">
+              <div class="flex items-center gap-2 flex-wrap">
+                <Select
+                  compact
+                  value={selectedRepo()}
+                  onChange={(e) => setSelectedRepo(e.currentTarget.value)}
+                  class="min-w-[260px]"
+                  disabled={!boardQuery.data}
+                >
+                  <option value="">All repos</option>
+                  <For each={repoOptions()}>{(repo) => <option value={repo}>{repo}</option>}</For>
+                </Select>
 
-                <div class="flex items-center gap-1">
-                  <span>assignee:</span>
-                  <Select
-                    compact
-                    value={selectedAssignee()}
-                    onChange={(e) => setSelectedAssignee(e.currentTarget.value)}
-                    class="min-w-[190px]"
-                    disabled={!boardQuery.data}
-                  >
-                    <option value="">All</option>
-                    <For each={assigneeOptions()}>
-                      {(assignee) => <option value={assignee}>@{assignee}</option>}
-                    </For>
-                  </Select>
-                </div>
+                <Select
+                  compact
+                  value={selectedAssignee()}
+                  onChange={(e) => setSelectedAssignee(e.currentTarget.value)}
+                  class="min-w-[190px]"
+                  disabled={!boardQuery.data}
+                >
+                  <option value="">All assignees</option>
+                  <For each={assigneeOptions()}>
+                    {(assignee) => <option value={assignee}>@{assignee}</option>}
+                  </For>
+                </Select>
 
-                <div class="flex items-center gap-1">
-                  <span>target-week:</span>
-                  <Select
-                    compact
-                    value={targetWeekFilter()}
-                    onChange={(e) =>
-                      setTargetWeekFilter(e.currentTarget.value as "all" | "lte-next")
-                    }
-                    class="min-w-[160px]"
-                    disabled={!selectedProjectNumber()}
-                  >
-                    <option value="all">All</option>
-                    <option value="lte-next">&lt;=@next</option>
-                  </Select>
-                </div>
+                <Select
+                  compact
+                  value={targetWeekFilter()}
+                  onChange={(e) => setTargetWeekFilter(e.currentTarget.value as "all" | "lte-next")}
+                  class="min-w-[160px]"
+                  disabled={!selectedProjectNumber()}
+                >
+                  <option value="all">Target week: All</option>
+                  <option value="lte-next">Target week: &lt;=@next</option>
+                </Select>
 
-                <Show when={pendingMoves().length > 0}>
-                  <Badge variant="warning">{pendingMoves().length} queued move(s)</Badge>
-                </Show>
+                <Select
+                  compact
+                  value={cardStyle()}
+                  onChange={(e) => setCardStyle(e.currentTarget.value as KanbanCardStyle)}
+                  class="min-w-[220px]"
+                >
+                  <option value="readable">Card style: Readable</option>
+                  <option value="compact">Card style: Compact</option>
+                  <option value="split">Card style: Split</option>
+                </Select>
+
+                <Button variant="secondary" size="sm" onClick={() => projectsQuery.refetch()}>
+                  Refresh projects
+                </Button>
               </div>
-            )}
+
+              <Show when={quotaQuery.data}>
+                {(quota) => (
+                  <div class="text-xs text-text-faint flex items-center gap-2 flex-wrap">
+                    <span>
+                      GraphQL: <span class="text-text">{quota().remaining}</span> / {quota().limit}
+                    </span>
+                    <Show when={graphqlResetLabel()}>
+                      {(label) => (
+                        <span>
+                          reset ~ <span class="text-text">{label()}</span>
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={pendingMoves().length > 0}>
+                      <Badge variant="warning">{pendingMoves().length} queued move(s)</Badge>
+                    </Show>
+                  </div>
+                )}
+              </Show>
+
+              <Show when={boardQuery.data?.statusField}>
+                {(statusField) => (
+                  <p class="text-xs text-text-faint">
+                    Drag cards between columns. Field:{" "}
+                    <span class="text-text">{statusField().name}</span>
+                    <Show when={selectedRepo()}>
+                      {(repo) => (
+                        <>
+                          {" "}
+                          • repo: <span class="text-text font-mono">{repo()}</span>
+                        </>
+                      )}
+                    </Show>
+                    <Show when={selectedAssignee()}>
+                      {(assignee) => (
+                        <>
+                          {" "}
+                          • assignee: <span class="text-text font-mono">@{assignee()}</span>
+                        </>
+                      )}
+                    </Show>
+                    <Show when={targetWeekFilter() === "lte-next"}>
+                      <>
+                        {" "}
+                        • target-week: <span class="text-text">&lt;=@next</span>
+                      </>
+                    </Show>
+                  </p>
+                )}
+              </Show>
+            </div>
           </Show>
 
           <Show when={error()}>
             <div class="px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-sm">
               {error()}
             </div>
-          </Show>
-
-          <Show when={boardQuery.data?.statusField}>
-            {(statusField) => (
-              <p class="text-xs text-text-faint">
-                Drag cards between columns. Field:{" "}
-                <span class="text-text">{statusField().name}</span> • card variants:{" "}
-                <span class="text-text">Readable / Compact / Split</span> • GraphQL saver mode:{" "}
-                <span class="text-text">queued auto-apply + manual board refresh</span>
-                <Show when={selectedRepo()}>
-                  {(repo) => (
-                    <>
-                      {" "}
-                      • repo: <span class="text-text">{repo()}</span>
-                    </>
-                  )}
-                </Show>
-                <Show when={selectedAssignee()}>
-                  {(assignee) => (
-                    <>
-                      {" "}
-                      • assignee: <span class="text-text">@{assignee()}</span>
-                    </>
-                  )}
-                </Show>
-                <Show when={targetWeekFilter() === "lte-next"}>
-                  <>
-                    {" "}
-                    • target-week: <span class="text-text">&lt;=@next</span>
-                  </>
-                </Show>
-              </p>
-            )}
           </Show>
         </div>
       </header>

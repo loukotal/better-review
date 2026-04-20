@@ -113,6 +113,7 @@ const AppContent: Component = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [prUrl, setPrUrl] = createSignal("");
   const [loadedPrUrl, setLoadedPrUrl] = createSignal<string | null>(null);
+  const [showPrSwitcher, setShowPrSwitcher] = createSignal(false);
   const [initialLoadTriggered, setInitialLoadTriggered] = createSignal(false);
   const [prQueue, setPrQueue] = createSignal<QueuedPr[]>([]);
   const [prInfo, setPrInfo] = createSignal<PrInfo | null>(null);
@@ -147,6 +148,7 @@ const AppContent: Component = () => {
     setPanelVisibility(newVisibility);
     savePanelVisibility(newVisibility);
   };
+  console.log({ panelVisibility: panelVisibility() });
 
   // Focus mode - hides header and chat, maximizes diff area
   const [focusMode, setFocusMode] = createSignal(
@@ -385,6 +387,7 @@ const AppContent: Component = () => {
   createEffect(() => {
     const loaded = loadedPrUrl();
     if (loaded) {
+      setShowPrSwitcher(false);
       setSearchParams({ prUrl: loaded });
     }
   });
@@ -766,11 +769,7 @@ const AppContent: Component = () => {
                     onClick={() => togglePanel("chat")}
                     variant="secondary"
                     size="sm"
-                    class={
-                      panelVisibility().chat
-                        ? "border-accent/50 text-accent hover:text-accent hover:border-accent/50"
-                        : "text-text-faint"
-                    }
+                    class={panelVisibility().chat ? "border-primary/50" : "text-text-faint"}
                     title="Toggle chat panel"
                   >
                     Chat
@@ -779,11 +778,7 @@ const AppContent: Component = () => {
                     onClick={() => togglePanel("files")}
                     variant="secondary"
                     size="sm"
-                    class={
-                      panelVisibility().files
-                        ? "border-accent/50 text-accent hover:text-accent hover:border-accent/50"
-                        : "text-text-faint"
-                    }
+                    class={panelVisibility().files ? "border-primary/50" : "text-text-faint"}
                     title="Toggle file tree panel"
                   >
                     Files
@@ -811,31 +806,78 @@ const AppContent: Component = () => {
               </div>
             </div>
 
-            <form onSubmit={loadPr} class="flex gap-2">
-              <div class="flex-1">
-                <TextInput
-                  type="text"
-                  value={prUrl()}
-                  onInput={(e) => setPrUrl(e.currentTarget.value)}
-                  placeholder="github.com/owner/repo/pull/123"
-                  class="text-base"
-                />
-              </div>
-              <Button type="submit" disabled={loading() || !prUrl()} variant="primary" size="lg">
-                {loading() ? "..." : "Load"}
-              </Button>
-              <Show when={nextPr()}>
-                {(next) => (
-                  <A
-                    href={`/review?prUrl=${encodeURIComponent(next().url)}`}
-                    class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-base flex items-center gap-1"
-                    title={`Next: ${next().title}`}
+            <Show
+              when={!loadedPrUrl() || showPrSwitcher()}
+              fallback={
+                <div class="flex items-center justify-between gap-3 border border-border bg-bg px-3 py-2">
+                  <div class="min-w-0 flex-1">
+                    <div class="text-xs text-text-faint">Current PR</div>
+                    <div class="truncate text-sm font-mono text-text">
+                      {prInfo()?.owner && prInfo()?.repo && prInfo()?.number
+                        ? `${prInfo()!.owner}/${prInfo()!.repo}#${prInfo()!.number}`
+                        : loadedPrUrl()}
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2 flex-shrink-0">
+                    <Show when={nextPr()}>
+                      {(next) => (
+                        <A
+                          href={`/review?prUrl=${encodeURIComponent(next().url)}`}
+                          class="px-3 py-1.5 border border-border text-sm text-text-faint hover:text-text hover:border-text-faint transition-colors flex items-center gap-1"
+                          title={`Next: ${next().title}`}
+                        >
+                          Next <span class="text-accent">→</span>
+                        </A>
+                      )}
+                    </Show>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setShowPrSwitcher(true)}
+                    >
+                      Change PR
+                    </Button>
+                  </div>
+                </div>
+              }
+            >
+              <form onSubmit={loadPr} class="flex gap-2">
+                <div class="flex-1">
+                  <TextInput
+                    type="text"
+                    value={prUrl()}
+                    onInput={(e) => setPrUrl(e.currentTarget.value)}
+                    placeholder="github.com/owner/repo/pull/123"
+                    class="text-base font-mono"
+                  />
+                </div>
+                <Button type="submit" disabled={loading() || !prUrl()} variant="primary" size="lg">
+                  {loading() ? "..." : loadedPrUrl() ? "Switch" : "Load"}
+                </Button>
+                <Show when={loadedPrUrl()}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowPrSwitcher(false)}
                   >
-                    Next PR <span class="text-accent">→</span>
-                  </A>
-                )}
-              </Show>
-            </form>
+                    Cancel
+                  </Button>
+                </Show>
+                <Show when={!loadedPrUrl() && nextPr()}>
+                  {(next) => (
+                    <A
+                      href={`/review?prUrl=${encodeURIComponent(next().url)}`}
+                      class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-base flex items-center gap-1"
+                      title={`Next: ${next().title}`}
+                    >
+                      Next PR <span class="text-accent">→</span>
+                    </A>
+                  )}
+                </Show>
+              </form>
+            </Show>
 
             {error() && (
               <div class="mt-3 px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-base">
@@ -881,16 +923,23 @@ const AppContent: Component = () => {
 
       {/* Focus mode exit bar */}
       <Show when={focusMode()}>
-        <div class="flex items-center justify-between px-3 py-1 bg-bg-surface border-b border-border">
-          <span class="text-text-faint text-xs">Focus mode</span>
+        <div class="flex items-center justify-between px-3 py-1.5 bg-bg-surface border-b border-accent/30">
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] text-accent font-mono uppercase tracking-wide">
+              Focus mode
+            </span>
+            <span class="text-xs text-text-faint">
+              Diff takes priority. Press Esc or F to exit.
+            </span>
+          </div>
           <Button
             onClick={toggleFocusMode}
             variant="ghost"
             size="xs"
-            class="text-text-faint"
+            class="text-accent hover:text-accent"
             title="Exit focus mode (F or Esc)"
           >
-            Exit <span class="text-text-faint/50 ml-1">F</span>
+            Exit <span class="text-accent/60 ml-1 font-mono">F</span>
           </Button>
         </div>
       </Show>
@@ -925,7 +974,54 @@ const AppContent: Component = () => {
               <Show
                 when={loading()}
                 fallback={
-                  <div class="text-text-faint text-base">Enter a GitHub PR URL to start</div>
+                  <div class="w-full max-w-2xl px-6">
+                    <div class="border border-border bg-bg-surface p-6 space-y-5">
+                      <div class="space-y-2">
+                        <div class="text-xs text-accent font-mono uppercase tracking-wide">
+                          Review Flow
+                        </div>
+                        <h2 class="text-xl text-text">
+                          Load a PR and review it without losing context
+                        </h2>
+                        <p class="text-sm text-text-muted max-w-[60ch] leading-relaxed">
+                          Paste a GitHub pull request URL above, then use the left chat panel for AI
+                          review, the center diff for comments, and the right file tree to track
+                          what you have already read.
+                        </p>
+                      </div>
+
+                      <div class="grid gap-3 md:grid-cols-3">
+                        <div class="border border-border bg-bg p-3 space-y-1">
+                          <div class="text-xs text-text-faint font-mono uppercase tracking-wide">
+                            1. Load
+                          </div>
+                          <p class="text-sm text-text-muted leading-relaxed">
+                            Paste{" "}
+                            <span class="font-mono text-text">github.com/owner/repo/pull/123</span>,
+                            then load the diff.
+                          </p>
+                        </div>
+                        <div class="border border-border bg-bg p-3 space-y-1">
+                          <div class="text-xs text-text-faint font-mono uppercase tracking-wide">
+                            2. Review
+                          </div>
+                          <p class="text-sm text-text-muted leading-relaxed">
+                            Use <span class="font-mono text-text">Start Review</span> in the chat
+                            panel for structured AI feedback and file order.
+                          </p>
+                        </div>
+                        <div class="border border-border bg-bg p-3 space-y-1">
+                          <div class="text-xs text-text-faint font-mono uppercase tracking-wide">
+                            3. Focus
+                          </div>
+                          <p class="text-sm text-text-muted leading-relaxed">
+                            Press <span class="font-mono text-text">F</span> for focus mode, then
+                            mark files as read from the file tree as you work.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 }
               >
                 <div class="flex items-center gap-3">

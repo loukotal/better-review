@@ -21,6 +21,7 @@ import { FileLink } from "./components/FileLink";
 import { ModelSelector } from "./components/ModelSelector";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { SessionSelector } from "./components/SessionSelector";
+import { Button } from "./design-system";
 import type { DiffTheme } from "./diff/types";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { CheckIcon } from "./icons/check-icon";
@@ -812,13 +813,15 @@ export function ChatPanel(props: ChatPanelProps) {
               </button>
             </Show>
             <Show when={sessionId() && !chat.isStreaming()}>
-              <button
+              <Button
                 type="button"
                 onClick={startReview}
-                class="px-1.5 py-0.5 text-xs bg-accent text-black hover:bg-accent-bright transition-colors whitespace-nowrap"
+                variant="primary"
+                size="xs"
+                class="whitespace-nowrap"
               >
                 {width() < 300 ? "Review" : "Start Review"}
-              </button>
+              </Button>
             </Show>
             <Show when={chat.isStreaming()}>
               <button
@@ -854,7 +857,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 type="button"
                 onClick={handleNewSession}
                 disabled={chat.isStreaming() || initializing()}
-                class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-bg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                 title="Create new session"
               >
                 {width() < 300 ? "+New" : "+ New"}
@@ -1037,7 +1040,7 @@ export function ChatPanel(props: ChatPanelProps) {
                     : "Load a PR first"
               }
               disabled={!sessionId() || chat.isStreaming()}
-              class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent resize-none disabled:opacity-50 disabled:cursor-not-allowed"
+              class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent resize-none disabled:opacity-50 disabled:cursor-not-allowed font-mono"
               rows={2}
             />
             <div class="flex justify-between items-center">
@@ -1045,7 +1048,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 {/* Connection status */}
                 <div class="flex items-center gap-1">
                   <div
-                    class="w-1.5 h-1.5 rounded-full"
+                    class="w-2 h-2 rounded-full"
                     classList={{
                       "bg-success": chat.connectionStatus() === "connected",
                       "bg-warning":
@@ -1055,7 +1058,7 @@ export function ChatPanel(props: ChatPanelProps) {
                       "bg-text-faint": !sessionId(),
                     }}
                   />
-                  <span class="text-[9px] text-text-faint">
+                  <span class="text-[9px] text-text-faint font-mono">
                     {(() => {
                       if (!sessionId()) return "Offline";
                       const status = chat.connectionStatus();
@@ -1067,11 +1070,11 @@ export function ChatPanel(props: ChatPanelProps) {
                     })()}
                   </span>
                   <Show when={chat.upstreamStatus()}>
-                    <span class="text-[9px] text-text-faint/80">
+                    <span class="text-[9px] text-text-faint/80 font-mono">
                       upstream: {chat.upstreamStatus()}
                     </span>
                   </Show>
-                  <span class="text-[9px] text-text-faint/80">
+                  <span class="text-[9px] text-text-faint/80 font-mono">
                     scope:{" "}
                     {props.reviewMode === "commit" && props.commitSha
                       ? `commit ${props.commitSha.slice(0, 7)}`
@@ -1099,7 +1102,7 @@ export function ChatPanel(props: ChatPanelProps) {
               <button
                 type="submit"
                 disabled={!sessionId() || chat.isStreaming() || !input().trim()}
-                class="px-3 py-1 bg-accent text-black text-sm font-medium hover:bg-accent-bright disabled:opacity-30 disabled:cursor-not-allowed"
+                class="px-3 py-1 bg-primary text-text text-sm font-medium hover:bg-primary-hover disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {chat.isStreaming() ? "..." : "Send"}
               </button>

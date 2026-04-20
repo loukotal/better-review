@@ -21,6 +21,7 @@ import type {
 } from "@better-review/shared";
 
 import { Badge, Button, Card, Select, Textarea } from "../design-system";
+import { cn } from "../design-system/cn";
 import {
   DiffViewer,
   DEFAULT_DIFF_SETTINGS,
@@ -435,13 +436,13 @@ export default function AgentReviewPage() {
 
             <Show when={isDiffSession()}>
               <div class="flex flex-1 min-h-0">
-                <div class="flex-shrink-0 border-r border-border">
+                <div class="shrink-0 border-r border-border">
                   <FileTreePanel files={files()} onFileSelect={scrollToFile} />
                 </div>
 
                 <div class="flex-1 min-w-0 flex flex-col">
                   <Show when={availableDiffVariants().length > 0}>
-                    <div class="flex items-center gap-2 border-b border-border px-3 py-2 bg-bg-surface flex-shrink-0">
+                    <div class="flex items-center gap-2 border-b border-border px-3 py-2 bg-bg-surface shrink-0">
                       <Select
                         compact
                         value={currentDiffVariantId() ?? ""}
@@ -567,7 +568,7 @@ export default function AgentReviewPage() {
                   type="button"
                   onClick={openComposer}
                   title="Add annotation"
-                  class="inline-flex h-7 w-7 items-center justify-center border border-accent/50 bg-accent text-black transition-colors hover:bg-accent-bright"
+                  class="inline-flex h-7 w-7 items-center justify-center border border-primary/50 bg-primary text-text transition-colors hover:bg-primary-hover"
                 >
                   <PlusIcon size={12} />
                 </button>

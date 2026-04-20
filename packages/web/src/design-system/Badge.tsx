@@ -22,7 +22,7 @@ export const Badge: Component<BadgeProps> = (props) => {
   return (
     <span
       class={cn(
-        "inline-flex items-center px-1.5 py-0.5 text-xs border",
+        "inline-flex items-center px-1.5 py-0.5 text-xs border font-mono",
         variantClasses[local.variant ?? "neutral"],
         local.class,
       )}

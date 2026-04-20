@@ -389,7 +389,7 @@ const PrListPage: Component = () => {
                     <div class="px-4 py-3">
                       <div class="flex items-start justify-between gap-4">
                         <div class="flex-1 min-w-0">
-                          <div class="text-sm text-text-faint mb-1">
+                          <div class="text-sm text-text-faint mb-1 font-mono">
                             {pr.repository.nameWithOwner}
                           </div>
                           <div class="flex items-center gap-2">

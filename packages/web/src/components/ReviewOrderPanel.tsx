@@ -66,7 +66,7 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
             <button
               type="button"
               onClick={() => props.onApplyOrder(props.files)}
-              class="text-xs px-2 py-0.5 bg-accent text-black hover:bg-accent-bright transition-colors"
+              class="text-xs px-2 py-0.5 bg-primary text-text hover:bg-primary-hover transition-colors"
             >
               Apply Order
             </button>

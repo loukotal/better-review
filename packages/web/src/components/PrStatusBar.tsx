@@ -195,7 +195,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 <button
                   type="button"
                   onClick={() => setShowDescription(!showDescription())}
-                  class={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded transition-colors ${
+                  class={`flex items-center gap-1 text-xs px-1.5 py-0.5 transition-colors ${
                     showDescription()
                       ? "text-text bg-bg-elevated"
                       : "text-text-faint hover:text-text hover:bg-bg-elevated/50"
@@ -218,7 +218,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
               <div class="fixed inset-0 z-40" onClick={() => setShowDescription(false)} />
               {/* Panel */}
               <div
-                class="absolute left-0 top-full mt-2 z-50 bg-bg-elevated border border-border shadow-xl rounded overflow-hidden"
+                class="absolute left-0 top-full mt-2 z-50 bg-bg-elevated border border-border shadow-xl overflow-hidden"
                 style={{
                   width: "min(600px, calc(100vw - 32px))",
                   "max-height": "min(400px, 50vh)",
@@ -236,7 +236,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                   <button
                     type="button"
                     onClick={() => setShowDescription(false)}
-                    class="flex items-center gap-1.5 px-2 py-1 text-xs text-text-faint hover:text-text hover:bg-bg-elevated rounded transition-colors"
+                    class="flex items-center gap-1.5 px-2 py-1 text-xs text-text-faint hover:text-text hover:bg-bg-elevated transition-colors"
                     title="Close (Esc)"
                   >
                     <span class="hidden sm:inline">Close</span>

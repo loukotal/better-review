@@ -152,7 +152,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
                 type="button"
                 onClick={submitEdit}
                 disabled={isSubmitting()}
-                class="px-2.5 py-1 bg-accent text-black text-sm hover:bg-accent-bright disabled:opacity-50 transition-colors"
+                class="px-2.5 py-1 bg-primary text-text text-sm hover:bg-primary-hover disabled:opacity-50 transition-colors"
               >
                 {isSubmitting() ? "Saving..." : "Save"}
               </button>
@@ -321,7 +321,7 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
           type="button"
           onClick={submit}
           disabled={!body().trim() || isSubmitting()}
-          class="px-2.5 py-1 bg-accent text-black text-xs hover:bg-accent-bright disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          class="px-2.5 py-1 bg-primary text-text text-xs hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {isSubmitting() ? "Replying..." : "Reply"}
         </button>
@@ -555,7 +555,7 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
           type="button"
           onClick={submit}
           disabled={!body().trim() || isSubmitting()}
-          class="px-2.5 py-1 bg-accent text-black text-sm hover:bg-accent-bright disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          class="px-2.5 py-1 bg-primary text-text text-sm hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {isSubmitting() ? "Commenting..." : "Comment"}
         </button>

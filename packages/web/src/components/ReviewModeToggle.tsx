@@ -17,13 +17,13 @@ export const ReviewModeToggle: Component<ReviewModeToggleProps> = (props) => {
         type="button"
         onClick={() => props.onModeChange("full")}
         disabled={props.disabled}
-        variant="secondary"
+        variant={props.mode === "full" ? "primary" : "secondary"}
         size="sm"
-        class={
-          props.mode === "full"
-            ? "bg-accent text-black border-accent hover:text-black hover:border-accent"
-            : "text-text-muted hover:bg-bg-surface"
-        }
+        // class={
+        //   props.mode === "full"
+        //     ? "bg-primary text-text border-primary hover:bg-primary-hover hover:text-text hover:border-primary active:bg-primary"
+        //     : "text-text-muted hover:bg-bg-surface"
+        // }
       >
         Full PR
       </Button>
@@ -31,13 +31,9 @@ export const ReviewModeToggle: Component<ReviewModeToggleProps> = (props) => {
         type="button"
         onClick={() => props.onModeChange("commit")}
         disabled={props.disabled || props.commitCount === 0}
-        variant="secondary"
+        variant={props.mode === "commit" ? "primary" : "secondary"}
         size="sm"
-        class={`border-l-0 ${
-          props.mode === "commit"
-            ? "bg-accent text-black border-accent hover:text-black hover:border-accent"
-            : "text-text-muted hover:bg-bg-surface"
-        }`}
+        class={`border-l-0`}
       >
         By Commit ({props.commitCount})
       </Button>
