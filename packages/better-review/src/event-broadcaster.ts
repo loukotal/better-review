@@ -1,5 +1,5 @@
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2";
-import { Effect, Fiber, Layer, PubSub, Ref, Schedule, ServiceMap, Stream } from "effect";
+import { Effect, Fiber, Layer, PubSub, Ref, Schedule, Stream } from "effect";
 
 import { OpencodeService, OpencodeServiceLive } from "./opencode";
 import { transformEvent } from "./stream";
@@ -126,7 +126,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
     retryAttempt = 0;
   };
   const reconnectSchedule = Schedule.exponential("1 second").pipe(
-    Schedule.both(Schedule.spaced("30 seconds")),
+    Schedule.intersect(Schedule.spaced("30 seconds")),
     Schedule.tapInput(() =>
       Effect.gen(function* () {
         retryAttempt++;
@@ -161,7 +161,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
     yield* Effect.log("[EventBroadcaster] Starting connection...");
 
     // Fork the connection - it runs until interrupted
-    const fiber = yield* Effect.forkDetach(
+    const fiber = yield* Effect.forkDaemon(
       connectionWithRetry.pipe(
         Effect.ensuring(
           Effect.gen(function* () {
@@ -206,7 +206,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
 
     yield* Effect.log(`[EventBroadcaster] Scheduling connection stop in ${IDLE_TIMEOUT_MS}ms...`);
 
-    const idleFiber = yield* Effect.forkDetach(
+    const idleFiber = yield* Effect.forkDaemon(
       Effect.gen(function* () {
         yield* Effect.sleep(IDLE_TIMEOUT_MS);
 
@@ -312,16 +312,10 @@ const makeEventBroadcaster = Effect.gen(function* () {
   };
 });
 
-type EventBroadcasterApi =
-  typeof makeEventBroadcaster extends Effect.Effect<infer A, infer _E, infer _R> ? A : never;
+export class EventBroadcaster extends Effect.Service<EventBroadcaster>()("EventBroadcaster", {
+  effect: makeEventBroadcaster,
+}) {}
 
-export class EventBroadcaster extends ServiceMap.Service<EventBroadcaster, EventBroadcasterApi>()(
-  "EventBroadcaster",
-  {
-    make: makeEventBroadcaster,
-  },
-) {}
-
-export const EventBroadcasterLive = Layer.effect(EventBroadcaster, makeEventBroadcaster).pipe(
+export const EventBroadcasterLive = EventBroadcaster.Default.pipe(
   Layer.provide(OpencodeServiceLive),
 );

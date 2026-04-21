@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { Effect, type ServiceMap } from "effect";
+import { Effect } from "effect";
 
 import type { ReviewSessionAnnotation } from "@better-review/shared";
 import { isGitHubAssetId } from "@better-review/shared/github-asset";
@@ -221,10 +221,10 @@ async function readWorkingTreeFile(repoRoot: string, filePath: string): Promise<
 }
 
 type RouteServices = {
-  gh: ServiceMap.Service.Shape<typeof GhService>;
-  diffCache: ServiceMap.Service.Shape<typeof DiffCacheService>;
-  prContext: ServiceMap.Service.Shape<typeof PrContextService>;
-  reviewSessions: ServiceMap.Service.Shape<typeof ReviewSessionService>;
+  gh: GhService;
+  diffCache: DiffCacheService;
+  prContext: PrContextService;
+  reviewSessions: ReviewSessionService;
 };
 
 const createRoutes = ({ gh, diffCache, prContext, reviewSessions }: RouteServices) => ({

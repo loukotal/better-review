@@ -2,7 +2,7 @@
 // State Services - DiffCache and PrContext with Effect.Ref
 // =============================================================================
 
-import { Effect, Layer, Ref, ServiceMap } from "effect";
+import { Effect, Layer, Ref } from "effect";
 
 import type { PrInfo, StoredSession, PrSessionData, SearchedPr } from "@better-review/shared";
 
@@ -263,20 +263,11 @@ const makeDiffCacheService = Effect.gen(function* () {
   return yield* createDiffCacheServiceApi(gh);
 });
 
-type SuccessOf<T> = T extends Effect.Effect<infer A, infer _E, infer _R> ? A : never;
+export class DiffCacheService extends Effect.Service<DiffCacheService>()("DiffCacheService", {
+  effect: makeDiffCacheService,
+}) {}
 
-type DiffCacheServiceApi = SuccessOf<typeof makeDiffCacheService>;
-
-export class DiffCacheService extends ServiceMap.Service<DiffCacheService, DiffCacheServiceApi>()(
-  "DiffCacheService",
-  {
-    make: makeDiffCacheService,
-  },
-) {}
-
-export const DiffCacheServiceLive = Layer.effect(DiffCacheService, makeDiffCacheService).pipe(
-  Layer.provide(GhServiceLive),
-);
+export const DiffCacheServiceLive = DiffCacheService.Default.pipe(Layer.provide(GhServiceLive));
 
 // =============================================================================
 // PrContextService
@@ -523,18 +514,11 @@ const makePrContextService = Effect.gen(function* () {
   };
 });
 
-type PrContextServiceApi = SuccessOf<typeof makePrContextService>;
+export class PrContextService extends Effect.Service<PrContextService>()("PrContextService", {
+  effect: makePrContextService,
+}) {}
 
-export class PrContextService extends ServiceMap.Service<PrContextService, PrContextServiceApi>()(
-  "PrContextService",
-  {
-    make: makePrContextService,
-  },
-) {}
-
-export const PrContextServiceLive = Layer.effect(PrContextService, makePrContextService).pipe(
-  Layer.provide(StoreServiceLive),
-);
+export const PrContextServiceLive = PrContextService.Default.pipe(Layer.provide(StoreServiceLive));
 
 // =============================================================================
 // PrListCacheService - Background-refreshed PR list cache
@@ -612,7 +596,7 @@ const makePrListCacheService = Effect.gen(function* () {
       // Only refresh stale cache entries so frequent list reads stay cheap.
       yield* refresh.pipe(
         Effect.catch((e) => Effect.log(`[pr-list-cache] Background refresh failed: ${e}`)),
-        Effect.forkDetach,
+        Effect.forkDaemon,
       );
 
       return cached;
@@ -661,13 +645,8 @@ const makePrListCacheService = Effect.gen(function* () {
   };
 });
 
-type PrListCacheServiceApi = SuccessOf<typeof makePrListCacheService>;
+export class PrListCacheService extends Effect.Service<PrListCacheService>()("PrListCacheService", {
+  effect: makePrListCacheService,
+}) {}
 
-export class PrListCacheService extends ServiceMap.Service<
-  PrListCacheService,
-  PrListCacheServiceApi
->()("PrListCacheService", { make: makePrListCacheService }) {}
-
-export const PrListCacheServiceLive = Layer.effect(PrListCacheService, makePrListCacheService).pipe(
-  Layer.provide(GhServiceLive),
-);
+export const PrListCacheServiceLive = PrListCacheService.Default.pipe(Layer.provide(GhServiceLive));

@@ -21,7 +21,6 @@ import type {
 } from "@better-review/shared";
 
 import { Badge, Button, Card, Select, Textarea } from "../design-system";
-import { cn } from "../design-system/cn";
 import {
   DiffViewer,
   DEFAULT_DIFF_SETTINGS,
@@ -177,13 +176,7 @@ export default function AgentReviewPage() {
 
   const diffRawPatch = createMemo(() => selectedDiffVariant()?.rawPatch ?? "");
 
-  const annotationCount = createMemo(() => annotations().length);
   const sessionPrUrl = createMemo(() => session()?.prUrl ?? null);
-
-  const contentHeading = createMemo(() => {
-    if (isDiffSession()) return diffLabel() ?? "Patch under review";
-    return "Agent output";
-  });
 
   createEffect(() => {
     const value = session();

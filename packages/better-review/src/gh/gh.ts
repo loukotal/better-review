@@ -1,4 +1,4 @@
-import { Data, Effect, Layer, Schema, ServiceMap } from "effect";
+import { Data, Effect, Schema } from "effect";
 
 import type {
   PrInfo,
@@ -63,7 +63,7 @@ const PRCommentSchema = Schema.Struct({
   path: Schema.String,
   line: Schema.NullOr(Schema.Number),
   original_line: Schema.NullOr(Schema.Number),
-  side: Schema.Literals(["LEFT", "RIGHT"]),
+  side: Schema.Literal("LEFT", "RIGHT"),
   body: Schema.String,
   html_url: Schema.String,
   user: UserSchema,
@@ -115,13 +115,13 @@ export interface ApprovePrParams {
   body?: string;
 }
 
-const PrStateSchema = Schema.Literals(["open", "closed", "merged"]);
+const PrStateSchema = Schema.Literal("open", "closed", "merged");
 
 const CheckRunSchema = Schema.Struct({
   name: Schema.String,
-  status: Schema.Literals(["queued", "in_progress", "completed", "pending"]),
+  status: Schema.Literal("queued", "in_progress", "completed", "pending"),
   conclusion: Schema.NullOr(
-    Schema.Literals([
+    Schema.Literal(
       "success",
       "failure",
       "neutral",
@@ -129,7 +129,7 @@ const CheckRunSchema = Schema.Struct({
       "skipped",
       "timed_out",
       "action_required",
-    ]),
+    ),
   ),
 });
 
@@ -146,7 +146,7 @@ const PrStatusSchema = Schema.Struct({
 });
 
 const ReviewStateSchema = Schema.NullOr(
-  Schema.Literals(["PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]),
+  Schema.Literal("PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"),
 );
 
 const RepositorySchema = Schema.Struct({
@@ -161,7 +161,7 @@ const AuthorSchema = Schema.Struct({
 const CiStatusSchema = Schema.Struct({
   passed: Schema.Number,
   total: Schema.Number,
-  state: Schema.Literals(["SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"]),
+  state: Schema.Literal("SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"),
 });
 
 const SearchedPrSchema = Schema.Struct({
@@ -1802,8 +1802,8 @@ const ghCli: GhCli = {
     ),
 };
 
-export class GhService extends ServiceMap.Service<GhService, GhCli>()("GhService", {
-  make: Effect.succeed(ghCli),
+export class GhService extends Effect.Service<GhService>()("GhService", {
+  succeed: ghCli,
 }) {}
 
-export const GhServiceLive = Layer.effect(GhService, Effect.succeed(ghCli));
+export const GhServiceLive = GhService.Default;

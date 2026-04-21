@@ -1,4 +1,4 @@
-import { Effect, Layer, ServiceMap } from "effect";
+import { Effect, Layer } from "effect";
 
 import type {
   ReviewSession,
@@ -72,18 +72,13 @@ const makeReviewSessionService = Effect.gen(function* () {
   };
 });
 
-type SuccessOf<T> = T extends Effect.Effect<infer A, infer _E, infer _R> ? A : never;
+export class ReviewSessionService extends Effect.Service<ReviewSessionService>()(
+  "ReviewSessionService",
+  {
+    effect: makeReviewSessionService,
+  },
+) {}
 
-type ReviewSessionServiceApi = SuccessOf<typeof makeReviewSessionService>;
-
-export class ReviewSessionService extends ServiceMap.Service<
-  ReviewSessionService,
-  ReviewSessionServiceApi
->()("ReviewSessionService", {
-  make: makeReviewSessionService,
-}) {}
-
-export const ReviewSessionServiceLive = Layer.effect(
-  ReviewSessionService,
-  makeReviewSessionService,
-).pipe(Layer.provide(StoreServiceLive));
+export const ReviewSessionServiceLive = ReviewSessionService.Default.pipe(
+  Layer.provide(StoreServiceLive),
+);

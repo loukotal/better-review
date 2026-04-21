@@ -288,9 +288,9 @@ export const opencodeRouter = router({
     console.log(`[SSE] Subscription requested`);
 
     // Get the runtime and subscribe to events
-    const services = await opencodeRuntime.services().catch((error) => {
+    const effectRuntime = await opencodeRuntime.runtime().catch((error) => {
       throw new Error(
-        `[SSE] Failed to acquire runtime services: ${error instanceof Error ? error.message : String(error)}`,
+        `[SSE] Failed to acquire Effect runtime: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
 
@@ -322,7 +322,7 @@ export const opencodeRouter = router({
 
     // Convert Effect Stream to async iterable using our runtime
     // This properly handles cleanup when the iterator is returned
-    const asyncIterable = Stream.toAsyncIterableWith(stream, services);
+    const asyncIterable = Stream.toAsyncIterableRuntime(stream, effectRuntime);
     const iterator = asyncIterable[Symbol.asyncIterator]();
 
     try {
