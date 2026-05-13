@@ -28,7 +28,6 @@ import {
   type DiffCommentDraft,
 } from "../DiffViewer";
 import { FileTreePanel } from "../FileTreePanel";
-import { PlusIcon } from "../icons/plus-icon";
 import { parseMarkdown } from "../lib/markdown";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -112,6 +111,7 @@ export default function AgentReviewPage() {
   const [submitting, setSubmitting] = createSignal(false);
   const [submitError, setSubmitError] = createSignal<string | null>(null);
   const [resultVersion, setResultVersion] = createSignal(0);
+  const [autoCloseCountdown, setAutoCloseCountdown] = createSignal<number | null>(null);
   let contentRef: HTMLDivElement | undefined;
   let composerRef: HTMLDivElement | undefined;
   let composerTextareaRef: HTMLTextAreaElement | undefined;
@@ -134,15 +134,7 @@ export default function AgentReviewPage() {
 
   const renderedContent = createMemo(() => {
     const value = session();
-    if (!value) return "";
-
-    if (value.payload.kind === "diff") {
-      return `<pre><code>${value.payload.rawPatch
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")}</code></pre>`;
-    }
-
+    if (!value || value.payload.kind === "diff") return "";
     return parseMarkdown(value.payload.content ?? "");
   });
 
@@ -191,19 +183,6 @@ export default function AgentReviewPage() {
     element?.scrollIntoView({ behavior: "instant", block: "start" });
   };
 
-  createEffect(() => {
-    const existingResult = result();
-    if (!existingResult) return;
-
-    const timeout = window.setTimeout(() => {
-      window.close();
-    }, 1000);
-
-    onCleanup(() => {
-      window.clearTimeout(timeout);
-    });
-  });
-
   const canSubmit = createMemo(() => !submitting() && !result());
 
   const dismissComposer = (clearSelection = true) => {
@@ -245,24 +224,20 @@ export default function AgentReviewPage() {
     const rect = range.getBoundingClientRect();
     const nextTop = Math.max(24, rect.bottom + 14);
     const nextLeft = Math.min(
-      Math.max(24, rect.left + rect.width / 2 - 80),
-      window.innerWidth - 180,
+      Math.max(24, rect.left + rect.width / 2 - 190),
+      window.innerWidth - 400,
     );
 
     setDraftQuote(selected);
-    setComposerOpen(false);
+    setComposerOpen(true);
     setComposerPosition({
       top: nextTop,
       left: nextLeft,
     });
-  };
 
-  const captureSelection = () => {
-    updateComposerFromSelection();
-  };
-
-  const clearDraftSelection = () => {
-    dismissComposer(true);
+    queueMicrotask(() => {
+      composerTextareaRef?.focus();
+    });
   };
 
   const addAnnotation = () => {
@@ -282,19 +257,12 @@ export default function AgentReviewPage() {
     dismissComposer(true);
   };
 
-  const openComposer = () => {
-    const position = composerPosition();
-    if (!position) return;
+  const captureSelection = () => {
+    updateComposerFromSelection();
+  };
 
-    setComposerOpen(true);
-    setComposerPosition({
-      top: position.top,
-      left: Math.min(Math.max(24, position.left - 100), window.innerWidth - 384),
-    });
-
-    queueMicrotask(() => {
-      composerTextareaRef?.focus();
-    });
+  const clearDraftSelection = () => {
+    dismissComposer(true);
   };
 
   const removeAnnotation = (annotationId: string) => {
@@ -355,12 +323,26 @@ export default function AgentReviewPage() {
 
       await Promise.all([refetchSession(), refetchResult()]);
       setResultVersion((value) => value + 1);
+      setAutoCloseCountdown(3);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Failed to submit review");
     } finally {
       setSubmitting(false);
     }
   };
+
+  createEffect(() => {
+    const countdown = autoCloseCountdown();
+    if (countdown === null) return;
+
+    if (countdown <= 0) {
+      window.close();
+      return;
+    }
+
+    const timer = setTimeout(() => setAutoCloseCountdown(countdown - 1), 1000);
+    onCleanup(() => clearTimeout(timer));
+  });
 
   const handlePointerDown = (event: PointerEvent) => {
     const target = event.target;
@@ -401,7 +383,7 @@ export default function AgentReviewPage() {
         }
       >
         {(loadedSession) => (
-          <div class="flex flex-col" classList={{ "h-screen": isDiffSession() }}>
+          <div class="flex flex-col h-screen">
             <header class="border-b border-border bg-bg-surface flex-shrink-0">
               <div class="flex items-center justify-between gap-4 px-4 py-3">
                 <div class="flex items-center gap-3 min-w-0">
@@ -491,6 +473,7 @@ export default function AgentReviewPage() {
                           canSubmit={canSubmit()}
                           result={result}
                           onSubmit={submit}
+                          autoCloseCountdown={autoCloseCountdown()}
                         />
                       </div>
                     </div>
@@ -500,84 +483,48 @@ export default function AgentReviewPage() {
             </Show>
 
             <Show when={!isDiffSession()}>
-              <div class="mx-auto w-full max-w-4xl px-6 py-6 space-y-4">
-                <Card padding="sm">
+              <div class="flex flex-1 min-h-0">
+                <div class="flex-1 min-w-0 overflow-auto">
                   <div
                     ref={(element) => {
                       contentRef = element;
                     }}
-                    class="max-h-[calc(100vh-24rem)] overflow-auto px-3 py-3"
+                    class="mx-auto max-w-4xl px-6 py-6"
                     onMouseUp={captureSelection}
                     onKeyUp={captureSelection}
                   >
                     <div
-                      class="markdown-content px-1 text-sm leading-7 text-text [&_blockquote]:border-l-2 [&_blockquote]:border-accent [&_blockquote]:bg-accent/5 [&_blockquote]:py-2 [&_blockquote]:pr-4 [&_h1]:text-lg [&_h1]:font-medium [&_h2]:text-base [&_h3]:text-sm [&_pre]:border [&_pre]:border-border [&_pre]:bg-bg-surface [&_pre]:p-3"
+                      class="markdown-content px-1 text-sm leading-7 text-text [&_blockquote]:bg-accent/5 [&_blockquote]:py-2 [&_blockquote]:pr-4 [&_h1]:text-lg [&_h1]:font-medium [&_h2]:text-base [&_h3]:text-sm [&_pre]:border [&_pre]:border-border [&_pre]:bg-bg-surface [&_pre]:p-3"
                       innerHTML={renderedContent()}
                     />
                   </div>
-                </Card>
+                </div>
 
-                <AnnotationsPanel
-                  annotations={annotations()}
-                  result={result}
-                  isDiffSession={false}
-                  onRemove={removeAnnotation}
-                />
-
-                <Card>
-                  <SubmitBar
-                    feedback={feedback()}
-                    setFeedback={setFeedback}
-                    submitting={submitting()}
-                    submitError={submitError()}
-                    canSubmit={canSubmit()}
-                    result={result}
-                    onSubmit={submit}
-                  />
-                </Card>
+                <div class="w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface">
+                  <div class="flex-1 overflow-y-auto">
+                    <AnnotationsPanel
+                      annotations={annotations()}
+                      result={result}
+                      isDiffSession={false}
+                      onRemove={removeAnnotation}
+                    />
+                  </div>
+                  <div class="border-t border-border flex-shrink-0">
+                    <SubmitBar
+                      feedback={feedback()}
+                      setFeedback={setFeedback}
+                      submitting={submitting()}
+                      submitError={submitError()}
+                      canSubmit={canSubmit()}
+                      result={result}
+                      onSubmit={submit}
+                      autoCloseCountdown={autoCloseCountdown()}
+                    />
+                  </div>
+                </div>
               </div>
             </Show>
           </div>
-        )}
-      </Show>
-
-      <Show when={!isDiffSession() && draftQuote() && !composerOpen()}>
-        {(quote) => (
-          <Show when={composerPosition()}>
-            {(position) => (
-              <div
-                ref={(element) => {
-                  composerRef = element;
-                  return undefined;
-                }}
-                class="fixed z-50 flex items-center gap-2 border border-accent/30 bg-bg px-3 py-2 shadow-lg"
-                style={{
-                  top: `${position().top}px`,
-                  left: `${position().left}px`,
-                }}
-              >
-                <div class="text-xs text-accent">Quote captured</div>
-                <button
-                  type="button"
-                  onClick={openComposer}
-                  title="Add annotation"
-                  class="inline-flex h-7 w-7 items-center justify-center border border-primary/50 bg-primary text-text transition-colors hover:bg-primary-hover"
-                >
-                  <PlusIcon size={12} />
-                </button>
-                <div class="max-w-44 truncate text-xs text-text-muted">{quote()}</div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  class="px-1"
-                  onClick={clearDraftSelection}
-                >
-                  ×
-                </Button>
-              </div>
-            )}
-          </Show>
         )}
       </Show>
 
@@ -603,7 +550,7 @@ export default function AgentReviewPage() {
                   </div>
                 </div>
                 <div class="space-y-3 px-4 py-4">
-                  <blockquote class="m-0 border-l-2 border-accent bg-accent/5 px-3 py-2 text-sm text-text">
+                  <blockquote class="m-0 bg-accent/5 px-3 py-2 text-sm text-text">
                     {quote()}
                   </blockquote>
                   <Textarea
@@ -683,7 +630,7 @@ function AnnotationsPanel(props: {
                 <div class="flex items-start justify-between gap-2">
                   <div class="min-w-0 flex-1">
                     <div class="text-xs text-text-faint">{annotationLabel(annotation)}</div>
-                    <blockquote class="m-0 mt-1.5 border-l-2 border-accent/60 pl-2 text-xs text-text">
+                    <blockquote class="m-0 mt-1.5 bg-accent/5 px-2 py-1 text-xs text-text">
                       {annotation.quote}
                     </blockquote>
                     <p class="m-0 mt-1.5 whitespace-pre-wrap text-xs text-text-muted">
@@ -718,6 +665,7 @@ function SubmitBar(props: {
   canSubmit: boolean;
   result: Resource<ReviewSessionResult | null>;
   onSubmit: (approved: boolean) => void;
+  autoCloseCountdown: number | null;
 }) {
   return (
     <Switch>
@@ -738,6 +686,9 @@ function SubmitBar(props: {
             <p class="text-sm text-text-muted">
               Review submitted. The CLI should continue now. You can close this tab.
             </p>
+            <Show when={props.autoCloseCountdown !== null}>
+              <p class="text-xs text-text-faint">Closing in {props.autoCloseCountdown}s...</p>
+            </Show>
           </div>
         )}
       </Match>
