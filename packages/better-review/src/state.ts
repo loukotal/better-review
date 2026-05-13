@@ -595,7 +595,7 @@ const makePrListCacheService = Effect.gen(function* () {
 
       // Only refresh stale cache entries so frequent list reads stay cheap.
       yield* refresh.pipe(
-        Effect.catch((e) => Effect.log(`[pr-list-cache] Background refresh failed: ${e}`)),
+        Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background refresh failed: ${e}`)),
         Effect.forkDaemon,
       );
 
@@ -631,14 +631,14 @@ const makePrListCacheService = Effect.gen(function* () {
 
       // Initial fetch on startup
       yield* refresh.pipe(
-        Effect.catch((e) => Effect.log(`[pr-list-cache] Initial fetch failed: ${e}`)),
+        Effect.catchAll((e) => Effect.log(`[pr-list-cache] Initial fetch failed: ${e}`)),
       );
 
       // Loop: sleep then refresh
       while (true) {
         yield* Effect.sleep(PR_LIST_REFRESH_INTERVAL_MS);
         yield* refresh.pipe(
-          Effect.catch((e) => Effect.log(`[pr-list-cache] Periodic refresh failed: ${e}`)),
+          Effect.catchAll((e) => Effect.log(`[pr-list-cache] Periodic refresh failed: ${e}`)),
         );
       }
     }),

@@ -630,10 +630,10 @@ ${fileStats.join("\n")}`;
                 [
                   gh
                     .getFileContent({ owner, repo, path: oldPath, ref: oldRef })
-                    .pipe(Effect.catch(() => Effect.succeed(null))),
+                    .pipe(Effect.catchAll(() => Effect.succeed(null))),
                   gh
                     .getFileContent({ owner, repo, path: filePath, ref: newRef })
-                    .pipe(Effect.catch(() => Effect.succeed(null))),
+                    .pipe(Effect.catchAll(() => Effect.succeed(null))),
                 ],
                 { concurrency: 2 },
               ),
@@ -725,7 +725,7 @@ const main = Effect.gen(function* () {
 
   // Start the PR list background refresh loop (fetches every 15 min)
   yield* prListCache.backgroundLoop.pipe(
-    Effect.catch((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
+    Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
     Effect.forkScoped,
   );
 

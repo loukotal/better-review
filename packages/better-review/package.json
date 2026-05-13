@@ -11,7 +11,7 @@
   "dependencies": {
     "@better-review/shared": "workspace:*",
     "@effect/platform-bun": "^0.89.0",
-    "@opencode-ai/sdk": "^1.14.19",
+    "@opencode-ai/sdk": "^1.14.39",
     "@pierre/diffs": "^1.1.16",
     "@trpc/server": "^11.16.0",
     "effect": "^3.21.1",

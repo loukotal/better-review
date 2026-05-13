@@ -24,7 +24,7 @@ export const opencodeRouter = router({
         const opencode = yield* OpencodeService;
         yield* Effect.tryPromise(() => opencode.client.global.health());
         return { healthy: true };
-      }).pipe(Effect.catch((e) => Effect.succeed({ healthy: false, error: String(e) }))),
+      }).pipe(Effect.catchAll((e) => Effect.succeed({ healthy: false, error: String(e) }))),
     ),
   ),
 

@@ -136,7 +136,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
         const fs = yield* Effect.tryPromise(() => import("node:fs/promises"));
 
         const files = yield* Effect.tryPromise(() => fs.readdir(nsDir)).pipe(
-          Effect.catch((e) => {
+          Effect.catchAll((e) => {
             // Only treat ENOENT (directory doesn't exist) as empty list
             const cause = e instanceof Error ? e : (e as { error?: Error }).error;
             if (cause && (cause as NodeJS.ErrnoException).code === "ENOENT") {

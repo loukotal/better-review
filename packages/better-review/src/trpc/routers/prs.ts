@@ -74,7 +74,7 @@ export const prsRouter = router({
           input.urls.map((url) =>
             gh.getPrCiStatus(url).pipe(
               Effect.map((status) => ({ url, status })),
-              Effect.catch(() => Effect.succeed({ url, status: null })),
+              Effect.catchAll(() => Effect.succeed({ url, status: null })),
             ),
           ),
           { concurrency: 10 },

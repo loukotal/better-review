@@ -18,7 +18,7 @@
       "dependencies": {
         "@better-review/shared": "workspace:*",
         "@effect/platform-bun": "^0.89.0",
-        "@opencode-ai/sdk": "^1.14.19",
+        "@opencode-ai/sdk": "^1.14.39",
         "@pierre/diffs": "^1.1.16",
         "@trpc/server": "^11.16.0",
         "effect": "^3.21.1",
@@ -174,7 +174,7 @@
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.1.4", "", { "dependencies": { "@tybys/wasm-util": "^0.10.1" }, "peerDependencies": { "@emnapi/core": "^1.7.1", "@emnapi/runtime": "^1.7.1" } }, "sha512-3NQNNgA1YSlJb/kMH1ildASP9HW7/7kYnRI2szWJaofaS1hWmbGI4H+d3+22aGzXXN9IJ+n+GiFVcGipJP18ow=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.14.19", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-9sTGsi8/HlBBeaWfsUjdJ2yi/SqpRvqSld0IFXc3ldaPb1w1uIPvgCGzhlHYQtqatXxSaX5lTN7zpudMaE21aw=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.14.39", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-hguOA5huhys7zwCR3ESbSHyQNuJBNtfrxUxYZF/s/6trRW+imqGmDtC/RsOSNuk7GE06ZnvOTwb4T2WhXYIBxw=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.126.0", "", {}, "sha512-oGfVtjAgwQVVpfBrbtk4e1XDyWHRFta6BS3GWVzrF8xYBT2VGQAk39yJS/wFSMrZqoiCU4oghT3Ch0HaHGIHcQ=="],
 

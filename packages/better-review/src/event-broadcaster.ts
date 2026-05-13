@@ -1,4 +1,7 @@
-import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2";
+import type {
+  Event as OpenCodeEvent,
+  GlobalEvent as OpenCodeGlobalEvent,
+} from "@opencode-ai/sdk/v2";
 import { Effect, Fiber, Layer, PubSub, Ref, Schedule, Stream } from "effect";
 
 import { OpencodeService, OpencodeServiceLive } from "./opencode";
@@ -31,10 +34,10 @@ const makeEventBroadcaster = Effect.gen(function* () {
   const subscriberCountRef = yield* Ref.make(0);
 
   // Connection fiber reference (null when not connected)
-  const connectionFiberRef = yield* Ref.make<Fiber.Fiber<void, Error> | null>(null);
+  const connectionFiberRef = yield* Ref.make<Fiber.RuntimeFiber<void, never> | null>(null);
 
   // Idle timeout fiber (for delayed connection shutdown)
-  const idleTimeoutFiberRef = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
+  const idleTimeoutFiberRef = yield* Ref.make<Fiber.RuntimeFiber<void, never> | null>(null);
 
   // Idle timeout duration (keep connection alive for 5 seconds after last subscriber)
   const IDLE_TIMEOUT_MS = 5000;
@@ -71,16 +74,16 @@ const makeEventBroadcaster = Effect.gen(function* () {
         yield* Effect.log("[EventBroadcaster] Connecting to OpenCode SSE...");
 
         const { stream } = yield* Effect.tryPromise({
-          try: () => opencode.client.event.subscribe({}),
+          try: () => opencode.client.global.event(),
           catch: (e) => new Error(`SSE connect failed: ${e}`),
         });
 
         yield* Effect.log("[EventBroadcaster] SSE connection established");
 
         // Convert async iterable to Effect Stream
-        return Stream.fromAsyncIterable(stream as AsyncIterable<OpenCodeEvent>, (e) =>
+        return Stream.fromAsyncIterable(stream as AsyncIterable<OpenCodeGlobalEvent>, (e) =>
           e instanceof Error ? e : new Error(`SSE error: ${e}`),
-        );
+        ).pipe(Stream.map((event) => event.payload as OpenCodeEvent));
       }),
     );
 
@@ -119,14 +122,13 @@ const makeEventBroadcaster = Effect.gen(function* () {
     ),
   );
 
-  // Reconnection schedule: exponential backoff capped at 30s
-  // intersect takes the max delay (caps exponential), union takes the min (floor)
+  // Reconnection schedule: exponential backoff capped at 30s.
   let retryAttempt = 0;
   const resetRetryAttempt = () => {
     retryAttempt = 0;
   };
   const reconnectSchedule = Schedule.exponential("1 second").pipe(
-    Schedule.intersect(Schedule.spaced("30 seconds")),
+    Schedule.union(Schedule.spaced("30 seconds")),
     Schedule.tapInput(() =>
       Effect.gen(function* () {
         retryAttempt++;
@@ -138,7 +140,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
   // Connection with auto-retry
   const connectionWithRetry = runConnection.pipe(
     Effect.retry(reconnectSchedule),
-    Effect.catch((error) =>
+    Effect.catchAll((error) =>
       Effect.gen(function* () {
         yield* setState({ _tag: "Error", error: error.message });
         yield* Effect.log(`[EventBroadcaster] Giving up after retries: ${error.message}`);
@@ -313,7 +315,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
 });
 
 export class EventBroadcaster extends Effect.Service<EventBroadcaster>()("EventBroadcaster", {
-  effect: makeEventBroadcaster,
+  scoped: makeEventBroadcaster,
 }) {}
 
 export const EventBroadcasterLive = EventBroadcaster.Default.pipe(

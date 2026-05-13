@@ -62,7 +62,7 @@ async function fetchProviderCatalog(opencodeClient: OpencodeClient): Promise<Pro
           modelId,
           {
             name: model.name,
-            reasoning: model.capabilities.reasoning,
+            reasoning: model.reasoning ?? false,
             variants: Object.keys(model.variants ?? {}),
             releaseDate: model.release_date,
           },

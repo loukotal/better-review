@@ -71,7 +71,7 @@ export const prRouter = router({
           commits.map((commit) =>
             gh.getCommitDiff({ owner, repo, sha: commit.sha }).pipe(
               Effect.map((diff) => ({ sha: commit.sha, diff })),
-              Effect.catch(() => Effect.succeed({ sha: commit.sha, diff: null })),
+              Effect.catchAll(() => Effect.succeed({ sha: commit.sha, diff: null })),
             ),
           ),
           { concurrency: 5 },
@@ -264,10 +264,10 @@ export const prRouter = router({
             [
               gh
                 .getFileContent({ owner, repo, path: oldPath, ref: baseSha })
-                .pipe(Effect.catch(() => Effect.succeed(null))),
+                .pipe(Effect.catchAll(() => Effect.succeed(null))),
               gh
                 .getFileContent({ owner, repo, path: input.path, ref: headSha })
-                .pipe(Effect.catch(() => Effect.succeed(null))),
+                .pipe(Effect.catchAll(() => Effect.succeed(null))),
             ],
             { concurrency: 2 },
           );
