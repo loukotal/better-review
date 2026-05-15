@@ -10,7 +10,7 @@ mkdir -p "${BIN_DIR}"
 cat > "${TARGET}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec bun "${ROOT_DIR}/index.ts" "\$@"
+exec pnpm --dir "${ROOT_DIR}" exec tsx "${ROOT_DIR}/index.ts" "\$@"
 EOF
 
 chmod +x "${TARGET}"

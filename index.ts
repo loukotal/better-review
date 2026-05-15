@@ -1,6 +1,9 @@
-#!/usr/bin/env bun
+#!/usr/bin/env tsx
 
 export {};
+
+import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 
 import {
   exportReviewFeedback,
@@ -72,13 +75,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function readableToText(stream: NodeJS.ReadableStream | null): Promise<string> {
+  if (!stream) return "";
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function readStdin(): Promise<string> {
-  return await new Response(Bun.stdin.stream()).text();
+  return await readableToText(process.stdin);
 }
 
 async function readInput(file?: string): Promise<string> {
   if (file) {
-    return await Bun.file(file).text();
+    return await readFile(file, "utf8");
   }
 
   if (process.stdin.isTTY) {
@@ -92,16 +105,20 @@ async function runGit(
   cwd: string,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn(["git", ...args], {
+  const child = spawn("git", args, {
     cwd,
-    stdout: "pipe",
-    stderr: "pipe",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const exitCodePromise = new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code ?? 1));
   });
 
   const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
+    readableToText(child.stdout),
+    readableToText(child.stderr),
+    exitCodePromise,
   ]);
 
   return { stdout, stderr, exitCode };
@@ -149,7 +166,10 @@ async function getEmptyTreeSha(cwd: string): Promise<string> {
   return stdout.trim();
 }
 
-async function resolvePreferredBaseRef(cwd: string, refs: string[]): Promise<string | undefined> {
+async function resolvePreferredBaseRef(
+  cwd: string,
+  refs: readonly string[],
+): Promise<string | undefined> {
   for (const ref of refs) {
     if (await gitRefExists(cwd, ref)) return ref;
   }
@@ -229,12 +249,7 @@ async function buildDiffVariants(cwd: string): Promise<ReviewSessionDiffVariant[
 }
 
 async function tryGitRepoRoot(cwd: string): Promise<string | undefined> {
-  const proc = Bun.spawn(["git", "rev-parse", "--show-toplevel"], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  const { stdout, exitCode } = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
   if (exitCode !== 0) return undefined;
   const value = stdout.trim();
   return value.length > 0 ? value : undefined;
@@ -282,7 +297,7 @@ async function ensureApiAvailable(apiUrl: string): Promise<void> {
   }
 
   throw new Error(
-    `Could not reach better-review API at ${apiUrl}. Start the app with 'bun run dev' or 'bun start', or pass --api-url.`,
+    `Could not reach better-review API at ${apiUrl}. Start the app with 'pnpm dev' or 'pnpm start', or pass --api-url.`,
   );
 }
 
@@ -305,7 +320,7 @@ async function createSession(
 
 async function getResult(apiUrl: string, sessionId: string): Promise<ReviewSessionResult | null> {
   const response = await fetch(`${apiUrl}/api/sessions/${encodeURIComponent(sessionId)}/result`);
-  if (response.status === 404) return null;
+  if (response.status === 204 || response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Failed to fetch result: ${await response.text()}`);
   }
@@ -325,12 +340,19 @@ async function openUrl(url: string): Promise<void> {
         ? ["cmd", "/c", "start", "", url]
         : ["xdg-open", url];
 
-  const proc = Bun.spawn(command, {
-    stdout: "ignore",
-    stderr: "ignore",
+  const [executable, ...args] = command;
+  if (!executable) {
+    throw new Error(`Failed to open browser for ${url}`);
+  }
+
+  const child = spawn(executable, args, {
+    stdio: "ignore",
   });
 
-  const exitCode = await proc.exited;
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code ?? 1));
+  });
   if (exitCode !== 0) {
     throw new Error(`Failed to open browser for ${url}`);
   }
@@ -357,12 +379,14 @@ function parseArgs(argv: string[]): {
     return { command: null, positionals: [], options };
   }
 
-  const [command, ...rest] = argv;
+  const command = argv[0] ?? null;
+  const rest = argv.slice(1);
   const positionals: string[] = [];
 
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
     const next = rest[i + 1];
+    if (!arg) continue;
 
     switch (arg) {
       case "--file":

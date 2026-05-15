@@ -1,2 +1,0 @@
-[serve.static]
-plugins = ["./solid-plugin.ts"]

@@ -58,15 +58,18 @@ async function fetchProviderCatalog(opencodeClient: OpencodeClient): Promise<Pro
     const providers = (res.data?.all ?? []).map((provider) => ({
       id: provider.id,
       models: Object.fromEntries(
-        Object.entries(provider.models ?? {}).map(([modelId, model]) => [
-          modelId,
-          {
-            name: model.name,
-            reasoning: model.reasoning ?? false,
-            variants: Object.keys(model.variants ?? {}),
-            releaseDate: model.release_date,
-          },
-        ]),
+        Object.entries(provider.models ?? {}).map(([modelId, model]) => {
+          const modelWithReasoning = model as typeof model & { reasoning?: boolean };
+          return [
+            modelId,
+            {
+              name: model.name,
+              reasoning: modelWithReasoning.reasoning ?? false,
+              variants: Object.keys(model.variants ?? {}),
+              releaseDate: model.release_date,
+            },
+          ];
+        }),
       ),
     }));
     return { providers, connected };

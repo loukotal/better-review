@@ -124,7 +124,7 @@ export default function AgentReviewPage() {
     () => resultVersion(),
     async () => {
       const response = await fetch(`/api/sessions/${encodeURIComponent(params.sessionId)}/result`);
-      if (response.status === 404) return null;
+      if (response.status === 204 || response.status === 404) return null;
       if (!response.ok) {
         throw new Error(await response.text());
       }

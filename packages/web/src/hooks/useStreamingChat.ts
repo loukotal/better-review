@@ -188,10 +188,10 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       onStarted: () => {
         console.log("[useStreamingChat] Subscription started");
       },
-      onData: (event) => {
+      onData: (event: unknown) => {
         handleEvent(event as StreamEvent);
       },
-      onError: (err) => {
+      onError: (err: unknown) => {
         console.error("[useStreamingChat] Subscription error:", err);
         setIsConnected(false);
         setConnectionStatus("reconnecting");

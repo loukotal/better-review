@@ -39,6 +39,5 @@ yarn-error.log*
 **/*.tgz
 **/*.log
 package-lock.json
-**/*.bun
 
 .opencode/.current-pr.json
