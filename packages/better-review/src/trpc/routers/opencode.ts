@@ -14,6 +14,13 @@ import { getCurrentModel } from "./models";
 // OpenCode Router
 // =============================================================================
 
+let sseSubscriptionSequence = 0;
+
+const activeSseByClientId = new Map<
+  string,
+  { subscriptionId: number; cancel: (reason: string) => void }
+>();
+
 export const opencodeRouter = router({
   /**
    * Health check for OpenCode service
@@ -284,86 +291,146 @@ export const opencodeRouter = router({
     ),
   ),
 
-  events: publicProcedure.subscription(async function* () {
-    console.log(`[SSE] Subscription requested`);
+  events: publicProcedure
+    .input(z.object({ clientId: z.string().optional() }).optional())
+    .subscription(async function* ({ input }) {
+      const subscriptionId = ++sseSubscriptionSequence;
+      const debugSse = process.env.BETTER_REVIEW_DEBUG_SSE === "1";
+      const clientLabel = input?.clientId ? ` client=${input.clientId.slice(0, 8)}` : "";
+      const log = (message: string) =>
+        console.log(`[SSE:${subscriptionId}${clientLabel}] ${message}`);
 
-    // Get the runtime and subscribe to events
-    const effectRuntime = await opencodeRuntime.runtime().catch((error) => {
-      throw new Error(
-        `[SSE] Failed to acquire Effect runtime: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
+      log("Subscription requested");
 
-    const { stream, getState, getSubscriberCount } = await opencodeRuntime
-      .runPromise(
-        Effect.gen(function* () {
-          const broadcaster = yield* EventBroadcaster;
-          return {
-            stream: yield* broadcaster.subscribe(),
-            getState: broadcaster.getState,
-            getSubscriberCount: broadcaster.getSubscriberCount,
-          };
-        }),
-      )
-      .catch((error) => {
+      let cancelSubscription: ((reason: string) => void) | null = null;
+      const cancelled = new Promise<{ __cancelled: true; reason: string }>((resolve) => {
+        cancelSubscription = (reason: string) => resolve({ __cancelled: true, reason });
+      });
+
+      if (input?.clientId && cancelSubscription) {
+        const existing = activeSseByClientId.get(input.clientId);
+        if (existing) {
+          log(`Replacing existing subscription SSE:${existing.subscriptionId}`);
+          existing.cancel("replaced-by-new-subscription");
+        }
+        activeSseByClientId.set(input.clientId, { subscriptionId, cancel: cancelSubscription });
+      }
+
+      // Get the runtime and subscribe to events
+      const effectRuntime = await opencodeRuntime.runtime().catch((error) => {
         throw new Error(
-          `[SSE] Failed to initialize broadcaster subscription: ${error instanceof Error ? error.message : String(error)}`,
+          `[SSE] Failed to acquire Effect runtime: ${error instanceof Error ? error.message : String(error)}`,
         );
       });
 
-    console.log(`[SSE] Subscription established`);
+      const { stream, getState, getSubscriberCount } = await opencodeRuntime
+        .runPromise(
+          Effect.gen(function* () {
+            const broadcaster = yield* EventBroadcaster;
+            return {
+              stream: yield* broadcaster.subscribe(),
+              getState: broadcaster.getState,
+              getSubscriberCount: broadcaster.getSubscriberCount,
+            };
+          }),
+        )
+        .catch((error) => {
+          throw new Error(
+            `[SSE] Failed to initialize broadcaster subscription: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
 
-    yield { type: "connected", serverTime: Date.now() };
+      const pingIntervalMs = 2000;
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const waitForUpstreamConnected = async (timeoutMs = 5000): Promise<void> => {
+        const startedAt = Date.now();
 
-    const pingIntervalMs = 15000;
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-    let nextPingAt = Date.now() + pingIntervalMs;
-    let pingSequence = 0;
+        while (Date.now() - startedAt < timeoutMs) {
+          const state = await opencodeRuntime.runPromise(getState());
+          if (state._tag === "Connected") {
+            return;
+          }
+          if (state._tag === "Error") {
+            throw new Error(`[SSE] OpenCode event stream failed: ${state.error}`);
+          }
+          await sleep(25);
+        }
 
-    // Convert Effect Stream to async iterable using our runtime
-    // This properly handles cleanup when the iterator is returned
-    const asyncIterable = Stream.toAsyncIterableRuntime(stream, effectRuntime);
-    const iterator = asyncIterable[Symbol.asyncIterator]();
+        throw new Error("[SSE] Timed out waiting for OpenCode event stream");
+      };
 
-    try {
-      let nextPromise = iterator.next();
+      await waitForUpstreamConnected();
 
-      while (true) {
-        const timeoutMs = Math.max(0, nextPingAt - Date.now());
-        const result = await Promise.race([
-          nextPromise,
-          sleep(timeoutMs).then(() => ({ __ping: true as const })),
-        ]);
+      log("Subscription established");
 
-        if ("__ping" in result) {
-          const [state, subscribers] = await Promise.all([
-            opencodeRuntime.runPromise(getState()),
-            opencodeRuntime.runPromise(getSubscriberCount()),
+      yield { type: "connected", serverTime: Date.now() };
+
+      let nextPingAt = Date.now() + pingIntervalMs;
+      let pingSequence = 0;
+
+      // Convert Effect Stream to async iterable using our runtime
+      // This properly handles cleanup when the iterator is returned
+      const asyncIterable = Stream.toAsyncIterableRuntime(stream, effectRuntime);
+      const iterator = asyncIterable[Symbol.asyncIterator]();
+
+      try {
+        let nextPromise = iterator.next();
+
+        while (true) {
+          const timeoutMs = Math.max(0, nextPingAt - Date.now());
+          const result = await Promise.race([
+            nextPromise,
+            sleep(timeoutMs).then(() => ({ __ping: true as const })),
+            cancelled,
           ]);
-          pingSequence += 1;
-          yield {
-            type: "ping",
-            serverTime: Date.now(),
-            sequence: pingSequence,
-            upstream: state._tag,
-            subscribers,
-          };
+
+          if ("__cancelled" in result) {
+            log(`Subscription cancelled: ${result.reason}`);
+            break;
+          }
+
+          if ("__ping" in result) {
+            const [state, subscribers] = await Promise.all([
+              opencodeRuntime.runPromise(getState()),
+              opencodeRuntime.runPromise(getSubscriberCount()),
+            ]);
+            pingSequence += 1;
+            if (debugSse) {
+              log(`ping #${pingSequence} upstream=${state._tag} subscribers=${subscribers}`);
+            }
+            yield {
+              type: "ping",
+              serverTime: Date.now(),
+              sequence: pingSequence,
+              upstream: state._tag,
+              subscribers,
+            };
+            nextPingAt = Date.now() + pingIntervalMs;
+            continue;
+          }
+
+          if (result.done) {
+            log("Subscription stream completed");
+            break;
+          }
+
+          if (debugSse) {
+            log(`event ${result.value.type}`);
+          }
+          yield result.value;
           nextPingAt = Date.now() + pingIntervalMs;
-          continue;
+          nextPromise = iterator.next();
         }
+      } finally {
+        log("Cleaning up subscription");
 
-        if (result.done) {
-          break;
+        await iterator.return?.().catch(() => {});
+        if (
+          input?.clientId &&
+          activeSseByClientId.get(input.clientId)?.subscriptionId === subscriptionId
+        ) {
+          activeSseByClientId.delete(input.clientId);
         }
-
-        yield result.value;
-        nextPingAt = Date.now() + pingIntervalMs;
-        nextPromise = iterator.next();
       }
-    } finally {
-      console.log(`[SSE] Cleaning up subscription`);
-
-      await iterator.return?.().catch(() => {});
-    }
-  }),
+    }),
 });

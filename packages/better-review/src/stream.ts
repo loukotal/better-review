@@ -188,7 +188,60 @@ function extractSessionId(event: OpenCodeEvent): string | undefined {
  * Events now include sessionId so frontend can filter by session.
  */
 export function transformEvent(event: OpenCodeEvent): StreamEvent | null {
-  if ((event as { type: string }).type === "message.part.delta") {
+  const eventType = (event as { type: string }).type;
+
+  // OpenCode emits bookkeeping events that don't carry session payloads.
+  // Ignore them before trying to read event.properties.sessionID.
+  if (
+    eventType === "sync" ||
+    eventType === "server.heartbeat" ||
+    eventType === "project.updated" ||
+    eventType === "session.updated" ||
+    eventType === "session.diff"
+  ) {
+    return null;
+  }
+
+  if (eventType === "session.next.text.delta") {
+    const textEvent = event as unknown as {
+      properties: {
+        sessionID: string;
+        delta: string;
+      };
+    };
+    const { sessionID, delta } = textEvent.properties;
+    if (!sessionID || !delta) return null;
+
+    return {
+      type: "text",
+      sessionId: sessionID,
+      delta,
+      messageId: `next-${sessionID}`,
+      partId: `text-${sessionID}`,
+    };
+  }
+
+  if (eventType === "session.next.reasoning.delta") {
+    const reasoningEvent = event as unknown as {
+      properties: {
+        sessionID: string;
+        reasoningID: string;
+        delta: string;
+      };
+    };
+    const { sessionID, reasoningID, delta } = reasoningEvent.properties;
+    if (!sessionID || !reasoningID || !delta) return null;
+
+    return {
+      type: "reasoning",
+      sessionId: sessionID,
+      delta,
+      messageId: `next-${sessionID}`,
+      partId: reasoningID,
+    };
+  }
+
+  if (eventType === "message.part.delta") {
     const deltaEvent = event as unknown as {
       properties: {
         sessionID: string;

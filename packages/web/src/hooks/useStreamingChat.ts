@@ -1,5 +1,6 @@
 import { createSignal, onCleanup, createEffect, batch } from "solid-js";
 
+import { getApiClientId } from "../lib/apiAuth";
 import { trpc } from "../lib/trpc";
 
 // =============================================================================
@@ -123,6 +124,28 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   let heartbeatWatcher: ReturnType<typeof setInterval> | null = null;
   let awaitingAssistantResponse = false;
 
+  const acceptAssistantEvent = () => {
+    allowAssistantParts = true;
+    if (!isStreaming()) {
+      setIsStreaming(true);
+    }
+    if (awaitingFirstToken()) {
+      setAwaitingFirstToken(false);
+    }
+  };
+
+  const shouldAcceptAssistantEvent = () => {
+    return allowAssistantParts || awaitingAssistantResponse || isStreaming();
+  };
+
+  const prepareAssistantMessage = (messageId: string) => {
+    const activeMessageId = currentMessageId();
+    if (activeMessageId && activeMessageId !== messageId) {
+      finalizeMessage({ keepStreaming: true });
+    }
+    setCurrentMessageId(messageId);
+  };
+
   const clearReconnect = () => {
     if (reconnectTimeout) {
       clearTimeout(reconnectTimeout);
@@ -184,32 +207,35 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     isConnecting = true;
     setConnectionStatus(reconnectAttempt > 0 ? "reconnecting" : "connecting");
 
-    const subscription = trpc.opencode.events.subscribe(undefined, {
-      onStarted: () => {
-        console.log("[useStreamingChat] Subscription started");
+    const subscription = trpc.opencode.events.subscribe(
+      { clientId: getApiClientId() },
+      {
+        onStarted: () => {
+          console.log("[useStreamingChat] Subscription started");
+        },
+        onData: (event: unknown) => {
+          handleEvent(event as StreamEvent);
+        },
+        onError: (err: unknown) => {
+          console.error("[useStreamingChat] Subscription error:", err);
+          setIsConnected(false);
+          setConnectionStatus("reconnecting");
+          setError("Connection lost");
+          options.onError?.("Connection lost");
+          cleanupSubscription();
+          scheduleReconnect("error");
+        },
+        onComplete: () => {
+          console.log("[useStreamingChat] Subscription completed");
+          setIsConnected(false);
+          setConnectionStatus("reconnecting");
+          setError("Connection closed");
+          options.onError?.("Connection closed");
+          cleanupSubscription();
+          scheduleReconnect("complete");
+        },
       },
-      onData: (event: unknown) => {
-        handleEvent(event as StreamEvent);
-      },
-      onError: (err: unknown) => {
-        console.error("[useStreamingChat] Subscription error:", err);
-        setIsConnected(false);
-        setConnectionStatus("reconnecting");
-        setError("Connection lost");
-        options.onError?.("Connection lost");
-        cleanupSubscription();
-        scheduleReconnect("error");
-      },
-      onComplete: () => {
-        console.log("[useStreamingChat] Subscription completed");
-        setIsConnected(false);
-        setConnectionStatus("reconnecting");
-        setError("Connection closed");
-        options.onError?.("Connection closed");
-        cleanupSubscription();
-        scheduleReconnect("complete");
-      },
-    });
+    );
 
     unsubscribe = subscription.unsubscribe;
     isConnecting = false;
@@ -251,7 +277,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   function handleEvent(event: StreamEvent) {
     // Handle global events (no sessionId filtering needed)
     if (event.type === "connected" || event.type === "ping") {
-      console.log("[useStreamingChat] Connected to event stream");
+      if (event.type === "connected") {
+        console.log("[useStreamingChat] Connected to event stream");
+      }
       setIsConnected(true);
       setConnectionStatus("connected");
       setError(null);
@@ -281,37 +309,25 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
     switch (event.type) {
       case "text":
-        if (!allowAssistantParts && awaitingAssistantResponse) {
-          allowAssistantParts = true;
-          setIsStreaming(true);
-          setAwaitingFirstToken(false);
-        }
-        if (!allowAssistantParts) return;
+        if (!shouldAcceptAssistantEvent()) return;
+        acceptAssistantEvent();
+        prepareAssistantMessage(event.messageId);
         // Append streaming text
         setStreamingContent((prev) => prev + event.delta);
-        if (!currentMessageId()) {
-          setCurrentMessageId(event.messageId);
-        }
         break;
 
       case "reasoning":
-        if (!allowAssistantParts && awaitingAssistantResponse) {
-          allowAssistantParts = true;
-          setIsStreaming(true);
-          setAwaitingFirstToken(false);
-        }
-        if (!allowAssistantParts) return;
+        if (!shouldAcceptAssistantEvent()) return;
+        acceptAssistantEvent();
+        prepareAssistantMessage(event.messageId);
         // Append reasoning text
         setStreamingReasoning((prev) => prev + event.delta);
         break;
 
       case "tool-start":
-        if (!allowAssistantParts && awaitingAssistantResponse) {
-          allowAssistantParts = true;
-          setIsStreaming(true);
-          setAwaitingFirstToken(false);
-        }
-        if (!allowAssistantParts) return;
+        if (!shouldAcceptAssistantEvent()) return;
+        acceptAssistantEvent();
+        prepareAssistantMessage(event.messageId);
         setActiveTools((prev) => [
           ...prev,
           {
@@ -325,12 +341,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-running":
-        if (!allowAssistantParts && awaitingAssistantResponse) {
-          allowAssistantParts = true;
-          setIsStreaming(true);
-          setAwaitingFirstToken(false);
-        }
-        if (!allowAssistantParts) return;
+        if (!shouldAcceptAssistantEvent()) return;
+        acceptAssistantEvent();
+        prepareAssistantMessage(event.messageId);
         setActiveTools((prev) =>
           prev.map((t) =>
             t.callId === event.callId
@@ -341,12 +354,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-done":
-        if (!allowAssistantParts && awaitingAssistantResponse) {
-          allowAssistantParts = true;
-          setIsStreaming(true);
-          setAwaitingFirstToken(false);
-        }
-        if (!allowAssistantParts) return;
+        if (!shouldAcceptAssistantEvent()) return;
+        acceptAssistantEvent();
+        prepareAssistantMessage(event.messageId);
         setActiveTools((prev) =>
           prev.map((t) =>
             t.callId === event.callId
@@ -362,12 +372,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         break;
 
       case "tool-error":
-        if (!allowAssistantParts && awaitingAssistantResponse) {
-          allowAssistantParts = true;
-          setIsStreaming(true);
-          setAwaitingFirstToken(false);
-        }
-        if (!allowAssistantParts) return;
+        if (!shouldAcceptAssistantEvent()) return;
+        acceptAssistantEvent();
+        prepareAssistantMessage(event.messageId);
         setActiveTools((prev) =>
           prev.map((t) =>
             t.callId === event.callId ? { ...t, status: "error" as const, error: event.error } : t,
@@ -408,7 +415,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     }
   }
 
-  function finalizeMessage() {
+  function finalizeMessage(options?: { keepStreaming?: boolean }) {
     const content = streamingContent();
     const reasoning = streamingReasoning();
     const tools = activeTools();
@@ -416,7 +423,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
     if (!content && !reasoning && tools.length === 0) {
       // Nothing to finalize
-      setIsStreaming(false);
+      setIsStreaming(Boolean(options?.keepStreaming));
       setAwaitingFirstToken(false);
       return;
     }
@@ -440,7 +447,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setStreamingReasoning("");
       setActiveTools([]);
       setCurrentMessageId(null);
-      setIsStreaming(false);
+      setIsStreaming(Boolean(options?.keepStreaming));
       setAwaitingFirstToken(false);
     });
   }
@@ -495,10 +502,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     setAwaitingFirstToken(true);
     setError(null);
     awaitingAssistantResponse = true;
+    allowAssistantParts = true;
 
     try {
-      allowAssistantParts = false;
-
       await trpc.opencode.promptStart.mutate({
         sessionId,
         message,

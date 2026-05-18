@@ -23,7 +23,7 @@ import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { SessionSelector } from "./components/SessionSelector";
 import { Button } from "./design-system";
 import type { DiffTheme } from "./diff/types";
-import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
+import { useStreamingChat, type StreamingMessage, type ToolCall } from "./hooks/useStreamingChat";
 import { CheckIcon } from "./icons/check-icon";
 import { CopyIcon } from "./icons/copy-icon";
 import { SpinnerIcon } from "./icons/spinner-icon";
@@ -106,6 +106,7 @@ export function ChatPanel(props: ChatPanelProps) {
     // Track all relevant signals that should trigger scroll
     chat.messages();
     chat.streamingContent();
+    chat.streamingReasoning();
     chat.isStreaming();
     chat.activeTools();
 
@@ -265,8 +266,8 @@ export function ChatPanel(props: ChatPanelProps) {
    * Transform OpenCode messages to our StreamingMessage format
    * OpenCode SDK returns: Array<{ info: Message; parts: Array<Part> }>
    */
-  function transformOpenCodeMessages(messages: unknown[]) {
-    const result: Parameters<typeof chat.loadExistingMessages>[0] = [];
+  function transformOpenCodeMessages(messages: unknown[]): StreamingMessage[] {
+    const result: StreamingMessage[] = [];
 
     // OpenCode returns { info: Message, parts: Part[] } for each message
     for (const item of messages as Array<{
@@ -286,9 +287,11 @@ export function ChatPanel(props: ChatPanelProps) {
       // Combine text parts into content
       const textParts = parts.filter((p) => p.type === "text" && p.text);
       const content = textParts.map((p) => p.text).join("");
+      const reasoningParts = parts.filter((p) => p.type === "reasoning" && p.text);
+      const reasoning = reasoningParts.map((p) => p.text).join("");
 
       // Skip empty messages
-      if (!content.trim()) continue;
+      if (!content.trim() && !reasoning.trim()) continue;
 
       // Skip system-injected context messages (identified by marker prefix)
       if (msg.role === "user" && content.startsWith(SYSTEM_CONTEXT_MARKER)) {
@@ -299,6 +302,7 @@ export function ChatPanel(props: ChatPanelProps) {
         id: msg.id,
         role: msg.role,
         content,
+        reasoning: msg.role === "assistant" && reasoning.trim() ? reasoning : undefined,
         toolCalls: [], // Historical tool calls aren't critical for display
         isStreaming: false,
         timestamp: msg.time?.created || Date.now(),
@@ -607,13 +611,39 @@ export function ChatPanel(props: ChatPanelProps) {
   // Helper to escape HTML for placeholders
   const escapeHtml = escapeHtmlText;
 
+  function sanitizeStreamingReviewTokens(content: string) {
+    let sanitized = content;
+
+    for (const tokenName of ["ANNOTATION", "REVIEW_ORDER"]) {
+      const closeToken = `<</${tokenName}>>`;
+      const openToken = `<<${tokenName}`;
+      const firstCloseIndex = sanitized.indexOf(closeToken);
+      const firstOpenIndex = sanitized.indexOf(openToken);
+
+      if (firstCloseIndex !== -1 && (firstOpenIndex === -1 || firstCloseIndex < firstOpenIndex)) {
+        sanitized = sanitized.slice(firstCloseIndex + closeToken.length);
+      }
+
+      const trailingOpenIndex = sanitized.lastIndexOf(openToken);
+      if (trailingOpenIndex !== -1) {
+        const trailingCloseIndex = sanitized.indexOf(closeToken, trailingOpenIndex);
+        if (trailingCloseIndex === -1) {
+          sanitized = sanitized.slice(0, trailingOpenIndex);
+        }
+      }
+    }
+
+    return sanitized;
+  }
+
   // Render a message segment
-  function MessageSegmentView(segmentProps: { segment: MessageSegment }) {
+  function MessageSegmentView(segmentProps: { segment: MessageSegment; streaming?: boolean }) {
     return (
       <Switch>
         <Match when={segmentProps.segment.type === "text"}>
           <MarkdownText
             content={(segmentProps.segment as { type: "text"; content: string }).content}
+            streaming={segmentProps.streaming}
           />
         </Match>
         <Match when={segmentProps.segment.type === "file-ref"}>
@@ -672,16 +702,42 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   // Render message content with token parsing for assistant messages
-  function MessageContent(contentProps: { role: "user" | "assistant"; content: string }) {
+  function MessageContent(contentProps: {
+    role: "user" | "assistant";
+    content: string;
+    streaming?: boolean;
+  }) {
     if (contentProps.role === "user") {
       return <span class="whitespace-pre-wrap">{contentProps.content}</span>;
     }
 
     // Parse assistant messages for special tokens
-    const parsed = parseReviewTokens(contentProps.content);
+    const parsed = parseReviewTokens(
+      contentProps.streaming
+        ? sanitizeStreamingReviewTokens(contentProps.content)
+        : contentProps.content,
+    );
 
     return (
-      <For each={parsed.segments}>{(segment) => <MessageSegmentView segment={segment} />}</For>
+      <For each={parsed.segments}>
+        {(segment) => <MessageSegmentView segment={segment} streaming={contentProps.streaming} />}
+      </For>
+    );
+  }
+
+  function ReasoningBlock(reasoningProps: { content: string; streaming?: boolean }) {
+    return (
+      <details
+        open={reasoningProps.streaming}
+        class="mb-2 border-l-2 border-accent/40 bg-bg px-2 py-1.5 text-text-muted"
+      >
+        <summary class="cursor-pointer select-none text-xs font-medium text-text-faint">
+          Thinking
+        </summary>
+        <div class="mt-1 whitespace-pre-wrap text-xs leading-relaxed wrap-break-word">
+          {reasoningProps.content}
+        </div>
+      </details>
     );
   }
 
@@ -962,19 +1018,36 @@ export function ChatPanel(props: ChatPanelProps) {
                   </div>
                 </Show>
 
-                <div class="text-text wrap-break-word leading-relaxed text-sm">
-                  <MessageContent role={msg.role} content={msg.content} />
-                </div>
+                <Show when={msg.role === "assistant" && msg.reasoning}>
+                  <ReasoningBlock content={msg.reasoning!} />
+                </Show>
+
+                <Show when={msg.content.trim()}>
+                  <div class="text-text wrap-break-word leading-relaxed text-sm">
+                    <MessageContent role={msg.role} content={msg.content} />
+                  </div>
+                </Show>
               </div>
             </div>
           )}
         </For>
 
         {/* Streaming message */}
-        <Show when={chat.isStreaming() || chat.streamingContent() || chat.activeTools().length > 0}>
+        <Show
+          when={
+            chat.isStreaming() ||
+            chat.streamingContent() ||
+            chat.streamingReasoning() ||
+            chat.activeTools().length > 0
+          }
+        >
           <div class="mr-2">
             <div class="px-2.5 py-2 bg-bg-elevated border border-border">
               <div class="text-sm text-text-faint mb-1">Assistant</div>
+
+              <Show when={chat.streamingReasoning()}>
+                <ReasoningBlock content={chat.streamingReasoning()} streaming={true} />
+              </Show>
 
               {/* Active tool calls */}
               <Show when={chat.activeTools().length > 0}>
@@ -986,7 +1059,11 @@ export function ChatPanel(props: ChatPanelProps) {
               {/* Streaming content - render markdown with remend for incomplete blocks */}
               <Show when={chat.streamingContent()}>
                 <div class="text-sm text-text wrap-break-word leading-relaxed">
-                  <MarkdownText content={chat.streamingContent()!} streaming={true} />
+                  <MessageContent
+                    role="assistant"
+                    content={chat.streamingContent()!}
+                    streaming={true}
+                  />
                 </div>
               </Show>
 
@@ -995,6 +1072,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 when={
                   chat.awaitingFirstToken() &&
                   !chat.streamingContent() &&
+                  !chat.streamingReasoning() &&
                   chat.activeTools().length === 0
                 }
               >

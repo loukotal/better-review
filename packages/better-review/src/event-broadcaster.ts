@@ -96,6 +96,10 @@ const makeEventBroadcaster = Effect.gen(function* () {
     yield* createSSEStream().pipe(
       Stream.tap((event) =>
         Effect.gen(function* () {
+          if (process.env.BETTER_REVIEW_DEBUG_SSE === "1") {
+            yield* Effect.log(`[EventBroadcaster] raw event ${event.type}`);
+          }
+
           // Mark as connected on first event
           if (isFirstEvent) {
             isFirstEvent = false;
@@ -266,7 +270,14 @@ const makeEventBroadcaster = Effect.gen(function* () {
       // 2. Transforms events (no session filtering - frontend does that)
       // 3. Cleans up subscriber count when done
       return Stream.fromPubSub(eventPubSub).pipe(
-        Stream.map(transformEvent),
+        Stream.map((event) => {
+          try {
+            return transformEvent(event);
+          } catch (error) {
+            console.error(`[EventBroadcaster] Failed to transform event ${event.type}:`, error);
+            return null;
+          }
+        }),
         Stream.filter((event) => event !== null),
         Stream.ensuring(
           Effect.gen(function* () {

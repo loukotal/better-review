@@ -1,5 +1,6 @@
 const STORAGE_KEY = "better-review.apiToken";
 const COOKIE_NAME = "better_review_api_token";
+const CLIENT_ID_STORAGE_KEY = "better-review.clientId";
 
 function envToken(): string {
   return (import.meta.env.VITE_BETTER_REVIEW_API_TOKEN ?? "").trim();
@@ -44,7 +45,20 @@ export function getApiAuthHeaders(): Record<string, string> {
 
 export function getApiAuthConnectionParams(): Record<string, string> {
   const token = getApiToken();
-  return token ? { authorization: `Bearer ${token}` } : {};
+  const clientId = getApiClientId();
+  return {
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+    clientId,
+  };
+}
+
+export function getApiClientId(): string {
+  let clientId = sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+  if (!clientId) {
+    clientId = crypto.randomUUID();
+    sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+  }
+  return clientId;
 }
 
 export async function fetchWithApiAuth(input: RequestInfo | URL, init: RequestInit = {}) {
