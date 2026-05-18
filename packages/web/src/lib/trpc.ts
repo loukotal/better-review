@@ -2,9 +2,13 @@ import { createTRPCClient, httpLink, splitLink, unstable_httpSubscriptionLink } 
 import type { AppRouter } from "better-review/src/trpc/routers";
 import superjson from "superjson";
 
-const trpcUrl =
-  import.meta.env.VITE_TRPC_URL ??
-  (import.meta.env.DEV ? "http://127.0.0.1:3001/api/trpc" : "/api/trpc");
+import { getApiAuthConnectionParams, getApiAuthHeaders, getApiToken } from "./apiAuth";
+
+const trpcUrl = import.meta.env.VITE_TRPC_URL ?? "/api/trpc";
+
+// Native EventSource cannot send custom headers, so the subscription link relies
+// on the auth cookie being present before the SSE request is opened.
+getApiToken();
 
 // Create tRPC client with individual requests (no batching)
 export const trpc = createTRPCClient<AppRouter>({
@@ -15,11 +19,13 @@ export const trpc = createTRPCClient<AppRouter>({
       true: unstable_httpSubscriptionLink({
         url: trpcUrl,
         transformer: superjson,
+        connectionParams: getApiAuthConnectionParams,
       }),
       // Use regular http link for queries and mutations (no batching)
       false: httpLink({
         url: trpcUrl,
         transformer: superjson,
+        headers: getApiAuthHeaders,
       }),
     }),
   ],

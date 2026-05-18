@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,8 +29,26 @@ import { appRouter } from "./trpc/routers";
 const isProduction = process.env.NODE_ENV === "production";
 const currentDir = fileURLToPath(new URL(".", import.meta.url));
 const staticDir = path.resolve(currentDir, "../../web/dist");
+const repoRoot = path.resolve(currentDir, "../../..");
+const devTokenFile = path.join(repoRoot, ".better-review-api-token");
 const webPort = process.env.WEB_PORT ?? "3000";
 const allowedDevOrigins = new Set([`http://localhost:${webPort}`, `http://127.0.0.1:${webPort}`]);
+
+function readDevTokenFile(): string | null {
+  if (!existsSync(devTokenFile)) return null;
+  const token = readFileSync(devTokenFile, "utf8").trim();
+  return token.length > 0 ? token : null;
+}
+
+const apiToken = process.env.BETTER_REVIEW_API_TOKEN?.trim() || readDevTokenFile();
+const apiAuthDisabled = process.env.BETTER_REVIEW_DISABLE_API_AUTH === "1";
+const apiTokenCookieName = "better_review_api_token";
+
+if (!apiToken && !apiAuthDisabled) {
+  throw new Error(
+    "BETTER_REVIEW_API_TOKEN is required. Run `pnpm dev` to create a dev token file, or set BETTER_REVIEW_DISABLE_API_AUTH=1 only for temporary local development.",
+  );
+}
 
 if (isProduction) {
   console.log(`[static] Production mode enabled, serving from: ${staticDir}`);
@@ -127,14 +147,14 @@ async function serveStatic(pathname: string): Promise<Response> {
   return fileResponse(path.join(staticDir, "index.html"), { "Content-Type": "text/html" });
 }
 
-function getCorsHeaders(req: Request): HeadersInit {
+function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin");
   if (!origin || !allowedDevOrigins.has(origin)) return {};
 
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "content-type, trpc-accept, x-trpc-source",
+    "Access-Control-Allow-Headers": "authorization, content-type, trpc-accept, x-trpc-source",
     "Access-Control-Allow-Credentials": "true",
     Vary: "Origin",
   };
@@ -153,6 +173,81 @@ function withCors(req: Request, response: Response): Response {
   });
 }
 
+function constantTimeEqual(a: string, b: string): boolean {
+  const aBuffer = Buffer.from(a);
+  const bBuffer = Buffer.from(b);
+  if (aBuffer.length !== bBuffer.length) return false;
+  return timingSafeEqual(aBuffer, bBuffer);
+}
+
+function getRequestToken(req: Request): string | null {
+  const authorization = req.headers.get("authorization");
+  if (authorization?.startsWith("Bearer ")) {
+    return authorization.slice("Bearer ".length).trim();
+  }
+
+  const connectionParamsToken = getConnectionParamsToken(req);
+  if (connectionParamsToken) return connectionParamsToken;
+
+  return getCookie(req, apiTokenCookieName);
+}
+
+function getConnectionParamsToken(req: Request): string | null {
+  const rawParams = new URL(req.url).searchParams.get("connectionParams");
+  if (!rawParams) return null;
+
+  try {
+    const params = JSON.parse(rawParams) as { authorization?: unknown };
+    const value = typeof params.authorization === "string" ? params.authorization : "";
+    return value.startsWith("Bearer ") ? value.slice("Bearer ".length).trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function getCookie(req: Request, name: string): string | null {
+  const cookie = req.headers.get("cookie");
+  if (!cookie) return null;
+
+  for (const part of cookie.split(";")) {
+    const [rawKey, ...rawValue] = part.trim().split("=");
+    if (rawKey !== name) continue;
+    const value = rawValue.join("=");
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function isPublicApiRequest(req: Request): boolean {
+  const url = new URL(req.url);
+  if (req.method === "OPTIONS") return true;
+  if (url.pathname === "/api/sessions/healthcheck") return true;
+  if (req.method === "GET" && url.pathname.startsWith("/api/github-asset/")) return true;
+  if (
+    req.method === "GET" &&
+    (url.pathname === "/api/pr/metadata" || url.pathname === "/api/pr/file-diff")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function requireApiAuth(req: Request): Response | null {
+  if (apiAuthDisabled || !apiToken || isPublicApiRequest(req)) return null;
+
+  const requestToken = getRequestToken(req);
+  if (!requestToken || !constantTimeEqual(requestToken, apiToken)) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  return null;
+}
+
 // =============================================================================
 // Request Logging
 // =============================================================================
@@ -160,12 +255,20 @@ function withCors(req: Request, response: Response): Response {
 const activeRequests = new Map<string, { method: string; path: string; start: number }>();
 let requestCounter = 0;
 
+function formatRequestPath(url: URL): string {
+  const redacted = new URL(url);
+  if (redacted.searchParams.has("connectionParams")) {
+    redacted.searchParams.set("connectionParams", "[redacted]");
+  }
+  return redacted.pathname + redacted.search;
+}
+
 function loggedHandler<T extends (req: Request) => Response | Promise<Response>>(handler: T): T {
   return ((req: Request) => {
     const id = String(++requestCounter);
     const url = new URL(req.url);
     const method = req.method;
-    const path = url.pathname + url.search;
+    const path = formatRequestPath(url);
     const start = Date.now();
     const quietPendingResultPoll =
       method === "GET" && /^\/api\/sessions\/[^/]+\/result(?:\?|$)/.test(path);
@@ -183,6 +286,12 @@ function loggedHandler<T extends (req: Request) => Response | Promise<Response>>
     };
 
     try {
+      const authError = requireApiAuth(req);
+      if (authError) {
+        cleanup(authError.status);
+        return authError;
+      }
+
       const result = handler(req);
       if (result instanceof Promise) {
         return result.then(
@@ -348,6 +457,7 @@ async function gitShowFile(
   ref: string,
   filePath: string,
 ): Promise<string | null> {
+  if (!isSafeRepoRelativePath(filePath)) return null;
   const { stdout, exitCode } = await runCommand("git", [
     "-C",
     repoRoot,
@@ -358,12 +468,14 @@ async function gitShowFile(
 }
 
 async function gitShowIndexFile(repoRoot: string, filePath: string): Promise<string | null> {
+  if (!isSafeRepoRelativePath(filePath)) return null;
   const { stdout, exitCode } = await runCommand("git", ["-C", repoRoot, "show", `:${filePath}`]);
   return exitCode === 0 ? stdout : null;
 }
 
 async function readWorkingTreeFile(repoRoot: string, filePath: string): Promise<string | null> {
-  const resolved = path.join(repoRoot, filePath);
+  const resolved = resolveRepoFilePath(repoRoot, filePath);
+  if (!resolved) return null;
   try {
     return await readFile(resolved, "utf8");
   } catch (error) {
@@ -372,6 +484,22 @@ async function readWorkingTreeFile(repoRoot: string, filePath: string): Promise<
     }
     throw error;
   }
+}
+
+function isSafeRepoRelativePath(filePath: string): boolean {
+  if (!filePath || filePath.includes("\0") || path.isAbsolute(filePath)) return false;
+  const normalized = path.posix.normalize(filePath.replaceAll("\\", "/"));
+  if (normalized === "." || normalized.startsWith("../") || normalized === "..") return false;
+  return true;
+}
+
+function resolveRepoFilePath(repoRoot: string, filePath: string): string | null {
+  if (!isSafeRepoRelativePath(filePath)) return null;
+  const root = path.resolve(repoRoot);
+  const resolved = path.resolve(root, filePath);
+  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+  if (resolved !== root && !resolved.startsWith(rootWithSep)) return null;
+  return resolved;
 }
 
 type RouteServices = {

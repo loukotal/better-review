@@ -53,6 +53,12 @@ Currently you need to pull the repo and run it locally.
 1. `pnpm install`
 2. `pnpm dev` or `pnpm start`
 
+In dev, `pnpm dev` creates a local `.better-review-api-token` file before starting the API and
+Vite. Both servers read that same token automatically. Set `BETTER_REVIEW_API_TOKEN` only if you
+want to override the generated dev token. For production builds, set `VITE_BETTER_REVIEW_API_TOKEN`
+explicitly if you want the token baked into the built client; otherwise the browser prompts once and
+stores the token in localStorage for `localhost`.
+
 You can update ports with `API_PORT`, `WEB_PORT` (for dev), `OPENCODE_PORT` environment variables. Defaults are `3000` and `3001`; OpenCode uses a random local port unless you explicitly set `OPENCODE_PORT`.
 
 ## Agent Review CLI

@@ -15,6 +15,7 @@ import type {
 } from "@better-review/shared";
 
 import type { Annotation } from "../utils/parseReviewTokens";
+import { fetchWithApiAuth } from "./apiAuth";
 import { trpc } from "./trpc";
 
 // Create a dedicated IndexedDB store for query cache
@@ -252,7 +253,7 @@ export const api = {
       url.searchParams.set("variantId", variantId);
     }
 
-    const response = await fetch(url.toString());
+    const response = await fetchWithApiAuth(url.toString());
     if (!response.ok) {
       throw new Error(await response.text());
     }

@@ -47,15 +47,27 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
     /**
      * Get the file path for a key in a namespace
      */
-    const getFilePath = (namespace: string, key: string): string =>
-      join(BASE_DIR, namespace, `${key}.json`);
+    const validatePathPart = (label: string, value: string): string => {
+      if (!/^[A-Za-z0-9._:-]+$/.test(value) || value.includes("..")) {
+        throw new Error(`Invalid store ${label}: ${value}`);
+      }
+      return value;
+    };
+
+    const getFilePath = (namespace: string, key: string): string => {
+      const safeNamespace = validatePathPart("namespace", namespace);
+      const safeKey = validatePathPart("key", key);
+      return join(BASE_DIR, safeNamespace, `${safeKey}.json`);
+    };
 
     /**
      * Ensure namespace directory exists
      */
     const ensureNamespace = (namespace: string) =>
       Effect.tryPromise(async () => {
-        await mkdir(join(BASE_DIR, namespace), { recursive: true });
+        await mkdir(join(BASE_DIR, validatePathPart("namespace", namespace)), {
+          recursive: true,
+        });
       });
 
     /**

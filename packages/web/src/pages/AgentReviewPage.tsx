@@ -28,10 +28,11 @@ import {
   type DiffCommentDraft,
 } from "../DiffViewer";
 import { FileTreePanel } from "../FileTreePanel";
+import { fetchWithApiAuth } from "../lib/apiAuth";
 import { parseMarkdown } from "../lib/markdown";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await fetchWithApiAuth(url, init);
   if (!response.ok) {
     throw new Error(await response.text());
   }
@@ -123,7 +124,9 @@ export default function AgentReviewPage() {
   const [result, { refetch: refetchResult }] = createResource(
     () => resultVersion(),
     async () => {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(params.sessionId)}/result`);
+      const response = await fetchWithApiAuth(
+        `/api/sessions/${encodeURIComponent(params.sessionId)}/result`,
+      );
       if (response.status === 204 || response.status === 404) return null;
       if (!response.ok) {
         throw new Error(await response.text());

@@ -3,7 +3,10 @@
 export {};
 
 import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   exportReviewFeedback,
@@ -24,6 +27,7 @@ interface CliOptions {
   label?: string;
   apiUrl: string;
   webUrl: string;
+  apiToken?: string;
   openBrowser: boolean;
   printUrlOnly: boolean;
   timeoutMs: number;
@@ -53,6 +57,7 @@ Options:
   --label <text>         Label for diff payloads
   --api-url <url>        API base URL (default: http://127.0.0.1:3001)
   --web-url <url>        Web base URL (default: http://127.0.0.1:3000)
+  --api-token <token>    API token (default: BETTER_REVIEW_API_TOKEN)
   --open                 Open the browser after creating the session
   --no-open              Do not open the browser
   --print-url            Print the review URL and exit immediately
@@ -303,11 +308,15 @@ async function ensureApiAvailable(apiUrl: string): Promise<void> {
 
 async function createSession(
   apiUrl: string,
+  apiToken: string | undefined,
   input: Omit<ReviewSession, "id" | "createdAt" | "status">,
 ): Promise<ReviewSession> {
   const response = await fetch(`${apiUrl}/api/sessions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...getApiAuthHeaders(apiToken),
+    },
     body: JSON.stringify(input),
   });
 
@@ -318,13 +327,34 @@ async function createSession(
   return (await response.json()) as ReviewSession;
 }
 
-async function getResult(apiUrl: string, sessionId: string): Promise<ReviewSessionResult | null> {
-  const response = await fetch(`${apiUrl}/api/sessions/${encodeURIComponent(sessionId)}/result`);
+async function getResult(
+  apiUrl: string,
+  apiToken: string | undefined,
+  sessionId: string,
+): Promise<ReviewSessionResult | null> {
+  const response = await fetch(`${apiUrl}/api/sessions/${encodeURIComponent(sessionId)}/result`, {
+    headers: getApiAuthHeaders(apiToken),
+  });
   if (response.status === 204 || response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Failed to fetch result: ${await response.text()}`);
   }
   return (await response.json()) as ReviewSessionResult;
+}
+
+function getApiAuthHeaders(apiToken: string | undefined): Record<string, string> {
+  const token = apiToken?.trim();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function readDevApiToken(): string | undefined {
+  const tokenFile = resolve(
+    fileURLToPath(new URL(".", import.meta.url)),
+    ".better-review-api-token",
+  );
+  if (!existsSync(tokenFile)) return undefined;
+  const token = readFileSync(tokenFile, "utf8").trim();
+  return token.length > 0 ? token : undefined;
 }
 
 function buildSessionUrl(webUrl: string, sessionId: string): string {
@@ -369,6 +399,7 @@ function parseArgs(argv: string[]): {
     webUrl: normalizeBaseUrl(
       process.env.BETTER_REVIEW_WEB_URL ?? `http://127.0.0.1:${process.env.WEB_PORT ?? "3000"}`,
     ),
+    apiToken: process.env.BETTER_REVIEW_API_TOKEN ?? readDevApiToken(),
     openBrowser: true,
     printUrlOnly: false,
     timeoutMs: 60 * 60 * 1000,
@@ -421,6 +452,10 @@ function parseArgs(argv: string[]): {
         options.webUrl = normalizeBaseUrl(next ?? options.webUrl);
         i += 1;
         break;
+      case "--api-token":
+        options.apiToken = next;
+        i += 1;
+        break;
       case "--open":
         options.openBrowser = true;
         break;
@@ -453,6 +488,7 @@ function parseArgs(argv: string[]): {
 
 async function waitForResult(
   apiUrl: string,
+  apiToken: string | undefined,
   sessionId: string,
   timeoutMs: number,
   pollMs: number,
@@ -460,7 +496,7 @@ async function waitForResult(
   const startedAt = Date.now();
 
   while (Date.now() - startedAt <= timeoutMs) {
-    const result = await getResult(apiUrl, sessionId);
+    const result = await getResult(apiUrl, apiToken, sessionId);
     if (result) return result;
     await sleep(pollMs);
   }
@@ -507,7 +543,7 @@ async function handleCreateCommand(mode: ReviewMode, options: CliOptions): Promi
 
   await ensureApiAvailable(options.apiUrl);
 
-  const session = await createSession(options.apiUrl, {
+  const session = await createSession(options.apiUrl, options.apiToken, {
     mode,
     origin: options.origin,
     title: options.title ?? buildDefaultTitle(mode, cwd),
@@ -535,7 +571,13 @@ async function handleCreateCommand(mode: ReviewMode, options: CliOptions): Promi
     });
   }
 
-  const result = await waitForResult(options.apiUrl, session.id, options.timeoutMs, options.pollMs);
+  const result = await waitForResult(
+    options.apiUrl,
+    options.apiToken,
+    session.id,
+    options.timeoutMs,
+    options.pollMs,
+  );
   console.log(JSON.stringify(toCliOutput(session, result), null, 2));
 }
 
