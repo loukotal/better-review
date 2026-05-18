@@ -18,6 +18,8 @@ import type {
   ProjectGraphqlRateLimit,
 } from "@better-review/shared";
 
+import { runCommand } from "../command";
+
 class GhError extends Data.TaggedError("GhError")<{
   readonly command: string;
   readonly cause: unknown;
@@ -330,38 +332,21 @@ const GH_COMMAND_TIMEOUT_MS = Number(process.env.GH_COMMAND_TIMEOUT_MS ?? 45_000
 
 const runGh = (...args: string[]) =>
   Effect.tryPromise(async () => {
-    const process = Bun.spawn(["gh", ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
+    const { stdout, stderr, exitCode, timedOut } = await runCommand("gh", args, {
+      timeoutMs: GH_COMMAND_TIMEOUT_MS,
     });
 
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      process.kill();
-    }, GH_COMMAND_TIMEOUT_MS);
-
-    try {
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(process.stdout).text(),
-        new Response(process.stderr).text(),
-        process.exited,
-      ]);
-
-      if (timedOut) {
-        throw new Error(
-          `gh command timed out after ${GH_COMMAND_TIMEOUT_MS}ms: gh ${args.join(" ")}`,
-        );
-      }
-
-      if (code !== 0) {
-        throw new Error(stderr.trim() || stdout.trim() || `gh exited with code ${code}`);
-      }
-
-      return stdout;
-    } finally {
-      clearTimeout(timeout);
+    if (timedOut) {
+      throw new Error(
+        `gh command timed out after ${GH_COMMAND_TIMEOUT_MS}ms: gh ${args.join(" ")}`,
+      );
     }
+
+    if (exitCode !== 0) {
+      throw new Error(stderr.trim() || stdout.trim() || `gh exited with code ${exitCode}`);
+    }
+
+    return stdout;
   });
 
 // Validate it's a PR number or valid PR URL (not an issue URL)
@@ -1106,8 +1091,13 @@ const ghCli: GhCli = {
         }
       `;
 
-      yield* Effect.tryPromise(() =>
-        Bun.$`gh api graphql -f query=${mutation} -f threadId=${params.threadNodeId}`.text(),
+      yield* runGh(
+        "api",
+        "graphql",
+        "-f",
+        `query=${mutation}`,
+        "-f",
+        `threadId=${params.threadNodeId}`,
       );
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "resolveThread", cause })),
@@ -1126,8 +1116,13 @@ const ghCli: GhCli = {
         }
       `;
 
-      yield* Effect.tryPromise(() =>
-        Bun.$`gh api graphql -f query=${mutation} -f threadId=${params.threadNodeId}`.text(),
+      yield* runGh(
+        "api",
+        "graphql",
+        "-f",
+        `query=${mutation}`,
+        "-f",
+        `threadId=${params.threadNodeId}`,
       );
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "unresolveThread", cause })),
@@ -1790,8 +1785,11 @@ const ghCli: GhCli = {
 
   getFileContent: (params: { owner: string; repo: string; path: string; ref: string }) =>
     Effect.gen(function* () {
-      const result = yield* Effect.tryPromise(() =>
-        Bun.$`gh api repos/${params.owner}/${params.repo}/contents/${params.path}?ref=${params.ref} -H "Accept: application/vnd.github.raw+json"`.text(),
+      const result = yield* runGh(
+        "api",
+        `repos/${params.owner}/${params.repo}/contents/${params.path}?ref=${params.ref}`,
+        "-H",
+        "Accept: application/vnd.github.raw+json",
       ).pipe(Effect.catchAll(() => Effect.succeed(null)));
       return result;
     }).pipe(

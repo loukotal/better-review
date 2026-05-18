@@ -3,10 +3,10 @@ pre-commit:
   jobs:
     - name: format
       glob: "*.{ts,tsx,js,jsx,json,css,html,md}"
-      run: bunx oxfmt {staged_files}
+      run: pnpm exec oxfmt {staged_files}
       stage_fixed: true
 
     - name: lint
       glob: "*.{ts,tsx}"
-      run: bunx oxlint --fix {staged_files}
+      run: pnpm exec oxlint --fix {staged_files}
       stage_fixed: true

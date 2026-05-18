@@ -138,7 +138,14 @@ const KanbanPage: Component = () => {
   const projectsQuery = useQuery(() => ({
     queryKey: queryKeys.projects.list(owner()),
     queryFn: ({ signal }) => api.fetchProjects(owner(), signal),
+    retry: false,
   }));
+
+  const projectsError = createMemo(() => {
+    const queryError = projectsQuery.error;
+    if (!queryError) return null;
+    return queryError instanceof Error ? queryError.message : String(queryError);
+  });
 
   const quotaQuery = useQuery(() => ({
     queryKey: queryKeys.projects.rateLimit,
@@ -733,6 +740,14 @@ const KanbanPage: Component = () => {
             <div class="px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-sm">
               {error()}
             </div>
+          </Show>
+
+          <Show when={projectsError()}>
+            {(message) => (
+              <div class="px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-sm">
+                {message()}
+              </div>
+            )}
           </Show>
         </div>
       </header>

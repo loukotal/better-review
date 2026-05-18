@@ -2,7 +2,9 @@
 // HTTP Response Helpers
 // =============================================================================
 
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { SYSTEM_CONTEXT_MARKER } from "@better-review/shared";
 
@@ -15,6 +17,7 @@ import { SYSTEM_CONTEXT_MARKER } from "@better-review/shared";
  * Users can create this file to customize the reviewer's behavior.
  */
 const PERSONALITY_FILE = "personality.md";
+const CURRENT_DIR = fileURLToPath(new URL(".", import.meta.url));
 
 /**
  * Load custom reviewer personality from personality.md in the project root.
@@ -22,15 +25,24 @@ const PERSONALITY_FILE = "personality.md";
  */
 export async function loadPersonality(): Promise<string | null> {
   // Look for personality.md in the monorepo root (3 levels up from src/response.ts)
-  const filePath = join(import.meta.dir, "..", "..", "..", PERSONALITY_FILE);
-  const file = Bun.file(filePath);
+  const filePath = join(CURRENT_DIR, "..", "..", "..", PERSONALITY_FILE);
 
-  if (!(await file.exists())) {
+  let content: string;
+  try {
+    content = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) {
     return null;
   }
 
-  const content = (await file.text()).trim();
-  return content || null;
+  return trimmed;
 }
 
 /**
@@ -39,11 +51,28 @@ export async function loadPersonality(): Promise<string | null> {
 export const getErrorMessage = (error: unknown): string => {
   let current = error;
 
-  // Unwrap Effect Cause (Fail has .error, Die has .defect)
-  if (current && typeof current === "object") {
-    const obj = current as Record<string, unknown>;
-    if (obj._tag === "Fail" && obj.error) current = obj.error;
-    else if (obj._tag === "Die" && obj.defect) current = obj.defect;
+  // Unwrap Effect FiberFailure/Cause wrappers before reading Error.message.
+  while (current && typeof current === "object") {
+    const obj = current as Record<PropertyKey, unknown>;
+    const fiberCauseSymbol = Object.getOwnPropertySymbols(current).find(
+      (symbol) => symbol.description === "effect/Runtime/FiberFailure/Cause",
+    );
+
+    if (fiberCauseSymbol) {
+      current = obj[fiberCauseSymbol];
+      continue;
+    }
+
+    if (obj._tag === "Fail" && obj.error) {
+      current = obj.error;
+      continue;
+    }
+    if (obj._tag === "Die" && obj.defect) {
+      current = obj.defect;
+      continue;
+    }
+
+    break;
   }
 
   // Unwrap nested .cause (GhError, etc)
@@ -74,7 +103,6 @@ export const getErrorMessage = (error: unknown): string => {
 const IGNORE_PATTERNS = [
   /package-lock\.json$/,
   /yarn\.lock$/,
-  /bun\.lock$/,
   /pnpm-lock\.yaml$/,
   /\.lock$/,
   /node_modules\//,

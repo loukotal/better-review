@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { createOpencodeClient, createOpencodeServer } from "@opencode-ai/sdk/v2";
 import { Effect } from "effect";
 
@@ -49,7 +51,7 @@ export class OpencodeService extends Effect.Service<OpencodeService>()("Opencode
 
     yield* Effect.log(`[OpenCode] Starting opencode server ${describePort(port)}...`);
     const OPENCODE_USERNAME = "better-review";
-    const OPENCODE_PASSWORD = Bun.randomUUIDv7();
+    const OPENCODE_PASSWORD = randomUUID();
 
     process.env.OPENCODE_SERVER_USERNAME = OPENCODE_USERNAME;
     process.env.OPENCODE_SERVER_PASSWORD = OPENCODE_PASSWORD;

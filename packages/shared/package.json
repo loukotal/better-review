@@ -10,5 +10,8 @@
     "./github-asset": "./src/github-asset.ts",
     "./types": "./src/types/index.ts",
     "./utils": "./src/utils/index.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   }
 }

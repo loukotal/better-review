@@ -2,12 +2,25 @@
 // StoreService - Generic disk-backed key-value store
 // =============================================================================
 
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { Effect, Ref } from "effect";
 
 const BASE_DIR = join(homedir(), ".local", "share", "better-review");
+
+function getErrnoCode(error: unknown): string | undefined {
+  let current = error;
+
+  while (current && typeof current === "object") {
+    const record = current as { code?: unknown; cause?: unknown; error?: unknown };
+    if (typeof record.code === "string") return record.code;
+    current = record.cause ?? record.error;
+  }
+
+  return undefined;
+}
 
 // =============================================================================
 // StoreService
@@ -28,8 +41,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
 
     // Ensure base directory exists
     yield* Effect.tryPromise(async () => {
-      const fs = await import("node:fs/promises");
-      await fs.mkdir(BASE_DIR, { recursive: true });
+      await mkdir(BASE_DIR, { recursive: true });
     });
 
     /**
@@ -43,8 +55,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
      */
     const ensureNamespace = (namespace: string) =>
       Effect.tryPromise(async () => {
-        const fs = await import("node:fs/promises");
-        await fs.mkdir(join(BASE_DIR, namespace), { recursive: true });
+        await mkdir(join(BASE_DIR, namespace), { recursive: true });
       });
 
     /**
@@ -59,15 +70,19 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
           return nsCache.get(key) as T;
         }
 
-        // Read from disk
         const filePath = getFilePath(namespace, key);
-        const file = Bun.file(filePath);
+        const text = yield* Effect.tryPromise(() => readFile(filePath, "utf8")).pipe(
+          Effect.catchAll((e) => {
+            if (getErrnoCode(e) === "ENOENT") {
+              return Effect.succeed(null);
+            }
+            return Effect.fail(e);
+          }),
+        );
 
-        if (!(yield* Effect.tryPromise(() => file.exists()))) {
-          return null;
-        }
+        if (text === null) return null;
 
-        const data = yield* Effect.tryPromise(() => file.json() as Promise<T>);
+        const data = JSON.parse(text) as T;
 
         // Update cache
         yield* Ref.update(cache, (c) => {
@@ -89,7 +104,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
         yield* ensureNamespace(namespace);
 
         const filePath = getFilePath(namespace, key);
-        yield* Effect.tryPromise(() => Bun.write(filePath, JSON.stringify(data, null, 2)));
+        yield* Effect.tryPromise(() => writeFile(filePath, JSON.stringify(data, null, 2)));
 
         // Update cache
         yield* Ref.update(cache, (c) => {
@@ -107,12 +122,14 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
     const del = (namespace: string, key: string): Effect.Effect<void, Error> =>
       Effect.gen(function* () {
         const filePath = getFilePath(namespace, key);
-        const file = Bun.file(filePath);
-
-        if (yield* Effect.tryPromise(() => file.exists())) {
-          const fs = yield* Effect.tryPromise(() => import("node:fs/promises"));
-          yield* Effect.tryPromise(() => fs.unlink(filePath));
-        }
+        yield* Effect.tryPromise(() => unlink(filePath)).pipe(
+          Effect.catchAll((e) => {
+            if (getErrnoCode(e) === "ENOENT") {
+              return Effect.void;
+            }
+            return Effect.fail(e);
+          }),
+        );
 
         // Update cache
         yield* Ref.update(cache, (c) => {
@@ -133,13 +150,11 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
     const list = (namespace: string): Effect.Effect<string[], Error> =>
       Effect.gen(function* () {
         const nsDir = join(BASE_DIR, namespace);
-        const fs = yield* Effect.tryPromise(() => import("node:fs/promises"));
 
-        const files = yield* Effect.tryPromise(() => fs.readdir(nsDir)).pipe(
+        const files = yield* Effect.tryPromise(() => readdir(nsDir)).pipe(
           Effect.catchAll((e) => {
             // Only treat ENOENT (directory doesn't exist) as empty list
-            const cause = e instanceof Error ? e : (e as { error?: Error }).error;
-            if (cause && (cause as NodeJS.ErrnoException).code === "ENOENT") {
+            if (getErrnoCode(e) === "ENOENT") {
               return Effect.succeed([] as string[]);
             }
             // Re-throw other errors (permission denied, etc.)

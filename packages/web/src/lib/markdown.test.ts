@@ -1,21 +1,22 @@
-import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 
 import { normalizeMalformedInlineCode, parseMarkdown } from "./markdown";
 
 test("sanitizes dangerous markdown html", () => {
   const html = parseMarkdown('![x" onerror="alert(1)](https://example.com/x.png)');
 
-  expect(html).toContain("<img");
-  expect(html).not.toMatch(/\sonerror="/);
-  expect(html).toContain('alt="x&quot; onerror=&quot;alert(1)"');
+  assert.match(html, /<img/);
+  assert.doesNotMatch(html, /\sonerror="/);
+  assert.match(html, /alt="x&quot; onerror=&quot;alert\(1\)"/);
 });
 
 test("sanitizes raw html blocks", () => {
   const html = parseMarkdown('<img src="x" onerror="alert(1)"><script>alert(1)</script>');
 
-  expect(html).toContain('&lt;img src="x" onerror="alert(1)"&gt;');
-  expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
-  expect(html).not.toContain("<script>");
+  assert.match(html, /&lt;img src="x" onerror="alert\(1\)"&gt;/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
 });
 
 test("rewrites GitHub asset links through the local proxy", () => {
@@ -24,11 +25,11 @@ test("rewrites GitHub asset links through the local proxy", () => {
     `![attachment](https://github.com/user-attachments/assets/${assetId})`,
   );
 
-  expect(html).toContain(`/api/github-asset/${assetId}`);
+  assert.match(html, new RegExp(`/api/github-asset/${assetId}`));
 });
 
 test("normalizes multiline inline code wrappers", () => {
   const markdown = ".\n\n`\nen-CA.json\n`\n\n.\n\n`\nfr-CA.json\n`";
 
-  expect(normalizeMalformedInlineCode(markdown)).toBe(".\n\n`en-CA.json`\n\n.\n\n`fr-CA.json`");
+  assert.equal(normalizeMalformedInlineCode(markdown), ".\n\n`en-CA.json`\n\n.\n\n`fr-CA.json`");
 });

@@ -11,7 +11,8 @@ export function extractGitHubAssetId(url: string): string | null {
   const match = url.trim().match(GITHUB_ASSET_URL_PATTERN);
   if (!match) return null;
 
-  return isGitHubAssetId(match[1]) ? match[1] : null;
+  const assetId = match[1];
+  return assetId && isGitHubAssetId(assetId) ? assetId : null;
 }
 
 export function toGitHubAssetProxyPath(assetId: string): string | null {

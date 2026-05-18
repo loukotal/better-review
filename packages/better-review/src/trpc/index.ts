@@ -15,7 +15,7 @@ const t = initTRPC.context<TRPCContext>().create({
       data: {
         ...shape.data,
         // Include the original error message for debugging
-        effectError: error.cause instanceof Error ? error.cause.message : null,
+        effectError: error.cause ? getErrorMessage(error.cause) : null,
       },
     };
   },
@@ -31,37 +31,21 @@ export const middleware = t.middleware;
  * Accepts effects that require RuntimeContext (the services provided by our layers).
  */
 export async function runEffect<A>(effect: Effect.Effect<A, unknown, RuntimeContext>): Promise<A> {
-  return runtime.runPromise(
-    effect.pipe(
-      Effect.catchAll((error) =>
-        Effect.fail(
-          new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: getErrorMessage(error),
-            cause: error instanceof Error ? error : new Error(String(error)),
-          }),
-        ),
-      ),
-    ),
-  );
+  try {
+    return await runtime.runPromise(effect);
+  } catch (error) {
+    throw effectToTRPCError(error);
+  }
 }
 
 export async function runOpencodeEffect<A>(
   effect: Effect.Effect<A, unknown, RuntimeContext>,
 ): Promise<A> {
-  return opencodeRuntime.runPromise(
-    effect.pipe(
-      Effect.catchAll((error) =>
-        Effect.fail(
-          new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: getErrorMessage(error),
-            cause: error instanceof Error ? error : new Error(String(error)),
-          }),
-        ),
-      ),
-    ),
-  );
+  try {
+    return await opencodeRuntime.runPromise(effect);
+  } catch (error) {
+    throw effectToTRPCError(error);
+  }
 }
 
 /**
@@ -69,20 +53,25 @@ export async function runOpencodeEffect<A>(
  */
 export function effectToTRPCError(error: unknown): TRPCError {
   const message = getErrorMessage(error);
+  const lowerMessage = message.toLowerCase();
 
   // Map common error patterns to appropriate codes
-  if (message.includes("not found") || message.includes("404")) {
-    return new TRPCError({ code: "NOT_FOUND", message });
+  if (lowerMessage.includes("not found") || lowerMessage.includes("404")) {
+    return new TRPCError({ code: "NOT_FOUND", message, cause: error });
   }
-  if (message.includes("Invalid") || message.includes("Missing")) {
-    return new TRPCError({ code: "BAD_REQUEST", message });
+  if (lowerMessage.includes("unauthorized") || lowerMessage.includes("401")) {
+    return new TRPCError({ code: "UNAUTHORIZED", message, cause: error });
   }
-  if (message.includes("unauthorized") || message.includes("401")) {
-    return new TRPCError({ code: "UNAUTHORIZED", message });
+  if (
+    lowerMessage.includes("forbidden") ||
+    lowerMessage.includes("403") ||
+    lowerMessage.includes("missing required scopes")
+  ) {
+    return new TRPCError({ code: "FORBIDDEN", message, cause: error });
   }
-  if (message.includes("forbidden") || message.includes("403")) {
-    return new TRPCError({ code: "FORBIDDEN", message });
+  if (lowerMessage.includes("invalid") || lowerMessage.includes("missing")) {
+    return new TRPCError({ code: "BAD_REQUEST", message, cause: error });
   }
 
-  return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
+  return new TRPCError({ code: "INTERNAL_SERVER_ERROR", message, cause: error });
 }

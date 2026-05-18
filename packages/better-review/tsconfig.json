@@ -1,9 +1,10 @@
 {
   "compilerOptions": {
     "target": "esnext",
+    "lib": ["ESNext", "DOM"],
     "module": "ES2022",
     "moduleResolution": "bundler",
-    "types": ["bun-types"],
+    "types": ["node"],
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
     "esModuleInterop": true,

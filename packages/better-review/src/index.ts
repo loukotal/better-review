@@ -1,12 +1,17 @@
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+import { serve, type ServerType } from "@hono/node-server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { Effect } from "effect";
+import { Hono, type Context } from "hono";
 
 import type { ReviewSessionAnnotation } from "@better-review/shared";
 import { isGitHubAssetId } from "@better-review/shared/github-asset";
 
 import { ReviewSessionService } from "./agent-sessions";
+import { runCommand } from "./command";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
 import { GhService, type PrStatus } from "./gh/gh";
 import { getErrorMessage } from "./response";
@@ -20,7 +25,8 @@ import { appRouter } from "./trpc/routers";
 // =============================================================================
 
 const isProduction = process.env.NODE_ENV === "production";
-const staticDir = path.resolve(import.meta.dir, "../../web/dist");
+const currentDir = fileURLToPath(new URL(".", import.meta.url));
+const staticDir = path.resolve(currentDir, "../../web/dist");
 const webPort = process.env.WEB_PORT ?? "3000";
 const allowedDevOrigins = new Set([`http://localhost:${webPort}`, `http://127.0.0.1:${webPort}`]);
 
@@ -45,6 +51,67 @@ function resolveStaticFilePath(urlPathname: string): string | null {
   return abs;
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function getContentType(filePath: string): string | undefined {
+  const extension = path.extname(filePath).toLowerCase();
+  switch (extension) {
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+    case ".mjs":
+      return "text/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".json":
+    case ".map":
+      return "application/json; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".ico":
+      return "image/x-icon";
+    case ".wasm":
+      return "application/wasm";
+    case ".woff":
+      return "font/woff";
+    case ".woff2":
+      return "font/woff2";
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    default:
+      return undefined;
+  }
+}
+
+async function fileResponse(filePath: string, headers: HeadersInit = {}): Promise<Response> {
+  const responseHeaders = new Headers(headers);
+  const contentType = getContentType(filePath);
+  if (contentType && !responseHeaders.has("Content-Type")) {
+    responseHeaders.set("Content-Type", contentType);
+  }
+
+  return new Response(await readFile(filePath), { headers: responseHeaders });
+}
+
 async function serveStatic(pathname: string): Promise<Response> {
   if (pathname === "/api" || pathname.startsWith("/api/")) {
     return new Response("Not Found", { status: 404 });
@@ -52,16 +119,12 @@ async function serveStatic(pathname: string): Promise<Response> {
 
   const resolved = resolveStaticFilePath(pathname);
   if (resolved) {
-    const file = Bun.file(resolved);
-
-    if (await file.exists()) {
-      return new Response(file);
+    if (await fileExists(resolved)) {
+      return fileResponse(resolved);
     }
   }
 
-  return new Response(Bun.file(`${staticDir}/index.html`), {
-    headers: { "Content-Type": "text/html" },
-  });
+  return fileResponse(path.join(staticDir, "index.html"), { "Content-Type": "text/html" });
 }
 
 function getCorsHeaders(req: Request): HeadersInit {
@@ -104,12 +167,17 @@ function loggedHandler<T extends (req: Request) => Response | Promise<Response>>
     const method = req.method;
     const path = url.pathname + url.search;
     const start = Date.now();
+    const quietPendingResultPoll =
+      method === "GET" && /^\/api\/sessions\/[^/]+\/result(?:\?|$)/.test(path);
 
-    activeRequests.set(id, { method, path, start });
-    console.log(`[req] --> ${method} ${path} (id=${id})`);
+    if (!quietPendingResultPoll) {
+      activeRequests.set(id, { method, path, start });
+      console.log(`[req] --> ${method} ${path} (id=${id})`);
+    }
 
     const cleanup = (status: number) => {
       activeRequests.delete(id);
+      if (quietPendingResultPoll && status === 204) return;
       const duration = Date.now() - start;
       console.log(`[req] <-- ${method} ${path} ${status} ${duration}ms (id=${id})`);
     };
@@ -161,6 +229,91 @@ function logRoutes<T extends Record<string, unknown>>(routes: T): T {
   return wrapped as T;
 }
 
+type FetchHandler = (req: Request) => Response | Promise<Response>;
+
+function runHandler(handler: FetchHandler) {
+  return (c: Context) => handler(c.req.raw);
+}
+
+function registerRoutes(app: Hono, routes: Record<string, unknown>): void {
+  for (const [pattern, route] of Object.entries(routes)) {
+    if (typeof route === "function") {
+      app.all(pattern, runHandler(route as FetchHandler));
+      continue;
+    }
+
+    if (route && typeof route === "object") {
+      for (const [method, fn] of Object.entries(route as Record<string, unknown>)) {
+        if (typeof fn === "function") {
+          app.on(method, pattern, runHandler(fn as FetchHandler));
+        }
+      }
+      app.all(pattern, () => new Response("Method Not Allowed", { status: 405 }));
+    }
+  }
+}
+
+function createApp(routes: Record<string, unknown>): Hono {
+  const app = new Hono();
+
+  registerRoutes(app, routes);
+
+  app.notFound((c) => {
+    if (isProduction) {
+      return serveStatic(new URL(c.req.raw.url).pathname);
+    }
+
+    return new Response("Not Found", { status: 404 });
+  });
+
+  app.onError((error) => {
+    console.error("[server] Request failed:", error);
+    return new Response("Internal Server Error", { status: 500 });
+  });
+
+  return app;
+}
+
+async function startServer(app: Hono, hostname: string, port: number): Promise<ServerType> {
+  const server = await new Promise<ServerType>((resolve, reject) => {
+    let didListen = false;
+    let server: ServerType;
+
+    const onError = (error: Error) => {
+      if (didListen) {
+        console.error("[server] Server error:", error);
+        return;
+      }
+
+      reject(error);
+    };
+
+    server = serve(
+      {
+        fetch: app.fetch,
+        hostname,
+        port,
+      },
+      () => {
+        didListen = true;
+        server.off("error", onError);
+        resolve(server);
+      },
+    );
+
+    server.once("error", onError);
+  });
+
+  if ("keepAliveTimeout" in server) {
+    server.keepAliveTimeout = 255_000;
+  }
+  if ("requestTimeout" in server) {
+    server.requestTimeout = 255_000;
+  }
+
+  return server;
+}
+
 // Periodically log requests that have been running for too long
 const STALL_CHECK_INTERVAL = 10_000; // 10s
 const STALL_THRESHOLD = 15_000; // 15s
@@ -195,29 +348,30 @@ async function gitShowFile(
   ref: string,
   filePath: string,
 ): Promise<string | null> {
-  const process = Bun.spawn(["git", "-C", repoRoot, "show", `${ref}:${filePath}`], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const [stdout, code] = await Promise.all([new Response(process.stdout).text(), process.exited]);
-  return code === 0 ? stdout : null;
+  const { stdout, exitCode } = await runCommand("git", [
+    "-C",
+    repoRoot,
+    "show",
+    `${ref}:${filePath}`,
+  ]);
+  return exitCode === 0 ? stdout : null;
 }
 
 async function gitShowIndexFile(repoRoot: string, filePath: string): Promise<string | null> {
-  const process = Bun.spawn(["git", "-C", repoRoot, "show", `:${filePath}`], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-  const [stdout, code] = await Promise.all([new Response(process.stdout).text(), process.exited]);
-  return code === 0 ? stdout : null;
+  const { stdout, exitCode } = await runCommand("git", ["-C", repoRoot, "show", `:${filePath}`]);
+  return exitCode === 0 ? stdout : null;
 }
 
 async function readWorkingTreeFile(repoRoot: string, filePath: string): Promise<string | null> {
-  const file = Bun.file(path.join(repoRoot, filePath));
-  if (!(await file.exists())) return null;
-  return await file.text();
+  const resolved = path.join(repoRoot, filePath);
+  try {
+    return await readFile(resolved, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 type RouteServices = {
@@ -244,7 +398,11 @@ const createRoutes = ({ gh, diffCache, prContext, reviewSessions }: RouteService
 
       try {
         // Get GitHub token using gh CLI
-        const token = await Bun.$`gh auth token`.text().then((t) => t.trim());
+        const tokenResult = await runCommand("gh", ["auth", "token"]);
+        if (tokenResult.exitCode !== 0) {
+          throw new Error(tokenResult.stderr.trim() || "gh auth token failed");
+        }
+        const token = tokenResult.stdout.trim();
 
         const response = await fetch(githubUrl, {
           headers: {
@@ -463,6 +621,10 @@ ${fileStats.join("\n")}`;
     },
   },
 
+  "/api/sessions/healthcheck": {
+    GET: () => Response.json({ ok: true }),
+  },
+
   "/api/sessions": {
     POST: async (req: Request) => {
       try {
@@ -528,7 +690,7 @@ ${fileStats.join("\n")}`;
         if (resource === "result") {
           const result = await runtime.runPromise(reviewSessions.getResult(sessionId));
           if (!result) {
-            return Response.json({ error: "Result not found" }, { status: 404 });
+            return new Response(null, { status: 204 });
           }
           return Response.json(result);
         }
@@ -729,26 +891,23 @@ const main = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  const routes = logRoutes(createRoutes({ gh, diffCache, prContext, reviewSessions }));
+  const app = createApp(logRoutes(createRoutes({ gh, diffCache, prContext, reviewSessions })));
 
-  const server = Bun.serve({
-    // Local-first: avoid exposing an API that can shell out to `gh` on the LAN by default.
-    hostname: process.env.API_HOST ?? "127.0.0.1",
-    port: Number(process.env.API_PORT ?? 3001),
-    routes,
-    idleTimeout: 255,
-    // Fallback for static files in production
-    fetch: isProduction ? (req) => serveStatic(new URL(req.url).pathname) : undefined,
-  });
-
+  // Local-first: avoid exposing an API that can shell out to `gh` on the LAN by default.
   const host = process.env.API_HOST ?? "127.0.0.1";
-  yield* Effect.log(`API server running at http://${host}:${server.port}`);
+  const server = yield* Effect.tryPromise(() =>
+    startServer(app, host, Number(process.env.API_PORT ?? 3001)),
+  );
+  const address = server.address();
+  const actualPort =
+    typeof address === "object" && address ? address.port : (process.env.API_PORT ?? 3001);
+  yield* Effect.log(`API server running at http://${host}:${actualPort}`);
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       console.log("[Shutdown] Stopping server...");
       clearInterval(stallChecker);
-      server.stop();
+      server.close();
     }),
   );
 

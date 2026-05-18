@@ -41,7 +41,8 @@ The custom instructions are loaded automatically when starting a review session 
 
 ## Prerequisites
 
-- bun
+- Node.js 24+
+- pnpm
 - [gh cli](https://cli.github.com/) & be logged in
 - [OpenCode](https://opencode.ai/)
 
@@ -49,8 +50,8 @@ The custom instructions are loaded automatically when starting a review session 
 
 Currently you need to pull the repo and run it locally.
 
-1. `bun install`
-2. `bun run dev` or `bun start`
+1. `pnpm install`
+2. `pnpm dev` or `pnpm start`
 
 You can update ports with `API_PORT`, `WEB_PORT` (for dev), `OPENCODE_PORT` environment variables. Defaults are `3000` and `3001`; OpenCode uses a random local port unless you explicitly set `OPENCODE_PORT`.
 
@@ -60,10 +61,10 @@ The repo now exposes a local `better-review` CLI entrypoint for agent review ses
 
 Examples:
 
-1. `bun run index.ts plan < AGENT_REVIEW_PLAN.md`
-2. `bun run index.ts last --file message.md`
-3. `bun run index.ts review`
-4. `bun run index.ts open-session <session-id>`
+1. `pnpm exec tsx index.ts plan < AGENT_REVIEW_PLAN.md`
+2. `pnpm exec tsx index.ts last --file message.md`
+3. `pnpm exec tsx index.ts review`
+4. `pnpm exec tsx index.ts open-session <session-id>`
 
 Current flow:
 
@@ -74,7 +75,7 @@ Current flow:
   - `feedbackMarkdown` for mode-specific exported feedback
   - `agentMessage` for a ready-to-send runtime-facing message
 
-For now, keep the app running with `bun run dev` or `bun start` before using the CLI.
+For now, keep the app running with `pnpm dev` or `pnpm start` before using the CLI.
 
 ### Local Command Install
 
@@ -84,7 +85,7 @@ To expose `better-review` as a machine-local command for other repos and plugins
 ./scripts/install-local-command.sh
 ```
 
-This installs a launcher at `~/.local/bin/better-review` that runs this repo's `index.ts` via `bun`.
+This installs a launcher at `~/.local/bin/better-review` that runs this repo's `index.ts` via `pnpm exec tsx`.
 
 ### OpenCode Plugin Example
 
@@ -113,7 +114,7 @@ Copy them into `.opencode/commands/` in the target repo and rename them as desir
 - [ ] handle "project knowledge base"
 - [ ] simpler marks for warning/info UI elements & files (just use filenames instead of \[\[\]\])
 - [ ] better responsive ui
-- [ ] make it executable using bun
+- [ ] make the CLI install flow more ergonomic
 - [ ] start web server on ".local" domain(?)
 - ~[ ] integrate with other coding agents(?)~
 - [x] load opencode sessions based on PR link - allow switching between sessions if multiple exist
