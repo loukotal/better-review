@@ -97,6 +97,52 @@ type ReviewSessionWithContext = ReviewSession & {
   prUrl?: string | null;
 };
 
+interface AgentReviewPanelVisibility {
+  files: boolean;
+  review: boolean;
+}
+
+const AGENT_REVIEW_PANELS_STORAGE_KEY = "agent-review-panel-visibility";
+const AGENT_REVIEW_FOCUS_MODE_STORAGE_KEY = "agent-review-focus-mode";
+
+function loadPanelVisibility(): AgentReviewPanelVisibility {
+  try {
+    const stored = localStorage.getItem(AGENT_REVIEW_PANELS_STORAGE_KEY);
+    if (stored) {
+      return { files: true, review: true, ...JSON.parse(stored) };
+    }
+  } catch {}
+
+  return { files: true, review: true };
+}
+
+function savePanelVisibility(visibility: AgentReviewPanelVisibility): void {
+  try {
+    localStorage.setItem(AGENT_REVIEW_PANELS_STORAGE_KEY, JSON.stringify(visibility));
+  } catch {}
+}
+
+function loadFocusMode(): boolean {
+  try {
+    return localStorage.getItem(AGENT_REVIEW_FOCUS_MODE_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveFocusMode(enabled: boolean): void {
+  try {
+    localStorage.setItem(AGENT_REVIEW_FOCUS_MODE_STORAGE_KEY, String(enabled));
+  } catch {}
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
+}
+
 export default function AgentReviewPage() {
   const params = useParams<{ sessionId: string }>();
   const [feedback, setFeedback] = createSignal("");
@@ -113,6 +159,9 @@ export default function AgentReviewPage() {
   const [submitError, setSubmitError] = createSignal<string | null>(null);
   const [resultVersion, setResultVersion] = createSignal(0);
   const [autoCloseCountdown, setAutoCloseCountdown] = createSignal<number | null>(null);
+  const [panelVisibility, setPanelVisibility] =
+    createSignal<AgentReviewPanelVisibility>(loadPanelVisibility());
+  const [focusMode, setFocusMode] = createSignal(loadFocusMode());
   let contentRef: HTMLDivElement | undefined;
   let composerRef: HTMLDivElement | undefined;
   let composerTextareaRef: HTMLTextAreaElement | undefined;
@@ -142,6 +191,28 @@ export default function AgentReviewPage() {
   });
 
   const isDiffSession = createMemo(() => session()?.payload.kind === "diff");
+
+  const showFilesPanel = createMemo(
+    () => isDiffSession() && panelVisibility().files && !focusMode(),
+  );
+
+  const showReviewPanel = createMemo(() => panelVisibility().review && !focusMode());
+
+  const togglePanel = (panel: keyof AgentReviewPanelVisibility) => {
+    const next = {
+      ...panelVisibility(),
+      [panel]: !panelVisibility()[panel],
+    };
+
+    setPanelVisibility(next);
+    savePanelVisibility(next);
+  };
+
+  const toggleFocusMode = () => {
+    const next = !focusMode();
+    setFocusMode(next);
+    saveFocusMode(next);
+  };
 
   const availableDiffVariants = createMemo(() => {
     const value = session();
@@ -355,21 +426,40 @@ export default function AgentReviewPage() {
     dismissComposer(false);
   };
 
-  const handleEscape = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (
+      event.key.toLowerCase() === "f" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !isEditableTarget(event.target)
+    ) {
+      event.preventDefault();
+      toggleFocusMode();
+      return;
+    }
+
+    if (event.key === "Escape" && (composerOpen() || draftQuote())) {
+      event.preventDefault();
       dismissComposer(true);
+      return;
+    }
+
+    if (event.key === "Escape" && focusMode()) {
+      event.preventDefault();
+      toggleFocusMode();
     }
   };
 
   onMount(() => {
     document.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleEscape);
+    window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", clearDraftSelection);
   });
 
   onCleanup(() => {
     document.removeEventListener("pointerdown", handlePointerDown);
-    window.removeEventListener("keydown", handleEscape);
+    window.removeEventListener("keydown", handleKeyDown);
     window.removeEventListener("resize", clearDraftSelection);
   });
 
@@ -387,36 +477,96 @@ export default function AgentReviewPage() {
       >
         {(loadedSession) => (
           <div class="flex flex-col h-screen">
-            <header class="border-b border-border bg-bg-surface flex-shrink-0">
-              <div class="flex items-center justify-between gap-4 px-4 py-3">
-                <div class="flex items-center gap-3 min-w-0">
-                  <h1 class="text-sm text-text truncate">{loadedSession().title}</h1>
-                  <Badge variant={statusVariant(loadedSession().status)}>
-                    {loadedSession().status}
-                  </Badge>
-                  <Badge variant="neutral">{loadedSession().mode}</Badge>
+            <Show when={!focusMode()}>
+              <header class="border-b border-border bg-bg-surface flex-shrink-0">
+                <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <h1 class="text-sm text-text truncate">{loadedSession().title}</h1>
+                    <Badge variant={statusVariant(loadedSession().status)}>
+                      {loadedSession().status}
+                    </Badge>
+                    <Badge variant="neutral">{loadedSession().mode}</Badge>
+                  </div>
+                  <div class="flex flex-wrap items-center justify-end gap-3 text-xs text-text-faint flex-shrink-0">
+                    <div class="flex items-center gap-1 border-r border-border pr-3">
+                      <Show when={isDiffSession()}>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          class={panelVisibility().files ? "border-primary/50" : "text-text-faint"}
+                          title="Toggle file panel"
+                          onClick={() => togglePanel("files")}
+                        >
+                          Files
+                        </Button>
+                      </Show>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        class={panelVisibility().review ? "border-primary/50" : "text-text-faint"}
+                        title="Toggle review panel"
+                        onClick={() => togglePanel("review")}
+                      >
+                        Review
+                      </Button>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      title="Enter focus mode (F)"
+                      onClick={toggleFocusMode}
+                    >
+                      Focus
+                    </Button>
+                    <span>Created {formatTimestamp(loadedSession().createdAt)}</span>
+                    <span class="text-text-faint">·</span>
+                    <span>{loadedSession().origin}</span>
+                    <Show when={loadedSession().cwd}>
+                      {(cwd) => (
+                        <>
+                          <span class="text-text-faint">·</span>
+                          <span class="truncate max-w-48">{cwd()}</span>
+                        </>
+                      )}
+                    </Show>
+                  </div>
                 </div>
-                <div class="flex items-center gap-3 text-xs text-text-faint flex-shrink-0">
-                  <span>Created {formatTimestamp(loadedSession().createdAt)}</span>
-                  <span class="text-text-faint">·</span>
-                  <span>{loadedSession().origin}</span>
-                  <Show when={loadedSession().cwd}>
-                    {(cwd) => (
-                      <>
-                        <span class="text-text-faint">·</span>
-                        <span class="truncate max-w-48">{cwd()}</span>
-                      </>
-                    )}
-                  </Show>
+              </header>
+            </Show>
+
+            <Show when={focusMode()}>
+              <div class="flex items-center justify-between px-3 py-1.5 bg-bg-surface border-b border-accent/30 flex-shrink-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-[10px] text-accent font-mono uppercase tracking-wide">
+                    Focus mode
+                  </span>
+                  <span class="text-xs text-text-faint">
+                    Side panels hidden. Press Esc or F to exit.
+                  </span>
                 </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  class="text-accent hover:text-accent"
+                  title="Exit focus mode (F or Esc)"
+                  onClick={toggleFocusMode}
+                >
+                  Exit <span class="text-accent/60 ml-1 font-mono">F</span>
+                </Button>
               </div>
-            </header>
+            </Show>
 
             <Show when={isDiffSession()}>
               <div class="flex flex-1 min-h-0">
-                <div class="shrink-0 border-r border-border">
-                  <FileTreePanel files={files()} onFileSelect={scrollToFile} />
-                </div>
+                <Show when={showFilesPanel()}>
+                  <div class="shrink-0 border-r border-border">
+                    <FileTreePanel files={files()} onFileSelect={scrollToFile} />
+                  </div>
+                </Show>
 
                 <div class="flex-1 min-w-0 flex flex-col">
                   <Show when={availableDiffVariants().length > 0}>
@@ -458,28 +608,30 @@ export default function AgentReviewPage() {
                       />
                     </div>
 
-                    <div class="w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface">
-                      <div class="flex-1 overflow-y-auto">
-                        <AnnotationsPanel
-                          annotations={annotations()}
-                          result={result}
-                          isDiffSession={true}
-                          onRemove={removeAnnotation}
-                        />
+                    <Show when={showReviewPanel()}>
+                      <div class="w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface">
+                        <div class="flex-1 overflow-y-auto">
+                          <AnnotationsPanel
+                            annotations={annotations()}
+                            result={result}
+                            isDiffSession={true}
+                            onRemove={removeAnnotation}
+                          />
+                        </div>
+                        <div class="border-t border-border flex-shrink-0">
+                          <SubmitBar
+                            feedback={feedback()}
+                            setFeedback={setFeedback}
+                            submitting={submitting()}
+                            submitError={submitError()}
+                            canSubmit={canSubmit()}
+                            result={result}
+                            onSubmit={submit}
+                            autoCloseCountdown={autoCloseCountdown()}
+                          />
+                        </div>
                       </div>
-                      <div class="border-t border-border flex-shrink-0">
-                        <SubmitBar
-                          feedback={feedback()}
-                          setFeedback={setFeedback}
-                          submitting={submitting()}
-                          submitError={submitError()}
-                          canSubmit={canSubmit()}
-                          result={result}
-                          onSubmit={submit}
-                          autoCloseCountdown={autoCloseCountdown()}
-                        />
-                      </div>
-                    </div>
+                    </Show>
                   </div>
                 </div>
               </div>
@@ -503,28 +655,30 @@ export default function AgentReviewPage() {
                   </div>
                 </div>
 
-                <div class="w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface">
-                  <div class="flex-1 overflow-y-auto">
-                    <AnnotationsPanel
-                      annotations={annotations()}
-                      result={result}
-                      isDiffSession={false}
-                      onRemove={removeAnnotation}
-                    />
+                <Show when={showReviewPanel()}>
+                  <div class="w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface">
+                    <div class="flex-1 overflow-y-auto">
+                      <AnnotationsPanel
+                        annotations={annotations()}
+                        result={result}
+                        isDiffSession={false}
+                        onRemove={removeAnnotation}
+                      />
+                    </div>
+                    <div class="border-t border-border flex-shrink-0">
+                      <SubmitBar
+                        feedback={feedback()}
+                        setFeedback={setFeedback}
+                        submitting={submitting()}
+                        submitError={submitError()}
+                        canSubmit={canSubmit()}
+                        result={result}
+                        onSubmit={submit}
+                        autoCloseCountdown={autoCloseCountdown()}
+                      />
+                    </div>
                   </div>
-                  <div class="border-t border-border flex-shrink-0">
-                    <SubmitBar
-                      feedback={feedback()}
-                      setFeedback={setFeedback}
-                      submitting={submitting()}
-                      submitError={submitError()}
-                      canSubmit={canSubmit()}
-                      result={result}
-                      onSubmit={submit}
-                      autoCloseCountdown={autoCloseCountdown()}
-                    />
-                  </div>
-                </div>
+                </Show>
               </div>
             </Show>
           </div>
