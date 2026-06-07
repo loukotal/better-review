@@ -19,6 +19,8 @@ interface SelectedModel extends ModelEntry {
 }
 
 interface ModelSelectorProps {
+  align?: "left" | "right";
+  class?: string;
   disabled?: boolean;
 }
 
@@ -190,7 +192,7 @@ export function ModelSelector(props: ModelSelectorProps) {
   };
 
   return (
-    <div ref={(el) => (containerRef = el)} class="relative">
+    <div ref={(el) => (containerRef = el)} class={`relative ${props.class ?? ""}`}>
       {/* Current selection button */}
       <button
         type="button"
@@ -207,7 +209,13 @@ export function ModelSelector(props: ModelSelectorProps) {
 
       {/* Dropdown */}
       <Show when={isOpen()}>
-        <div class="absolute top-full left-0 mt-1 w-80 bg-bg-surface border border-border shadow-lg z-50">
+        <div
+          class="absolute top-full mt-1 w-80 max-w-[calc(100vw-1rem)] bg-bg-surface border border-border shadow-lg z-50"
+          classList={{
+            "left-0": props.align !== "right",
+            "right-0": props.align === "right",
+          }}
+        >
           {/* Search input */}
           <div class="p-2 border-b border-border">
             <input

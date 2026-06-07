@@ -14,7 +14,7 @@ import {
   on,
 } from "solid-js";
 
-import { SYSTEM_CONTEXT_MARKER, type StoredSession } from "@better-review/shared";
+import { type StoredSession } from "@better-review/shared";
 
 import { AnnotationBlock } from "./components/AnnotationBlock";
 import { FileLink } from "./components/FileLink";
@@ -23,7 +23,7 @@ import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { SessionSelector } from "./components/SessionSelector";
 import { Button } from "./design-system";
 import type { DiffTheme } from "./diff/types";
-import { useStreamingChat, type StreamingMessage, type ToolCall } from "./hooks/useStreamingChat";
+import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { CheckIcon } from "./icons/check-icon";
 import { CopyIcon } from "./icons/copy-icon";
 import { SpinnerIcon } from "./icons/spinner-icon";
@@ -207,7 +207,7 @@ export function ChatPanel(props: ChatPanelProps) {
     setSessionError(null);
 
     try {
-      const data = await trpc.opencode.getOrCreateSession.mutate({
+      const data = await trpc.flueReview.getOrCreateSession.mutate({
         prUrl: props.prUrl,
         prNumber: props.prNumber,
         repoOwner: props.repoOwner,
@@ -248,82 +248,28 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function loadMessages(sid: string) {
     try {
-      const data = await trpc.opencode.messages.query({ sessionId: sid });
-
-      if (data.messages && Array.isArray(data.messages)) {
-        const transformed = transformOpenCodeMessages(data.messages);
-        chat.loadExistingMessages(transformed);
-      } else {
-        chat.loadExistingMessages([]);
-      }
+      const data = await trpc.flueReview.messages.query({ sessionId: sid });
+      chat.loadExistingMessages(data.messages);
     } catch (err) {
       console.error("Failed to load messages:", err);
       chat.loadExistingMessages([]);
     }
   }
 
-  /**
-   * Transform OpenCode messages to our StreamingMessage format
-   * OpenCode SDK returns: Array<{ info: Message; parts: Array<Part> }>
-   */
-  function transformOpenCodeMessages(messages: unknown[]): StreamingMessage[] {
-    const result: StreamingMessage[] = [];
-
-    // OpenCode returns { info: Message, parts: Part[] } for each message
-    for (const item of messages as Array<{
-      info: {
-        id: string;
-        role: "user" | "assistant";
-        time?: { created: number };
-      };
-      parts: Array<{ type: string; text?: string }>;
-    }>) {
-      const msg = item.info;
-      const parts = item.parts || [];
-
-      // Skip messages with no parts
-      if (parts.length === 0) continue;
-
-      // Combine text parts into content
-      const textParts = parts.filter((p) => p.type === "text" && p.text);
-      const content = textParts.map((p) => p.text).join("");
-      const reasoningParts = parts.filter((p) => p.type === "reasoning" && p.text);
-      const reasoning = reasoningParts.map((p) => p.text).join("");
-
-      // Skip empty messages
-      if (!content.trim() && !reasoning.trim()) continue;
-
-      // Skip system-injected context messages (identified by marker prefix)
-      if (msg.role === "user" && content.startsWith(SYSTEM_CONTEXT_MARKER)) {
-        continue;
-      }
-
-      result.push({
-        id: msg.id,
-        role: msg.role,
-        content,
-        reasoning: msg.role === "assistant" && reasoning.trim() ? reasoning : undefined,
-        toolCalls: [], // Historical tool calls aren't critical for display
-        isStreaming: false,
-        timestamp: msg.time?.created || Date.now(),
-      });
-    }
-
-    return result;
-  }
-
-  async function sendMessage(e: Event, useReviewAgent = false) {
-    e.preventDefault();
-
-    const message = input().trim();
-    if (!message || chat.isStreaming() || !sessionId()) return;
+  async function submitMessage(message: string) {
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || chat.isStreaming() || !sessionId()) return;
 
     setInput("");
-    await chat.sendMessage(message, {
-      agent: useReviewAgent ? "review" : undefined,
+    await chat.sendMessage(trimmedMessage, {
       reviewMode: props.reviewMode,
       commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
     });
+  }
+
+  async function sendMessage(e: Event) {
+    e.preventDefault();
+    await submitMessage(input());
   }
 
   function handleQuickPrompt(prompt: string) {
@@ -333,11 +279,7 @@ export function ChatPanel(props: ChatPanelProps) {
   function startReview() {
     const reviewPrompt =
       "Please analyze this PR and provide a structured review with file order and annotations.";
-    setInput(reviewPrompt);
-    setTimeout(() => {
-      const fakeEvent = new Event("submit", { cancelable: true });
-      sendMessage(fakeEvent, true);
-    }, 50);
+    void submitMessage(reviewPrompt);
   }
 
   function handleAbort() {
@@ -349,25 +291,19 @@ export function ChatPanel(props: ChatPanelProps) {
     if (!props.prUrl || newSessionId === sessionId()) return;
 
     try {
-      await trpc.sessions.switch.mutate({
+      await trpc.flueReview.switch.mutate({
         prUrl: props.prUrl,
         sessionId: newSessionId,
       });
 
-      // Load messages for the new session BEFORE switching
-      const messagesData = await trpc.opencode.messages.query({
+      const data = await trpc.flueReview.messages.query({
         sessionId: newSessionId,
       });
-
-      let newMessages: Parameters<typeof chat.loadExistingMessages>[0] = [];
-      if (messagesData.messages && Array.isArray(messagesData.messages)) {
-        newMessages = transformOpenCodeMessages(messagesData.messages);
-      }
 
       // Update session ID and messages atomically
       batch(() => {
         setSessionId(newSessionId);
-        chat.loadExistingMessages(newMessages);
+        chat.loadExistingMessages(data.messages);
       });
     } catch (err) {
       console.error("Failed to switch session:", err);
@@ -378,7 +314,7 @@ export function ChatPanel(props: ChatPanelProps) {
     if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return false;
 
     try {
-      const data = await trpc.sessions.create.mutate({
+      const data = await trpc.flueReview.create.mutate({
         prUrl: props.prUrl,
         prNumber: props.prNumber,
         repoOwner: props.repoOwner,
@@ -411,7 +347,7 @@ export function ChatPanel(props: ChatPanelProps) {
     if (!props.prUrl) return;
 
     try {
-      const data = await trpc.sessions.hide.mutate({
+      const data = await trpc.flueReview.hide.mutate({
         prUrl: props.prUrl,
         sessionId: hiddenSessionId,
       });
@@ -729,10 +665,10 @@ export function ChatPanel(props: ChatPanelProps) {
     return (
       <details
         open={reasoningProps.streaming}
-        class="mb-2 border-l-2 border-accent/40 bg-bg px-2 py-1.5 text-text-muted"
+        class="mb-2 border border-accent/25 bg-accent/10 px-2.5 py-1.5 text-text-muted"
       >
         <summary class="cursor-pointer select-none text-xs font-medium text-text-faint">
-          Thinking
+          Reasoning
         </summary>
         <div class="mt-1 whitespace-pre-wrap text-xs leading-relaxed wrap-break-word">
           {reasoningProps.content}
@@ -773,14 +709,55 @@ export function ChatPanel(props: ChatPanelProps) {
       }
     };
 
+    const hasMetadata = () =>
+      Object.keys(tool.input).length > 0 ||
+      Boolean(tool.output) ||
+      Boolean(tool.error) ||
+      Boolean(tool.callId);
+
     return (
-      <div class="text-sm px-2 py-1 bg-bg border border-border mb-1 flex items-center gap-2">
-        <span class={statusColor()}>{statusIcon()}</span>
-        <span class="text-text-muted">{tool.title || tool.tool}</span>
-        <Show when={tool.status === "running"}>
-          <span class="animate-pulse">...</span>
+      <details
+        class="text-sm px-2 py-1 bg-bg border border-border mb-1"
+        open={tool.status === "running"}
+      >
+        <summary class="cursor-pointer list-none flex items-center gap-2">
+          <span class={statusColor()}>{statusIcon()}</span>
+          <span class="text-text-muted">{tool.title || tool.tool}</span>
+          <span class="text-text-faint text-xs">{tool.tool}</span>
+          <Show when={tool.status === "running"}>
+            <span class="animate-pulse">...</span>
+          </Show>
+        </summary>
+        <Show when={hasMetadata()}>
+          <div class="mt-1 space-y-1 border-t border-border pt-1 font-mono text-[11px] leading-relaxed text-text-faint">
+            <div>
+              <span class="text-text-muted">call:</span> {tool.callId}
+            </div>
+            <Show when={Object.keys(tool.input).length > 0}>
+              <div>
+                <div class="text-text-muted">input:</div>
+                <pre class="overflow-x-auto whitespace-pre-wrap">
+                  {JSON.stringify(tool.input, null, 2)}
+                </pre>
+              </div>
+            </Show>
+            <Show when={tool.output}>
+              <div>
+                <div class="text-text-muted">output:</div>
+                <pre class="max-h-40 overflow-auto whitespace-pre-wrap">{tool.output}</pre>
+              </div>
+            </Show>
+            <Show when={tool.error}>
+              <div>
+                <div class="text-error">error:</div>
+                <pre class="max-h-40 overflow-auto whitespace-pre-wrap text-error">
+                  {tool.error}
+                </pre>
+              </div>
+            </Show>
+          </div>
         </Show>
-      </div>
+      </details>
     );
   }
 
@@ -919,13 +896,11 @@ export function ChatPanel(props: ChatPanelProps) {
                 {width() < 300 ? "+New" : "+ New"}
               </button>
             </div>
-            <ModelSelector disabled={chat.isStreaming()} />
-          </div>
-        </Show>
-        {/* Model selector when no session yet */}
-        <Show when={!sessionId() && props.prUrl}>
-          <div class="flex items-center justify-end mt-1.5">
-            <ModelSelector disabled={chat.isStreaming()} />
+            <ModelSelector
+              align="right"
+              disabled={chat.isStreaming() || initializing()}
+              class="shrink-0"
+            />
           </div>
         </Show>
       </div>
@@ -1095,7 +1070,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
       {/* Input */}
       <div class="border-t border-border p-2">
-        <form onSubmit={(e) => sendMessage(e, false)}>
+        <form onSubmit={sendMessage}>
           <div class="flex flex-col gap-2">
             <textarea
               value={input()}
@@ -1103,7 +1078,7 @@ export function ChatPanel(props: ChatPanelProps) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  sendMessage(e, false);
+                  sendMessage(e);
                 }
               }}
               placeholder={
@@ -1136,28 +1111,6 @@ export function ChatPanel(props: ChatPanelProps) {
                       "bg-text-faint": !sessionId(),
                     }}
                   />
-                  <span class="text-[9px] text-text-faint font-mono">
-                    {(() => {
-                      if (!sessionId()) return "Offline";
-                      const status = chat.connectionStatus();
-                      if (status === "connected") return "Connected";
-                      if (status === "degraded") return "Degraded";
-                      if (status === "reconnecting") return "Reconnecting";
-                      if (status === "connecting") return "Connecting";
-                      return "Offline";
-                    })()}
-                  </span>
-                  <Show when={chat.upstreamStatus()}>
-                    <span class="text-[9px] text-text-faint/80 font-mono">
-                      upstream: {chat.upstreamStatus()}
-                    </span>
-                  </Show>
-                  <span class="text-[9px] text-text-faint/80 font-mono">
-                    scope:{" "}
-                    {props.reviewMode === "commit" && props.commitSha
-                      ? `commit ${props.commitSha.slice(0, 7)}`
-                      : "full pr"}
-                  </span>
                 </div>
                 {/* Quick prompts */}
                 <Show when={chat.messages().length > 0}>

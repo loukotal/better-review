@@ -1,63 +1,5 @@
-import { createSignal, onCleanup, createEffect, batch } from "solid-js";
-
-import { getApiClientId } from "../lib/apiAuth";
-import { trpc } from "../lib/trpc";
-
-// =============================================================================
-// Types (matches backend StreamEvent)
-// =============================================================================
-
-export type StreamEvent =
-  | { type: "text"; sessionId: string; delta: string; messageId: string; partId: string }
-  | { type: "reasoning"; sessionId: string; delta: string; messageId: string; partId: string }
-  | {
-      type: "tool-start";
-      sessionId: string;
-      tool: string;
-      callId: string;
-      input: Record<string, unknown>;
-      messageId: string;
-      partId: string;
-    }
-  | {
-      type: "tool-running";
-      sessionId: string;
-      tool: string;
-      callId: string;
-      title?: string;
-      messageId: string;
-      partId: string;
-    }
-  | {
-      type: "tool-done";
-      sessionId: string;
-      tool: string;
-      callId: string;
-      output: string;
-      title: string;
-      messageId: string;
-      partId: string;
-    }
-  | {
-      type: "tool-error";
-      sessionId: string;
-      tool: string;
-      callId: string;
-      error: string;
-      messageId: string;
-      partId: string;
-    }
-  | { type: "status"; sessionId: string; status: "busy" | "idle" | "retry"; message?: string }
-  | { type: "error"; sessionId: string; code: string; message: string }
-  | { type: "done"; sessionId: string; messageId: string }
-  | { type: "connected"; serverTime: number }
-  | {
-      type: "ping";
-      serverTime: number;
-      sequence: number;
-      upstream: "Disconnected" | "Connecting" | "Connected" | "Reconnecting" | "Error";
-      subscribers: number;
-    };
+import { createFlueClient, type AgentSocket, type AttachedAgentEvent } from "@flue/sdk";
+import { batch, createEffect, createSignal, onCleanup } from "solid-js";
 
 export interface ToolCall {
   id: string;
@@ -80,20 +22,56 @@ export interface StreamingMessage {
   timestamp: number;
 }
 
-// =============================================================================
-// Hook
-// =============================================================================
-
 export interface UseStreamingChatOptions {
-  /** Accessor function that returns the session ID (for reactivity) */
   getSessionId: () => string | null;
   onError?: (error: string) => void;
 }
 
 export interface SendMessageOptions {
-  agent?: string;
   reviewMode?: "full" | "commit";
   commitSha?: string;
+}
+
+const flueBaseUrl =
+  (import.meta.env.VITE_FLUE_BASE_URL as string | undefined) ?? `${window.location.origin}/flue`;
+const flueWebSocketBasePath = new URL(flueBaseUrl, window.location.origin).pathname;
+
+const flueClient = createFlueClient({
+  baseUrl: flueBaseUrl,
+  websocketBasePath: flueWebSocketBasePath,
+});
+
+function stringifyValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function extractAssistantSnapshot(
+  message: unknown,
+): { content: string; reasoning?: string } | null {
+  if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content))
+    return null;
+
+  let content = "";
+  let reasoning = "";
+  for (const part of message.content) {
+    if (!isRecord(part)) continue;
+    if (part.type === "text" && typeof part.text === "string") {
+      content += part.text;
+    } else if (part.type === "thinking" && typeof part.thinking === "string") {
+      reasoning += part.thinking;
+    }
+  }
+
+  return { content, reasoning: reasoning || undefined };
 }
 
 export function useStreamingChat(options: UseStreamingChatOptions) {
@@ -101,12 +79,12 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   const [isConnected, setIsConnected] = createSignal(false);
   const [connectionStatus, setConnectionStatus] = createSignal<
     "offline" | "connecting" | "connected" | "degraded" | "reconnecting"
-  >("connecting");
+  >("offline");
   const [lastHeartbeatAt, setLastHeartbeatAt] = createSignal<number | null>(null);
   const [upstreamStatus, setUpstreamStatus] = createSignal<
     "Disconnected" | "Connecting" | "Connected" | "Reconnecting" | "Error" | null
   >(null);
-  const [subscriberCount, setSubscriberCount] = createSignal<number>(0);
+  const [subscriberCount, setSubscriberCount] = createSignal(0);
   const [awaitingFirstToken, setAwaitingFirstToken] = createSignal(false);
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -115,302 +93,308 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   const [activeTools, setActiveTools] = createSignal<ToolCall[]>([]);
   const [currentMessageId, setCurrentMessageId] = createSignal<string | null>(null);
 
-  let unsubscribe: (() => void) | null = null;
-  let allowAssistantParts = false;
-  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
-  let reconnectAttempt = 0;
+  let socket: AgentSocket | null = null;
+  let socketSessionId: string | null = null;
+  let unsubscribeEvents: (() => void) | null = null;
+  let pingTimer: ReturnType<typeof setInterval> | null = null;
   let isDisposed = false;
   let isConnecting = false;
-  let heartbeatWatcher: ReturnType<typeof setInterval> | null = null;
+  let socketFailed = false;
   let awaitingAssistantResponse = false;
+  let abortingPrompt = false;
 
-  const acceptAssistantEvent = () => {
-    allowAssistantParts = true;
-    if (!isStreaming()) {
-      setIsStreaming(true);
-    }
-    if (awaitingFirstToken()) {
-      setAwaitingFirstToken(false);
-    }
-  };
-
-  const shouldAcceptAssistantEvent = () => {
-    return allowAssistantParts || awaitingAssistantResponse || isStreaming();
-  };
-
-  const prepareAssistantMessage = (messageId: string) => {
-    const activeMessageId = currentMessageId();
-    if (activeMessageId && activeMessageId !== messageId) {
-      finalizeMessage({ keepStreaming: true });
-    }
-    setCurrentMessageId(messageId);
-  };
-
-  const clearReconnect = () => {
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout);
-      reconnectTimeout = null;
-    }
-  };
-
-  const clearHeartbeatWatcher = () => {
-    if (heartbeatWatcher) {
-      clearInterval(heartbeatWatcher);
-      heartbeatWatcher = null;
-    }
-  };
-
-  const startHeartbeatWatcher = () => {
-    if (heartbeatWatcher) return;
-    heartbeatWatcher = setInterval(() => {
-      const last = lastHeartbeatAt();
-      if (!last) return;
-
-      const elapsedMs = Date.now() - last;
-      if (elapsedMs > 60000) {
-        console.warn("[useStreamingChat] No heartbeat for 60s, reconnecting");
-        setIsConnected(false);
-        setConnectionStatus("reconnecting");
-        cleanupSubscription();
-        scheduleReconnect("heartbeat-timeout");
-      } else if (elapsedMs > 30000 && connectionStatus() === "connected") {
-        setConnectionStatus("degraded");
-      }
-    }, 1000);
-  };
-
-  const scheduleReconnect = (reason: string) => {
-    if (isDisposed || reconnectTimeout || unsubscribe || isConnecting) return;
-
-    const delay = Math.min(1000 * 2 ** reconnectAttempt, 30000);
-    reconnectAttempt += 1;
-
-    console.warn(`[useStreamingChat] Reconnecting in ${delay}ms (${reason})`);
-    reconnectTimeout = setTimeout(() => {
-      reconnectTimeout = null;
-      startSubscription();
-    }, delay);
-  };
-
-  const cleanupSubscription = () => {
-    if (unsubscribe) {
-      unsubscribe();
-      unsubscribe = null;
-    }
-    isConnecting = false;
-  };
-
-  const startSubscription = () => {
-    if (isDisposed || unsubscribe || isConnecting) return;
-
-    console.log("[useStreamingChat] Connecting to event stream");
-    isConnecting = true;
-    setConnectionStatus(reconnectAttempt > 0 ? "reconnecting" : "connecting");
-
-    const subscription = trpc.opencode.events.subscribe(
-      { clientId: getApiClientId() },
-      {
-        onStarted: () => {
-          console.log("[useStreamingChat] Subscription started");
-        },
-        onData: (event: unknown) => {
-          handleEvent(event as StreamEvent);
-        },
-        onError: (err: unknown) => {
-          console.error("[useStreamingChat] Subscription error:", err);
-          setIsConnected(false);
-          setConnectionStatus("reconnecting");
-          setError("Connection lost");
-          options.onError?.("Connection lost");
-          cleanupSubscription();
-          scheduleReconnect("error");
-        },
-        onComplete: () => {
-          console.log("[useStreamingChat] Subscription completed");
-          setIsConnected(false);
-          setConnectionStatus("reconnecting");
-          setError("Connection closed");
-          options.onError?.("Connection closed");
-          cleanupSubscription();
-          scheduleReconnect("complete");
-        },
-      },
-    );
-
-    unsubscribe = subscription.unsubscribe;
-    isConnecting = false;
-  };
-
-  // Single SSE connection - subscribe once on mount, filter by sessionId client-side
-  // This avoids the cleanup issues with per-session subscriptions
-  createEffect(() => {
-    startSubscription();
-  });
-
-  // Cleanup on unmount
-  onCleanup(() => {
-    isDisposed = true;
-    clearReconnect();
-    clearHeartbeatWatcher();
-    if (unsubscribe) {
-      console.log("[useStreamingChat] Disconnecting from event stream");
-      unsubscribe();
-      unsubscribe = null;
-    }
-  });
-
-  // Reset streaming state when session changes
-  createEffect(() => {
-    const _sessionId = options.getSessionId();
-    // Reset streaming state for new session
+  function resetStreamingState() {
     batch(() => {
       setStreamingContent("");
       setStreamingReasoning("");
       setActiveTools([]);
       setCurrentMessageId(null);
       setIsStreaming(false);
+      setAwaitingFirstToken(false);
     });
-    allowAssistantParts = false;
     awaitingAssistantResponse = false;
-  });
+  }
 
-  function handleEvent(event: StreamEvent) {
-    // Handle global events (no sessionId filtering needed)
-    if (event.type === "connected" || event.type === "ping") {
-      if (event.type === "connected") {
-        console.log("[useStreamingChat] Connected to event stream");
-      }
+  function markConnected() {
+    batch(() => {
       setIsConnected(true);
       setConnectionStatus("connected");
-      setError(null);
       setLastHeartbeatAt(Date.now());
-      reconnectAttempt = 0;
-      clearReconnect();
-      startHeartbeatWatcher();
+      setUpstreamStatus("Connected");
+      setSubscriberCount(1);
+      setError(null);
+    });
+  }
 
-      if (event.type === "ping") {
-        setUpstreamStatus(event.upstream);
-        setSubscriberCount(event.subscribers);
-        if (event.upstream === "Reconnecting" || event.upstream === "Error") {
+  function stopPing() {
+    if (pingTimer) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+  }
+
+  function startPing(activeSocket: AgentSocket) {
+    stopPing();
+    pingTimer = setInterval(() => {
+      activeSocket
+        .ping()
+        .then(() => {
+          if (activeSocket === socket) {
+            markConnected();
+          }
+        })
+        .catch(() => {
+          if (activeSocket !== socket || isDisposed) return;
+          socketFailed = true;
+          setIsConnected(false);
           setConnectionStatus("degraded");
-        }
+          setUpstreamStatus("Error");
+          cleanupSocket();
+        });
+    }, 25_000);
+  }
+
+  function cleanupSocket() {
+    stopPing();
+    if (unsubscribeEvents) {
+      unsubscribeEvents();
+      unsubscribeEvents = null;
+    }
+    if (socket) {
+      socket.close(1000, "client cleanup");
+      socket = null;
+    }
+    socketSessionId = null;
+    isConnecting = false;
+    socketFailed = false;
+  }
+
+  function markSocketFailed(activeSocket: AgentSocket | null = socket) {
+    if (!activeSocket || activeSocket !== socket) return;
+    socketFailed = true;
+    cleanupSocket();
+  }
+
+  function isSocketConnectionError(message: string) {
+    // Flue can report "Request is malformed" when a dev-server restart/HMR leaves
+    // the browser holding a stale WebSocket. Treat it as reconnectable once.
+    return /websocket|socket|connection|request is malformed/i.test(message);
+  }
+
+  async function ensureSocket(): Promise<AgentSocket | null> {
+    const sessionId = options.getSessionId();
+    if (!sessionId || isDisposed) {
+      cleanupSocket();
+      setIsConnected(false);
+      setConnectionStatus("offline");
+      return null;
+    }
+
+    if (socket && socketSessionId === sessionId && !socketFailed) {
+      try {
+        await socket.ready;
+        return socket;
+      } catch {
+        markSocketFailed(socket);
       }
+    }
+
+    cleanupSocket();
+    isConnecting = true;
+    setConnectionStatus("connecting");
+    setUpstreamStatus("Connecting");
+
+    const nextSocket = flueClient.agents.connect("pr-reviewer", sessionId);
+    socket = nextSocket;
+    socketSessionId = sessionId;
+    unsubscribeEvents = nextSocket.onEvent((event, context) => {
+      handleFlueEvent(event, context.requestId);
+    });
+
+    try {
+      await nextSocket.ready;
+      if (nextSocket !== socket || isDisposed) return null;
+      markConnected();
+      startPing(nextSocket);
+      return nextSocket;
+    } catch (err) {
+      if (nextSocket !== socket || isDisposed) return null;
+      const message = err instanceof Error ? err.message : "Failed to connect to Flue";
+      setIsConnected(false);
+      setConnectionStatus("offline");
+      setUpstreamStatus("Error");
+      setError(message);
+      options.onError?.(message);
+      markSocketFailed(nextSocket);
+      return null;
+    } finally {
+      if (nextSocket === socket) {
+        isConnecting = false;
+      }
+    }
+  }
+
+  createEffect(() => {
+    const sessionId = options.getSessionId();
+    resetStreamingState();
+
+    if (!sessionId) {
+      cleanupSocket();
+      setIsConnected(false);
+      setConnectionStatus("offline");
       return;
     }
 
-    // Filter events by current sessionId (client-side filtering)
-    const currentSessionId = options.getSessionId();
-    if (!currentSessionId) return;
-
-    // All other events have sessionId - filter by current session
-    if ("sessionId" in event && event.sessionId !== currentSessionId) {
-      return; // Event is for a different session, ignore it
+    if (!isConnecting) {
+      void ensureSocket();
     }
+  });
 
+  onCleanup(() => {
+    isDisposed = true;
+    cleanupSocket();
+  });
+
+  function prepareAssistantMessage(requestId: string) {
+    const messageId = `assistant-${requestId}`;
+    const existing = currentMessageId();
+    if (existing && existing !== messageId) {
+      finalizeMessage({ keepStreaming: true });
+    }
+    setCurrentMessageId(messageId);
+  }
+
+  function acceptAssistantEvent(requestId: string) {
+    prepareAssistantMessage(requestId);
+    if (!isStreaming()) {
+      setIsStreaming(true);
+    }
+    if (awaitingFirstToken()) {
+      setAwaitingFirstToken(false);
+    }
+    awaitingAssistantResponse = true;
+    markConnected();
+  }
+
+  function upsertTool(tool: ToolCall) {
+    setActiveTools((prev) => {
+      const existingIndex = prev.findIndex((item) => item.callId === tool.callId);
+      if (existingIndex === -1) return [...prev, tool];
+
+      const next = [...prev];
+      next[existingIndex] = { ...next[existingIndex], ...tool };
+      return next;
+    });
+  }
+
+  function handleFlueEvent(event: AttachedAgentEvent, requestId: string) {
     switch (event.type) {
-      case "text":
-        if (!shouldAcceptAssistantEvent()) return;
-        acceptAssistantEvent();
-        prepareAssistantMessage(event.messageId);
-        // Append streaming text
-        setStreamingContent((prev) => prev + event.delta);
+      case "text_delta":
+        acceptAssistantEvent(requestId);
+        setStreamingContent((prev) => prev + event.text);
         break;
 
-      case "reasoning":
-        if (!shouldAcceptAssistantEvent()) return;
-        acceptAssistantEvent();
-        prepareAssistantMessage(event.messageId);
-        // Append reasoning text
+      case "thinking_delta":
+        acceptAssistantEvent(requestId);
         setStreamingReasoning((prev) => prev + event.delta);
         break;
 
-      case "tool-start":
-        if (!shouldAcceptAssistantEvent()) return;
-        acceptAssistantEvent();
-        prepareAssistantMessage(event.messageId);
-        setActiveTools((prev) => [
-          ...prev,
-          {
-            id: event.partId,
-            tool: event.tool,
-            callId: event.callId,
-            status: "pending",
-            input: event.input,
-          },
-        ]);
-        break;
-
-      case "tool-running":
-        if (!shouldAcceptAssistantEvent()) return;
-        acceptAssistantEvent();
-        prepareAssistantMessage(event.messageId);
-        setActiveTools((prev) =>
-          prev.map((t) =>
-            t.callId === event.callId
-              ? { ...t, status: "running" as const, title: event.title }
-              : t,
-          ),
-        );
-        break;
-
-      case "tool-done":
-        if (!shouldAcceptAssistantEvent()) return;
-        acceptAssistantEvent();
-        prepareAssistantMessage(event.messageId);
-        setActiveTools((prev) =>
-          prev.map((t) =>
-            t.callId === event.callId
-              ? {
-                  ...t,
-                  status: "completed" as const,
-                  output: event.output,
-                  title: event.title,
-                }
-              : t,
-          ),
-        );
-        break;
-
-      case "tool-error":
-        if (!shouldAcceptAssistantEvent()) return;
-        acceptAssistantEvent();
-        prepareAssistantMessage(event.messageId);
-        setActiveTools((prev) =>
-          prev.map((t) =>
-            t.callId === event.callId ? { ...t, status: "error" as const, error: event.error } : t,
-          ),
-        );
-        break;
-
-      case "status":
-        if (event.status === "busy") {
-          setIsStreaming(true);
-          allowAssistantParts = true;
-          awaitingAssistantResponse = true;
-          setAwaitingFirstToken(true);
-        } else if (event.status === "idle") {
-          allowAssistantParts = false;
-          awaitingAssistantResponse = false;
-          setAwaitingFirstToken(false);
-          finalizeMessage();
+      case "message_start":
+      case "message_update": {
+        const snapshot = extractAssistantSnapshot(event.message);
+        if (snapshot) {
+          acceptAssistantEvent(requestId);
+          setStreamingContent(snapshot.content);
+          setStreamingReasoning(snapshot.reasoning ?? "");
         }
         break;
+      }
 
-      case "done":
-        allowAssistantParts = false;
-        awaitingAssistantResponse = false;
-        setAwaitingFirstToken(false);
-        // Message completed - finalize it
+      case "message_end": {
+        const snapshot = extractAssistantSnapshot(event.message);
+        if (snapshot) {
+          acceptAssistantEvent(requestId);
+          setStreamingContent(snapshot.content);
+          setStreamingReasoning(snapshot.reasoning ?? "");
+        }
+        finalizeMessage();
+        break;
+      }
+
+      case "turn": {
+        const snapshot = extractAssistantSnapshot(event.output);
+        if (snapshot && !event.isError && awaitingAssistantResponse) {
+          acceptAssistantEvent(requestId);
+          setStreamingContent(snapshot.content);
+          setStreamingReasoning(snapshot.reasoning ?? "");
+        }
+        break;
+      }
+
+      case "tool_start":
+        acceptAssistantEvent(requestId);
+        upsertTool({
+          id: event.toolCallId,
+          tool: event.toolName,
+          callId: event.toolCallId,
+          status: "pending",
+          input: isRecord(event.args) ? event.args : {},
+          title: event.toolName,
+        });
+        break;
+
+      case "tool_execution_start":
+        acceptAssistantEvent(requestId);
+        upsertTool({
+          id: event.toolCallId,
+          tool: event.toolName,
+          callId: event.toolCallId,
+          status: "running",
+          input: isRecord(event.args) ? event.args : {},
+          title: event.toolName,
+        });
+        break;
+
+      case "tool_execution_end":
+        acceptAssistantEvent(requestId);
+        upsertTool({
+          id: event.toolCallId,
+          tool: event.toolName,
+          callId: event.toolCallId,
+          status: event.isError ? "error" : "completed",
+          input: {},
+          output: event.isError ? undefined : stringifyValue(event.result),
+          error: event.isError ? stringifyValue(event.result) : undefined,
+          title: event.toolName,
+        });
+        break;
+
+      case "tool_call":
+        acceptAssistantEvent(requestId);
+        upsertTool({
+          id: event.toolCallId,
+          tool: event.toolName,
+          callId: event.toolCallId,
+          status: event.isError ? "error" : "completed",
+          input: {},
+          output: event.isError ? undefined : stringifyValue(event.result),
+          error: event.isError ? stringifyValue(event.result) : undefined,
+          title: `${event.toolName} (${Math.round(event.durationMs)}ms)`,
+        });
+        break;
+
+      case "idle":
         finalizeMessage();
         break;
 
-      case "error":
-        setError(event.message);
-        options.onError?.(event.message);
-        setIsStreaming(false);
-        allowAssistantParts = false;
-        awaitingAssistantResponse = false;
-        setAwaitingFirstToken(false);
+      case "operation":
+        if (event.operationKind === "prompt" && event.isError) {
+          const message = stringifyValue(event.error ?? "Prompt failed");
+          const visibleMessage = `Prompt stopped before the assistant could finish: ${message}`;
+          setError(message);
+          options.onError?.(message);
+          appendAssistantErrorMessage(visibleMessage);
+        }
         break;
     }
   }
@@ -422,9 +406,9 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     const msgId = currentMessageId();
 
     if (!content && !reasoning && tools.length === 0) {
-      // Nothing to finalize
       setIsStreaming(Boolean(options?.keepStreaming));
       setAwaitingFirstToken(false);
+      awaitingAssistantResponse = false;
       return;
     }
 
@@ -441,8 +425,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
           timestamp: Date.now(),
         },
       ]);
-
-      // Reset streaming state
       setStreamingContent("");
       setStreamingReasoning("");
       setActiveTools([]);
@@ -450,44 +432,44 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setIsStreaming(Boolean(options?.keepStreaming));
       setAwaitingFirstToken(false);
     });
+
+    awaitingAssistantResponse = Boolean(options?.keepStreaming);
   }
 
-  /**
-   * Wait for the SSE subscription to be connected with a timeout.
-   * Returns true if connected, false if timed out.
-   */
-  async function waitForConnection(timeoutMs: number = 5000): Promise<boolean> {
-    if (isConnected()) return true;
-
-    return new Promise((resolve) => {
-      const startTime = Date.now();
-      const checkInterval = setInterval(() => {
-        if (isConnected()) {
-          clearInterval(checkInterval);
-          resolve(true);
-        } else if (Date.now() - startTime >= timeoutMs) {
-          clearInterval(checkInterval);
-          resolve(false);
-        }
-      }, 50);
+  function appendAssistantErrorMessage(message: string) {
+    const errorText = message.startsWith("⚠️") ? message : `⚠️ ${message}`;
+    batch(() => {
+      finalizeMessage();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: "assistant",
+          content: errorText,
+          toolCalls: [],
+          isStreaming: false,
+          timestamp: Date.now(),
+        },
+      ]);
+      setIsStreaming(false);
+      setAwaitingFirstToken(false);
     });
+    awaitingAssistantResponse = false;
   }
 
-  async function sendMessage(message: string, sendOptions?: SendMessageOptions): Promise<boolean> {
+  async function sendMessage(message: string, _sendOptions?: SendMessageOptions): Promise<boolean> {
     const sessionId = options.getSessionId();
     if (!sessionId) {
       setError("No session");
       return false;
     }
 
-    // Wait for SSE subscription to be ready before sending
-    // This prevents a race condition where events are published before we're subscribed
-    const connected = await waitForConnection(5000);
-    if (!connected) {
-      console.warn("[useStreamingChat] Timed out waiting for connection, proceeding anyway");
-    }
+    // Open a fresh socket for each prompt. This avoids stale dev/HMR sockets and
+    // Flue sockets left in a bad protocol state after an interrupted request.
+    cleanupSocket();
+    const activeSocket = await ensureSocket();
+    if (!activeSocket) return false;
 
-    // Add user message immediately
     const userMessage: StreamingMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -497,73 +479,87 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       timestamp: Date.now(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
-    setIsStreaming(true);
-    setAwaitingFirstToken(true);
-    setError(null);
+    batch(() => {
+      setMessages((prev) => [...prev, userMessage]);
+      setIsStreaming(true);
+      setAwaitingFirstToken(true);
+      setError(null);
+    });
     awaitingAssistantResponse = true;
-    allowAssistantParts = true;
+    abortingPrompt = false;
 
-    try {
-      await trpc.opencode.promptStart.mutate({
-        sessionId,
-        message,
-        agent: sendOptions?.agent,
-        reviewMode: sendOptions?.reviewMode,
-        commitSha: sendOptions?.commitSha,
-      });
+    let promptSocket = activeSocket;
+    let didRetrySocket = false;
 
-      // Success - streaming will happen via subscription
-      return true;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : "Failed to send message";
-      setError(errorMsg);
-      setIsStreaming(false);
-      setAwaitingFirstToken(false);
-      awaitingAssistantResponse = false;
-      options.onError?.(errorMsg);
-      return false;
+    while (promptSocket) {
+      try {
+        // The socket URL already carries the Flue agent instance/session id. Passing
+        // `session` here makes Flue build a longer affinity key, which breaks
+        // ChatGPT/Codex OAuth because its prompt_cache_key is limited to 64 chars.
+        await promptSocket.prompt(message);
+        finalizeMessage();
+        return true;
+      } catch (err) {
+        if (abortingPrompt) {
+          abortingPrompt = false;
+          return false;
+        }
+
+        const message = err instanceof Error ? err.message : "Failed to send message";
+        const details =
+          isRecord(err) && isRecord(err.error) && typeof err.error.details === "string"
+            ? err.error.details
+            : "";
+        if (!didRetrySocket && isSocketConnectionError(`${message} ${details}`)) {
+          didRetrySocket = true;
+          markSocketFailed(promptSocket);
+          const reconnectedSocket = await ensureSocket();
+          if (reconnectedSocket) {
+            promptSocket = reconnectedSocket;
+            continue;
+          }
+        }
+
+        if (isSocketConnectionError(`${message} ${details}`)) {
+          markSocketFailed(promptSocket);
+        }
+
+        setError(details ? `${message}: ${details}` : message);
+        setIsStreaming(false);
+        setAwaitingFirstToken(false);
+        awaitingAssistantResponse = false;
+        options.onError?.(message);
+        return false;
+      }
     }
+
+    return false;
   }
 
   async function abort(): Promise<void> {
-    const sessionId = options.getSessionId();
-    if (!sessionId) return;
-
-    try {
-      await trpc.opencode.abort.mutate({ sessionId });
-    } catch (err) {
-      console.error("[useStreamingChat] Abort error:", err);
-    }
+    abortingPrompt = true;
+    finalizeMessage();
+    cleanupSocket();
+    setIsConnected(false);
+    setConnectionStatus("reconnecting");
+    await ensureSocket();
   }
 
   function clearMessages() {
     setMessages([]);
-    setStreamingContent("");
-    setStreamingReasoning("");
-    setActiveTools([]);
-    setCurrentMessageId(null);
+    resetStreamingState();
     setError(null);
-    awaitingAssistantResponse = false;
   }
 
-  /**
-   * Load existing messages (e.g., when switching sessions)
-   */
   function loadExistingMessages(msgs: StreamingMessage[]) {
     batch(() => {
       setMessages(msgs);
-      setStreamingContent("");
-      setStreamingReasoning("");
-      setActiveTools([]);
-      setCurrentMessageId(null);
       setError(null);
+      resetStreamingState();
     });
-    awaitingAssistantResponse = false;
   }
 
   return {
-    // State
     messages,
     isConnected,
     connectionStatus,
@@ -576,8 +572,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     streamingContent,
     streamingReasoning,
     activeTools,
-
-    // Actions
     sendMessage,
     abort,
     clearMessages,

@@ -32,7 +32,7 @@ export type { PrInfo, StoredSession, PrSessionData };
 // Helpers
 // =============================================================================
 
-function parsePrUrl(url: string): { owner: string; repo: string; number: number } | null {
+export function parsePrUrl(url: string): { owner: string; repo: string; number: number } | null {
   const match = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
   if (!match) return null;
   return {

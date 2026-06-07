@@ -134,11 +134,14 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-sm font-medium text-text hover:text-accent inline-flex items-baseline gap-1.5 group leading-snug"
-                title="Open in GitHub"
+                title="Open PR in GitHub"
               >
                 <span class="break-words">{status().title}</span>
-                <span class="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                  <ExternalLinkIcon size={10} />
+                <span
+                  class="text-text-faint group-hover:text-accent transition-colors flex-shrink-0"
+                  aria-hidden="true"
+                >
+                  <ExternalLinkIcon size={11} />
                 </span>
               </a>
             </div>
@@ -226,9 +229,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
               >
                 <div class="flex items-center justify-between px-4 py-2 border-b border-border bg-bg sticky top-0">
                   <div class="flex items-center gap-2">
-                    <span class="text-xs text-text-faint font-medium uppercase tracking-wide">
-                      PR Description
-                    </span>
+                    <span class="text-xs text-text-muted font-medium">PR description</span>
                     <Show when={prNumber()}>
                       <span class="text-xs text-text-faint/60">#{prNumber()}</span>
                     </Show>

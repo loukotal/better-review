@@ -317,6 +317,8 @@ interface GhCli {
   getPrCiStatus: (prUrl: string) => Effect.Effect<CiStatus | null, GhError, never>;
   getHeadSha: (prUrl: string) => Effect.Effect<string, GhError, never>;
   getBaseSha: (prUrl: string) => Effect.Effect<string, GhError, never>;
+  getHeadRef: (prUrl: string) => Effect.Effect<string, GhError, never>;
+  getBaseRef: (prUrl: string) => Effect.Effect<string, GhError, never>;
   /** Fetch raw file content at a specific git ref. Returns null if file doesn't exist at that ref. */
   getFileContent: (params: {
     owner: string;
@@ -1781,6 +1783,34 @@ const ghCli: GhCli = {
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getBaseSha", cause })),
       Effect.withSpan("GhService.getBaseSha", { attributes: { prUrl } }),
+    ),
+
+  getHeadRef: (prUrl: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(prUrl);
+      return (yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}`,
+        "--jq",
+        ".head.ref",
+      )).trim();
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getHeadRef", cause })),
+      Effect.withSpan("GhService.getHeadRef", { attributes: { prUrl } }),
+    ),
+
+  getBaseRef: (prUrl: string) =>
+    Effect.gen(function* () {
+      const { owner, repo, number } = yield* getPrInfo(prUrl);
+      return (yield* runGh(
+        "api",
+        `repos/${owner}/${repo}/pulls/${number}`,
+        "--jq",
+        ".base.ref",
+      )).trim();
+    }).pipe(
+      Effect.mapError((cause) => new GhError({ command: "getBaseRef", cause })),
+      Effect.withSpan("GhService.getBaseRef", { attributes: { prUrl } }),
     ),
 
   getFileContent: (params: { owner: string; repo: string; path: string; ref: string }) =>

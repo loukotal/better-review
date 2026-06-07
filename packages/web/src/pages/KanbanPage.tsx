@@ -930,7 +930,7 @@ const KanbanPage: Component = () => {
             <aside class="w-[380px] h-full border-l border-border bg-bg-surface p-4 overflow-y-auto space-y-4">
               <div class="flex items-start justify-between gap-3">
                 <div>
-                  <p class="text-xs text-text-faint uppercase tracking-wide">Item details</p>
+                  <p class="text-xs text-text-muted font-medium">Item details</p>
                   <h2 class="text-base text-text mt-1">{item().content?.title ?? "Untitled"}</h2>
                 </div>
                 <Button variant="ghost" size="xs" onClick={() => setSelectedItemId(null)}>

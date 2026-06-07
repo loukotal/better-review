@@ -26,6 +26,7 @@
     "@better-review/shared": "workspace:*"
   },
   "devDependencies": {
+    "@flue/cli": "^0.8.1",
     "@types/node": "25.6.2",
     "concurrently": "9.2.1",
     "lefthook": "2.1.6",
@@ -34,7 +35,6 @@
     "tsx": "4.21.0",
     "typescript": "6.0.3"
   },
-  "peerDependencies": {},
   "overrides": {
     "picomatch": "4.0.4",
     "rollup": "4.59.0",

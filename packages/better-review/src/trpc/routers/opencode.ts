@@ -158,7 +158,7 @@ export const opencodeRouter = router({
         Effect.gen(function* () {
           const opencode = yield* OpencodeService;
           const prContext = yield* PrContextService;
-          const currentModel = yield* Effect.tryPromise(() => getCurrentModel());
+          const currentModel = yield* Effect.sync(() => getCurrentModel());
 
           if (input.reviewMode) {
             yield* prContext.setSessionScope(input.sessionId, {
@@ -216,7 +216,7 @@ export const opencodeRouter = router({
         Effect.gen(function* () {
           const opencode = yield* OpencodeService;
           const prContext = yield* PrContextService;
-          const currentModel = yield* Effect.tryPromise(() => getCurrentModel());
+          const currentModel = yield* Effect.sync(() => getCurrentModel());
 
           if (input.reviewMode) {
             yield* prContext.setSessionScope(input.sessionId, {

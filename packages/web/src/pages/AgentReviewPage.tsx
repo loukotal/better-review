@@ -763,52 +763,78 @@ function AnnotationsPanel(props: {
   onRemove: (id: string) => void;
 }) {
   const items = () => props.result()?.annotations ?? props.annotations;
+  const [annotationsHidden, setAnnotationsHidden] = createSignal(false);
 
   return (
     <div class="p-3 space-y-3">
-      <div class="text-xs text-text-faint">
-        {items().length} annotation{items().length === 1 ? "" : "s"}
+      <div class="flex items-center justify-between gap-2 text-xs text-text-faint">
+        <span>
+          {items().length} annotation{items().length === 1 ? "" : "s"}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          disabled={items().length === 0}
+          onClick={() => setAnnotationsHidden((hidden) => !hidden)}
+          title={
+            annotationsHidden()
+              ? "Show all comments and annotations"
+              : "Hide all comments and annotations"
+          }
+        >
+          {annotationsHidden() ? "Show all" : "Hide all"}
+        </Button>
       </div>
 
       <Show
-        when={items().length > 0}
+        when={!annotationsHidden()}
         fallback={
-          <div class="text-xs text-text-faint py-3">
-            {props.isDiffSession
-              ? "Add comments on lines as you review."
-              : "Highlight text to attach notes."}
+          <div class="border border-border border-dashed px-3 py-4 text-center text-xs text-text-faint">
+            All comments and annotations are hidden.
           </div>
         }
       >
-        <div class="space-y-2">
-          <For each={items()}>
-            {(annotation) => (
-              <div class="border border-border p-3">
-                <div class="flex items-start justify-between gap-2">
-                  <div class="min-w-0 flex-1">
-                    <div class="text-xs text-text-faint">{annotationLabel(annotation)}</div>
-                    <blockquote class="m-0 mt-1.5 bg-accent/5 px-2 py-1 text-xs text-text">
-                      {annotation.quote}
-                    </blockquote>
-                    <p class="m-0 mt-1.5 whitespace-pre-wrap text-xs text-text-muted">
-                      {annotation.comment}
-                    </p>
+        <Show
+          when={items().length > 0}
+          fallback={
+            <div class="text-xs text-text-faint py-3">
+              {props.isDiffSession
+                ? "Add comments on lines as you review."
+                : "Highlight text to attach notes."}
+            </div>
+          }
+        >
+          <div class="space-y-2">
+            <For each={items()}>
+              {(annotation) => (
+                <div class="border border-border p-3">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0 flex-1">
+                      <div class="text-xs text-text-faint">{annotationLabel(annotation)}</div>
+                      <blockquote class="m-0 mt-1.5 bg-accent/5 px-2 py-1 text-xs text-text">
+                        {annotation.quote}
+                      </blockquote>
+                      <p class="m-0 mt-1.5 whitespace-pre-wrap text-xs text-text-muted">
+                        {annotation.comment}
+                      </p>
+                    </div>
+                    <Show when={!props.result()}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => props.onRemove(annotation.id)}
+                      >
+                        ×
+                      </Button>
+                    </Show>
                   </div>
-                  <Show when={!props.result()}>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => props.onRemove(annotation.id)}
-                    >
-                      ×
-                    </Button>
-                  </Show>
                 </div>
-              </div>
-            )}
-          </For>
-        </div>
+              )}
+            </For>
+          </div>
+        </Show>
       </Show>
     </div>
   );

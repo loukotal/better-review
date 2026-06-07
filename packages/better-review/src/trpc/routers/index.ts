@@ -1,6 +1,6 @@
 import { router } from "../index";
+import { flueReviewRouter } from "./flue-review";
 import { modelsRouter } from "./models";
-import { opencodeRouter } from "./opencode";
 import { prRouter } from "./pr";
 import { projectsRouter } from "./projects";
 import { prsRouter } from "./prs";
@@ -16,7 +16,7 @@ export const appRouter = router({
   sessions: sessionsRouter,
   reviewSessions: reviewSessionsRouter,
   models: modelsRouter,
-  opencode: opencodeRouter,
+  flueReview: flueReviewRouter,
 });
 
 // Export type for frontend client

@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { Effect, Ref } from "effect";
 
-const BASE_DIR = join(homedir(), ".local", "share", "better-review");
+export const STORE_BASE_DIR = join(homedir(), ".local", "share", "better-review");
 
 function getErrnoCode(error: unknown): string | undefined {
   let current = error;
@@ -41,7 +41,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
 
     // Ensure base directory exists
     yield* Effect.tryPromise(async () => {
-      await mkdir(BASE_DIR, { recursive: true });
+      await mkdir(STORE_BASE_DIR, { recursive: true });
     });
 
     /**
@@ -57,7 +57,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
     const getFilePath = (namespace: string, key: string): string => {
       const safeNamespace = validatePathPart("namespace", namespace);
       const safeKey = validatePathPart("key", key);
-      return join(BASE_DIR, safeNamespace, `${safeKey}.json`);
+      return join(STORE_BASE_DIR, safeNamespace, `${safeKey}.json`);
     };
 
     /**
@@ -65,7 +65,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
      */
     const ensureNamespace = (namespace: string) =>
       Effect.tryPromise(async () => {
-        await mkdir(join(BASE_DIR, validatePathPart("namespace", namespace)), {
+        await mkdir(join(STORE_BASE_DIR, validatePathPart("namespace", namespace)), {
           recursive: true,
         });
       });
@@ -161,7 +161,7 @@ export class StoreService extends Effect.Service<StoreService>()("StoreService",
      */
     const list = (namespace: string): Effect.Effect<string[], Error> =>
       Effect.gen(function* () {
-        const nsDir = join(BASE_DIR, namespace);
+        const nsDir = join(STORE_BASE_DIR, namespace);
 
         const files = yield* Effect.tryPromise(() => readdir(nsDir)).pipe(
           Effect.catchAll((e) => {

@@ -104,10 +104,10 @@ export function DiffViewer(props: Props) {
       <div innerHTML={SVGSpriteSheet} style="display:none" />
 
       <Show when={props.loadingComments}>
-        <div class="mb-3 px-2 py-1.5 border-l-2 border-accent bg-bg-surface">
+        <div class="mb-3 px-2.5 py-1.5 border border-accent/35 bg-accent/10">
           <div class="flex items-center gap-2 text-accent text-sm">
             <span class="inline-block animate-pulse">●</span>
-            <span>Loading comments...</span>
+            <span>Loading comments</span>
           </div>
         </div>
       </Show>
@@ -117,7 +117,7 @@ export function DiffViewer(props: Props) {
         {files().length} file{files().length !== 1 ? "s" : ""} changed
       </div>
 
-      <div class="flex flex-col gap-3">
+      <div class="diff-viewer flex flex-col gap-3">
         <For each={files()}>
           {(file) => {
             const highlightLine = () => {
