@@ -1,0 +1,321 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
+
+import {
+  cleanupExpiredWorktrees,
+  ensureReviewHistory,
+  type RepoGitQueueInfo,
+  verifyWorktreeAccess,
+  withRepoGitQueue,
+  type PreparePrCheckoutInput,
+} from "./pr-checkout";
+
+const execFileAsync = promisify(execFile);
+
+async function git(cwd: string, args: string[]) {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout.trim();
+}
+
+async function commitFile(repo: string, file: string, content: string, message: string) {
+  const filePath = join(repo, file);
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, content);
+  await git(repo, ["add", file]);
+  await git(repo, ["commit", "-m", message]);
+  return git(repo, ["rev-parse", "HEAD"]);
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function createManagedWorktree(root: string) {
+  const source = join(root, "source");
+  const gitCacheRoot = join(root, "git-cache", "github");
+  const worktreesRoot = join(root, "worktrees", "github");
+  const repoGitDir = join(gitCacheRoot, "owner", "repo.git");
+  const worktreePath = join(worktreesRoot, "owner", "repo", "pr-1-head");
+
+  await git(root, ["init", source]);
+  await git(source, ["config", "user.email", "review@example.com"]);
+  await git(source, ["config", "user.name", "Review Test"]);
+  const headSha = await commitFile(source, "src/app.ts", "base\n", "base");
+
+  await mkdir(dirname(repoGitDir), { recursive: true });
+  await git(root, ["clone", "--bare", source, repoGitDir]);
+  await mkdir(dirname(worktreePath), { recursive: true });
+  await git(repoGitDir, ["worktree", "add", worktreePath, "HEAD"]);
+
+  return { gitCacheRoot, worktreesRoot, repoGitDir, worktreePath, headSha };
+}
+
+async function writeCheckoutReadyManifest(
+  worktreePath: string,
+  headSha: string,
+  lastUsedAt: number,
+) {
+  const contextDir = join(worktreePath, ".better-review");
+  await mkdir(contextDir, { recursive: true });
+  await writeFile(
+    join(contextDir, "CHECKOUT_READY.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        owner: "owner",
+        repo: "repo",
+        number: 1,
+        prUrl: "https://github.com/owner/repo/pull/1",
+        baseSha: headSha,
+        headSha,
+        baseRef: "main",
+        headRef: "feature",
+        reviewMode: "full",
+        commitSha: null,
+        files: ["src/app.ts"],
+        repoAccess: {
+          checkedAt: lastUsedAt,
+          trackedFileCount: 1,
+          sampledFiles: ["src/app.ts"],
+          sparseCheckout: false,
+        },
+        preparedAt: lastUsedAt,
+        lastUsedAt,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+test("withRepoGitQueue serializes operations for the same cached repository", async () => {
+  const events: string[] = [];
+  const queueInfos: RepoGitQueueInfo[] = [];
+  let activeOperations = 0;
+
+  async function queuedOperation(label: string, waitMs: number) {
+    await withRepoGitQueue("cache/repo.git", async (queue) => {
+      queueInfos.push(queue);
+      activeOperations += 1;
+      assert.equal(activeOperations, 1);
+      events.push(`${label}:start`);
+      await delay(waitMs);
+      events.push(`${label}:end`);
+      activeOperations -= 1;
+    });
+  }
+
+  await Promise.all([queuedOperation("first", 20), queuedOperation("second", 0)]);
+
+  assert.deepEqual(events, ["first:start", "first:end", "second:start", "second:end"]);
+  assert.equal(queueInfos[0]?.queued, false);
+  assert.equal(queueInfos[1]?.queued, true);
+});
+
+test("cleanupExpiredWorktrees removes expired prepared worktrees with git worktree remove", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-worktree-cleanup-"));
+
+  try {
+    const { gitCacheRoot, worktreesRoot, repoGitDir, worktreePath, headSha } =
+      await createManagedWorktree(root);
+    await writeCheckoutReadyManifest(worktreePath, headSha, 1_000);
+
+    const result = await cleanupExpiredWorktrees({
+      worktreesRoot,
+      gitCacheRoot,
+      maxUnusedMs: 1_000,
+      now: 3_000,
+    });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.removed, 1);
+    assert.equal(result.errors.length, 0);
+    assert.equal(await pathExists(worktreePath), false);
+
+    const worktreeList = await git(repoGitDir, ["worktree", "list", "--porcelain"]);
+    assert.equal(worktreeList.includes(worktreePath), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanupExpiredWorktrees skips worktrees with tracked local changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-worktree-cleanup-dirty-"));
+
+  try {
+    const { gitCacheRoot, worktreesRoot, worktreePath, headSha } =
+      await createManagedWorktree(root);
+    await writeCheckoutReadyManifest(worktreePath, headSha, 1_000);
+    await writeFile(join(worktreePath, "src/app.ts"), "dirty\n");
+
+    const result = await cleanupExpiredWorktrees({
+      worktreesRoot,
+      gitCacheRoot,
+      maxUnusedMs: 1_000,
+      now: 3_000,
+    });
+
+    assert.equal(result.scanned, 1);
+    assert.equal(result.removed, 0);
+    assert.equal(result.skipped, 1);
+    assert.equal(result.errors.length, 0);
+    assert.equal(await pathExists(worktreePath), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureReviewHistory deepens a shallow PR checkout until merge-base exists", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-pr-checkout-"));
+
+  try {
+    const source = join(root, "source");
+    const cache = join(root, "cache.git");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+
+    const mergeBaseSha = await commitFile(source, "src/app.ts", "base\n", "base");
+    await git(source, ["checkout", "-b", "develop"]);
+    await commitFile(source, "src/app.ts", "base\ndevelop\n", "develop");
+    await git(source, ["checkout", "-b", "feature", mergeBaseSha]);
+    const headSha = await commitFile(source, "src/app.ts", "base\nfeature\n", "feature");
+    await git(source, ["update-ref", "refs/pull/1/head", "feature"]);
+
+    await git(root, ["init", "--bare", cache]);
+    await git(cache, ["remote", "add", "origin", source]);
+    await git(cache, [
+      "fetch",
+      "--depth=1",
+      "origin",
+      "refs/heads/develop:refs/remotes/origin/develop",
+    ]);
+    await git(cache, ["fetch", "--depth=1", "origin", "refs/pull/1/head"]);
+
+    await assert.rejects(
+      execFileAsync("git", ["-C", cache, "merge-base", "refs/remotes/origin/develop", headSha]),
+    );
+
+    const input: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha: mergeBaseSha,
+      headSha,
+      baseRef: "develop",
+      headRef: "feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/app.ts"],
+    };
+
+    await ensureReviewHistory(cache, input);
+
+    const resolvedMergeBase = await git(cache, [
+      "merge-base",
+      "refs/remotes/origin/develop",
+      headSha,
+    ]);
+
+    assert.equal(resolvedMergeBase, mergeBaseSha);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("verifyWorktreeAccess proves the reviewer can see changed and unchanged tracked files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-repo-access-"));
+
+  try {
+    const source = join(root, "source");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+
+    const baseSha = await commitFile(source, "src/app.ts", "base\n", "base");
+    await commitFile(source, "docs/context.md", "repo context\n", "add docs");
+    const headSha = await commitFile(source, "src/app.ts", "changed\n", "change app");
+
+    const input: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha,
+      headSha,
+      baseRef: "develop",
+      headRef: "feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/app.ts"],
+    };
+
+    const access = await verifyWorktreeAccess(source, input);
+
+    assert.equal(access.sparseCheckout, false);
+    assert.equal(access.trackedFileCount, 2);
+    assert.ok(access.sampledFiles.includes("src/app.ts"));
+    assert.ok(access.sampledFiles.includes("docs/context.md"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("verifyWorktreeAccess skips tracked paths that are directories in the worktree", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-repo-access-dir-"));
+
+  try {
+    const source = join(root, "source");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+
+    const baseSha = await commitFile(source, "src/app.ts", "base\n", "base");
+    await commitFile(source, "docs/context.md", "repo context\n", "add docs");
+    const headSha = await git(source, ["rev-parse", "HEAD"]);
+
+    await rm(join(source, "src/app.ts"), { force: true });
+    await mkdir(join(source, "src/app.ts"), { recursive: true });
+    await writeFile(join(source, "src/app.ts", "nested.txt"), "directory now\n");
+
+    const input: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha,
+      headSha,
+      baseRef: "develop",
+      headRef: "feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/app.ts"],
+    };
+
+    const access = await verifyWorktreeAccess(source, input);
+
+    assert.equal(access.sparseCheckout, false);
+    assert.equal(access.trackedFileCount, 2);
+    assert.deepEqual(access.sampledFiles, ["docs/context.md"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

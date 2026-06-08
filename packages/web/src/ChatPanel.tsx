@@ -61,6 +61,62 @@ const CHAT_WIDTH_KEY = "chat-panel-width";
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 600;
+const STRUCTURED_REVIEW_PROMPT =
+  "Please analyze this PR and provide a structured review with file order and annotations.";
+const ADVERSARIAL_REVIEW_PROMPT = `Please run an adversarial code review of this PR.
+
+Use the Adversarial Code Reviewer workflow:
+
+1. Gather the PR changes using the app-provided changed-file list and the canonical PR diff from your system instructions.
+2. Read full context for every changed file, not just changed lines.
+3. Identify the purpose of the change: bug fix, new feature, refactor, config change, or test.
+4. Note project conventions from CLAUDE.md, .editorconfig, linting configs, tests, and nearby code patterns.
+5. Run all three reviewer personas sequentially. Each persona must produce at least one substantive finding or the most fragile assumption it relies on.
+
+Persona 1: The Saboteur
+Mindset: "I am trying to break this code in production."
+Focus on unvalidated input, inconsistent state, concurrency issues, swallowed errors, bad assumptions about data format or availability, null/undefined dereferences, off-by-one errors, and resource leaks.
+
+Persona 2: The New Hire
+Mindset: "I just joined this team. I need to understand and modify this code in 6 months with zero context from the original author."
+Focus on unclear names, logic that requires too much file-hopping, magic strings or numbers, functions doing too much, missing type information, inconsistency with local patterns, weak tests, and comments that explain what instead of why.
+
+Persona 3: The Security Auditor
+Mindset: "This code will be attacked. My job is to find the vulnerability before an attacker does."
+Focus on injection, broken auth, data exposure, insecure defaults, missing access control, dependency risk, and secrets in code, config, logs, or comments.
+
+Severity classification:
+- CRITICAL: Will cause data loss, security breach, or production outage. Blocks merge.
+- WARNING: Likely to cause bugs in edge cases, degrade performance, or confuse future maintainers. Should fix before merge.
+- NOTE: Style issue, minor improvement opportunity, or documentation gap.
+- Promote any finding caught by 2+ personas by one severity level.
+
+Anti-patterns to avoid:
+- Do not say "LGTM, no issues found."
+- Do not report only cosmetic issues while missing substantive risk.
+- Do not restate the diff as a finding.
+- Do not review only changed lines.
+- New code without meaningful tests is a finding unless the surrounding project clearly does not test comparable behavior.
+
+Output format:
+## Adversarial Review: [brief description of what was reviewed]
+
+**Scope:** [files reviewed, lines changed, type of change]
+**Verdict:** BLOCK / CONCERNS / CLEAN
+
+### Critical Findings
+[If any; these block merge.]
+
+### Warnings
+[Should-fix items.]
+
+### Notes
+[Nice-to-fix items.]
+
+### Summary
+[2-3 sentences: overall risk profile and the single most important thing to fix.]
+
+Use concrete file and line references. Use the app's annotation tokens for actionable findings when appropriate.`;
 
 function loadSavedWidth(): number {
   try {
@@ -84,6 +140,7 @@ export function ChatPanel(props: ChatPanelProps) {
   const [initializing, setInitializing] = createSignal(false);
   const [scopeSessionKey, setScopeSessionKey] = createSignal<string | null>(null);
   const [switchingCommitSession, setSwitchingCommitSession] = createSignal(false);
+  const [creatingNewSession, setCreatingNewSession] = createSignal(false);
 
   // Session management state
   const [sessions, setSessions] = createSignal<StoredSession[]>([]);
@@ -277,9 +334,11 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   function startReview() {
-    const reviewPrompt =
-      "Please analyze this PR and provide a structured review with file order and annotations.";
-    void submitMessage(reviewPrompt);
+    void submitMessage(STRUCTURED_REVIEW_PROMPT);
+  }
+
+  function startAdversarialReview() {
+    void submitMessage(ADVERSARIAL_REVIEW_PROMPT);
   }
 
   function handleAbort() {
@@ -289,6 +348,7 @@ export function ChatPanel(props: ChatPanelProps) {
   // Session management handlers
   async function handleSessionSwitch(newSessionId: string) {
     if (!props.prUrl || newSessionId === sessionId()) return;
+    if (creatingNewSession()) return;
 
     try {
       await trpc.flueReview.switch.mutate({
@@ -312,7 +372,9 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function handleNewSession(): Promise<boolean> {
     if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return false;
+    if (creatingNewSession()) return false;
 
+    setCreatingNewSession(true);
     try {
       const data = await trpc.flueReview.create.mutate({
         prUrl: props.prUrl,
@@ -340,11 +402,14 @@ export function ChatPanel(props: ChatPanelProps) {
     } catch (err) {
       console.error("Failed to create new session:", err);
       return false;
+    } finally {
+      setCreatingNewSession(false);
     }
   }
 
   async function handleHideSession(hiddenSessionId: string) {
     if (!props.prUrl) return;
+    if (creatingNewSession()) return;
 
     try {
       const data = await trpc.flueReview.hide.mutate({
@@ -842,18 +907,33 @@ export function ChatPanel(props: ChatPanelProps) {
                 title="Copy all AI feedback to clipboard (skips dismissed suggestions)"
               >
                 {feedbackCopied() ? <CheckIcon size={10} /> : <CopyIcon size={10} />}
-                <span>{feedbackCopied() ? "Copied" : "Copy Feedback"}</span>
+                <span>
+                  {feedbackCopied() ? "Copied" : width() < 360 ? "Copy" : "Copy Feedback"}
+                </span>
               </button>
             </Show>
             <Show when={sessionId() && !chat.isStreaming()}>
               <Button
                 type="button"
                 onClick={startReview}
+                disabled={creatingNewSession()}
                 variant="primary"
                 size="xs"
                 class="whitespace-nowrap"
               >
                 {width() < 300 ? "Review" : "Start Review"}
+              </Button>
+            </Show>
+            <Show when={sessionId() && !chat.isStreaming()}>
+              <Button
+                type="button"
+                onClick={startAdversarialReview}
+                disabled={creatingNewSession()}
+                variant="danger"
+                size="xs"
+                class="whitespace-nowrap"
+              >
+                {width() < 300 ? "Adversarial" : "Adversarial Review"}
               </Button>
             </Show>
             <Show when={chat.isStreaming()}>
@@ -881,7 +961,8 @@ export function ChatPanel(props: ChatPanelProps) {
                 sessions={sessions()}
                 activeSessionId={sessionId()}
                 currentHeadSha={currentHeadSha() || undefined}
-                disabled={chat.isStreaming() || initializing()}
+                disabled={chat.isStreaming() || initializing() || creatingNewSession()}
+                creatingNewSession={creatingNewSession()}
                 onSelect={handleSessionSwitch}
                 onNewSession={handleNewSession}
                 onHide={handleHideSession}
@@ -889,16 +970,22 @@ export function ChatPanel(props: ChatPanelProps) {
               <button
                 type="button"
                 onClick={handleNewSession}
-                disabled={chat.isStreaming() || initializing()}
+                disabled={chat.isStreaming() || initializing() || creatingNewSession()}
                 class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-bg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                title="Create new session"
+                title={creatingNewSession() ? "Creating new session" : "Create new session"}
               >
-                {width() < 300 ? "+New" : "+ New"}
+                <Show
+                  when={creatingNewSession()}
+                  fallback={<span>{width() < 300 ? "+New" : "+ New"}</span>}
+                >
+                  <SpinnerIcon size={10} class="animate-spin" />
+                  <span>{width() < 300 ? "New..." : "Creating..."}</span>
+                </Show>
               </button>
             </div>
             <ModelSelector
               align="right"
-              disabled={chat.isStreaming() || initializing()}
+              disabled={chat.isStreaming() || initializing() || creatingNewSession()}
               class="shrink-0"
             />
           </div>
@@ -934,21 +1021,25 @@ export function ChatPanel(props: ChatPanelProps) {
         <Show
           when={
             props.prUrl &&
-            (initializing() || (sessionId() && chat.messages().length === 0 && !chat.isStreaming()))
+            (initializing() ||
+              creatingNewSession() ||
+              (sessionId() && chat.messages().length === 0 && !chat.isStreaming()))
           }
         >
           <div class="text-center py-4">
             <Show
-              when={!initializing()}
+              when={!initializing() && !creatingNewSession()}
               fallback={
                 <div class="flex items-center justify-center gap-2 text-text-faint text-sm mb-3">
                   <SpinnerIcon size={14} class="animate-spin" />
-                  <span>Initializing session...</span>
+                  <span>
+                    {creatingNewSession() ? "Creating session..." : "Initializing session..."}
+                  </span>
                 </div>
               }
             >
               <div class="text-text-faint text-sm mb-3">
-                Click "Start Review" for a structured review, or ask questions about this PR
+                Click "Start Review" or "Adversarial Review", or ask questions about this PR
               </div>
             </Show>
             <div class="flex flex-wrap gap-1.5 justify-center">
@@ -1083,7 +1174,9 @@ export function ChatPanel(props: ChatPanelProps) {
               }}
               placeholder={
                 sessionId()
-                  ? "Ask about this PR..."
+                  ? creatingNewSession()
+                    ? "Creating session..."
+                    : "Ask about this PR..."
                   : props.prUrl
                     ? initializing()
                       ? "Initializing..."
@@ -1092,7 +1185,7 @@ export function ChatPanel(props: ChatPanelProps) {
                         : "Connecting..."
                     : "Load a PR first"
               }
-              disabled={!sessionId() || chat.isStreaming()}
+              disabled={!sessionId() || chat.isStreaming() || creatingNewSession()}
               class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent resize-none disabled:opacity-50 disabled:cursor-not-allowed font-mono"
               rows={2}
             />
@@ -1120,7 +1213,7 @@ export function ChatPanel(props: ChatPanelProps) {
                         <button
                           type="button"
                           onClick={() => handleQuickPrompt(qp.prompt)}
-                          disabled={!sessionId() || chat.isStreaming()}
+                          disabled={!sessionId() || chat.isStreaming() || creatingNewSession()}
                           class="px-1.5 py-0.5 text-[9px] border border-border text-text-faint hover:border-accent hover:text-accent transition-colors disabled:opacity-30"
                         >
                           {qp.label}
@@ -1132,7 +1225,9 @@ export function ChatPanel(props: ChatPanelProps) {
               </div>
               <button
                 type="submit"
-                disabled={!sessionId() || chat.isStreaming() || !input().trim()}
+                disabled={
+                  !sessionId() || chat.isStreaming() || creatingNewSession() || !input().trim()
+                }
                 class="px-3 py-1 bg-primary text-text text-sm font-medium hover:bg-primary-hover disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {chat.isStreaming() ? "..." : "Send"}

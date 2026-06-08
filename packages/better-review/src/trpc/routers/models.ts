@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   getSelectedModel,
+  REASONING_EFFORTS,
   searchModels,
   setSelectedModel,
   type ModelSelection,
@@ -31,13 +32,14 @@ export const modelsRouter = router({
         providerId: z.string(),
         modelId: z.string(),
         variant: z.string().nullable().optional(),
+        thinkingLevel: z.enum(REASONING_EFFORTS).nullable().optional(),
       }),
     )
     .mutation(({ input }) => {
       try {
         const model = setSelectedModel(input);
         console.log(
-          `[models] Model changed to: ${model.providerId}/${model.modelId}${model.variant ? ` (${model.variant})` : ""}`,
+          `[models] Model changed to: ${model.providerId}/${model.modelId}${model.variant ? ` (${model.variant})` : ""}, thinking=${model.thinkingLevel}`,
         );
         return { success: true, model };
       } catch (error) {
@@ -56,5 +58,6 @@ export function getCurrentModel(): ModelSelection {
     providerId: selected.providerId,
     modelId: selected.modelId,
     variant: selected.variant,
+    thinkingLevel: selected.thinkingLevel,
   };
 }

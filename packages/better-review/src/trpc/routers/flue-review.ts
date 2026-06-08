@@ -219,9 +219,35 @@ export const flueReviewRouter = router({
           const active = current.sessions.find((session) => session.id === current.activeSessionId);
           const flueSession = yield* flueSessions.get(current.activeSessionId);
           if (active && active.headSha === headSha && flueSession) {
+            const prepared = yield* checkout.prepare({
+              owner: pr.owner,
+              repo: pr.repo,
+              number: pr.number,
+              prUrl: input.prUrl,
+              baseSha,
+              headSha,
+              baseRef,
+              headRef,
+              reviewMode: reviewScope.mode,
+              commitSha: reviewScope.commitSha,
+              files: input.files,
+            });
+            const updatedSession: FlueReviewSession = {
+              ...flueSession,
+              baseSha,
+              headSha,
+              baseRef,
+              headRef,
+              reviewMode: reviewScope.mode,
+              commitSha: reviewScope.commitSha,
+              worktreePath: prepared.worktreePath,
+              repoAccess: prepared.repoAccess,
+              files: input.files,
+            };
+            yield* flueSessions.save(updatedSession);
             yield* prContext.registerSession(flueSession.id, input.prUrl);
             yield* prContext.setSessionScope(flueSession.id, reviewScope);
-            return sessionPayload(flueSession, current.sessions, current.activeSessionId, true);
+            return sessionPayload(updatedSession, current.sessions, current.activeSessionId, true);
           }
         }
 
@@ -252,6 +278,7 @@ export const flueReviewRouter = router({
           reviewMode: reviewScope.mode,
           commitSha: reviewScope.commitSha,
           worktreePath: prepared.worktreePath,
+          repoAccess: prepared.repoAccess,
           files: input.files,
         });
 
@@ -266,6 +293,11 @@ export const flueReviewRouter = router({
   create: publicProcedure.input(sessionInput).mutation(({ input }) =>
     runEffect(
       Effect.gen(function* () {
+        const startedAt = Date.now();
+        yield* Effect.log(
+          `[flueReview.create] START ${input.repoOwner}/${input.repoName}#${input.prNumber}`,
+        );
+
         const gh = yield* GhService;
         const prContext = yield* PrContextService;
         const flueSessions = yield* FlueReviewSessionService;
@@ -277,6 +309,7 @@ export const flueReviewRouter = router({
         }
 
         const reviewScope = makeReviewScope(input);
+        const metadataStartedAt = Date.now();
         const [headSha, baseSha, headRef, baseRef] = yield* Effect.all(
           [
             gh.getHeadSha(input.prUrl),
@@ -286,7 +319,11 @@ export const flueReviewRouter = router({
           ],
           { concurrency: 4 },
         );
+        yield* Effect.log(
+          `[flueReview.create] github metadata completed in ${Date.now() - metadataStartedAt}ms total=${Date.now() - startedAt}ms`,
+        );
 
+        const checkoutStartedAt = Date.now();
         const prepared = yield* checkout.prepare({
           owner: pr.owner,
           repo: pr.repo,
@@ -300,7 +337,11 @@ export const flueReviewRouter = router({
           commitSha: reviewScope.commitSha,
           files: input.files,
         });
+        yield* Effect.log(
+          `[flueReview.create] checkout.prepare completed in ${Date.now() - checkoutStartedAt}ms total=${Date.now() - startedAt}ms`,
+        );
 
+        const storeStartedAt = Date.now();
         const session = yield* flueSessions.create({
           id: randomUUID(),
           prUrl: input.prUrl,
@@ -314,14 +355,35 @@ export const flueReviewRouter = router({
           reviewMode: reviewScope.mode,
           commitSha: reviewScope.commitSha,
           worktreePath: prepared.worktreePath,
+          repoAccess: prepared.repoAccess,
           files: input.files,
         });
+        yield* Effect.log(
+          `[flueReview.create] session store completed in ${Date.now() - storeStartedAt}ms total=${Date.now() - startedAt}ms`,
+        );
 
+        const contextStartedAt = Date.now();
         const prData = yield* prContext.addSession(input.prUrl, session.id, headSha);
         yield* prContext.setSessionScope(session.id, reviewScope);
+        yield* Effect.log(
+          `[flueReview.create] pr context completed in ${Date.now() - contextStartedAt}ms total=${Date.now() - startedAt}ms`,
+        );
+        yield* Effect.log(
+          `[flueReview.create] DONE ${input.repoOwner}/${input.repoName}#${input.prNumber} session=${session.id} total=${Date.now() - startedAt}ms`,
+        );
 
         return sessionPayload(session, prData.sessions, prData.activeSessionId, false);
-      }),
+      }).pipe(
+        Effect.withSpan("flueReview.create", {
+          attributes: {
+            prUrl: input.prUrl,
+            repoOwner: input.repoOwner,
+            repoName: input.repoName,
+            prNumber: input.prNumber,
+            reviewMode: input.reviewMode ?? "full",
+          },
+        }),
+      ),
     ),
   ),
 

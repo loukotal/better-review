@@ -4,18 +4,32 @@ import { ChevronDownFillIcon } from "../icons/chevron-down-icon";
 import { trpc } from "../lib/trpc";
 
 const MODEL_STORAGE_KEY = "better-review:selected-model";
+const REASONING_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+
+type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+};
 
 interface ModelEntry {
   providerId: string;
   modelId: string;
   name: string;
   reasoning: boolean;
+  thinkingLevels: ReasoningEffort[];
   variants: string[];
   releaseDate: string;
 }
 
 interface SelectedModel extends ModelEntry {
   variant: string | null;
+  thinkingLevel: ReasoningEffort;
 }
 
 interface ModelSelectorProps {
@@ -28,6 +42,7 @@ function loadSavedModel(): {
   providerId: string;
   modelId: string;
   variant?: string | null;
+  thinkingLevel?: ReasoningEffort | null;
 } | null {
   const stored = localStorage.getItem(MODEL_STORAGE_KEY);
   if (!stored) return null;
@@ -37,6 +52,7 @@ function loadSavedModel(): {
       providerId?: unknown;
       modelId?: unknown;
       variant?: unknown;
+      thinkingLevel?: unknown;
     };
     if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") {
       return {
@@ -46,6 +62,7 @@ function loadSavedModel(): {
           typeof parsed.variant === "string" || parsed.variant === null
             ? parsed.variant
             : undefined,
+        thinkingLevel: isReasoningEffort(parsed.thinkingLevel) ? parsed.thinkingLevel : undefined,
       };
     }
   } catch (err) {
@@ -63,8 +80,17 @@ function saveModel(model: SelectedModel) {
       providerId: model.providerId,
       modelId: model.modelId,
       variant: model.variant,
+      thinkingLevel: model.thinkingLevel,
     }),
   );
+}
+
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return typeof value === "string" && REASONING_EFFORTS.includes(value as ReasoningEffort);
+}
+
+function reasoningEffortOptions(model: SelectedModel): ReasoningEffort[] {
+  return model.thinkingLevels.length > 0 ? model.thinkingLevels : ["off"];
 }
 
 export function ModelSelector(props: ModelSelectorProps) {
@@ -154,9 +180,11 @@ export function ModelSelector(props: ModelSelectorProps) {
 
   const handleSelect = async (model: ModelEntry) => {
     try {
+      const selected = currentModel();
       const result = await trpc.models.setCurrent.mutate({
         providerId: model.providerId,
         modelId: model.modelId,
+        thinkingLevel: selected?.thinkingLevel,
       });
       setCurrentModel(result.model);
       saveModel(result.model);
@@ -175,11 +203,30 @@ export function ModelSelector(props: ModelSelectorProps) {
         providerId: model.providerId,
         modelId: model.modelId,
         variant: variant || null,
+        thinkingLevel: model.thinkingLevel,
       });
       setCurrentModel(result.model);
       saveModel(result.model);
     } catch (err) {
       console.error("Failed to update model variant:", err);
+    }
+  };
+
+  const handleReasoningEffortChange = async (thinkingLevel: ReasoningEffort) => {
+    const model = currentModel();
+    if (!model) return;
+
+    try {
+      const result = await trpc.models.setCurrent.mutate({
+        providerId: model.providerId,
+        modelId: model.modelId,
+        variant: model.variant,
+        thinkingLevel,
+      });
+      setCurrentModel(result.model);
+      saveModel(result.model);
+    } catch (err) {
+      console.error("Failed to update reasoning effort:", err);
     }
   };
 
@@ -200,7 +247,11 @@ export function ModelSelector(props: ModelSelectorProps) {
         disabled={props.disabled}
         class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-border text-text-muted hover:border-accent hover:text-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-w-35"
         title={
-          currentModel() ? `${currentModel()!.providerId}/${currentModel()!.modelId}` : undefined
+          currentModel()
+            ? `${currentModel()!.providerId}/${currentModel()!.modelId} • reasoning: ${
+                REASONING_EFFORT_LABELS[currentModel()!.thinkingLevel]
+              }`
+            : undefined
         }
       >
         <span class="truncate">{displayText()}</span>
@@ -248,6 +299,25 @@ export function ModelSelector(props: ModelSelectorProps) {
                         <option value="">Default</option>
                         <For each={model().variants}>
                           {(variant) => <option value={variant}>{variant}</option>}
+                        </For>
+                      </select>
+                    </label>
+                  </Show>
+
+                  <Show when={model().reasoning}>
+                    <label class="flex flex-col gap-1 text-text">
+                      <span>Reasoning effort</span>
+                      <select
+                        value={model().thinkingLevel}
+                        onChange={(e) =>
+                          handleReasoningEffortChange(e.currentTarget.value as ReasoningEffort)
+                        }
+                        class="w-full px-2 py-1 text-sm bg-bg border border-border text-text"
+                      >
+                        <For each={reasoningEffortOptions(model())}>
+                          {(effort) => (
+                            <option value={effort}>{REASONING_EFFORT_LABELS[effort]}</option>
+                          )}
                         </For>
                       </select>
                     </label>

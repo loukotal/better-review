@@ -3,8 +3,10 @@ import {
   getModel,
   getModels,
   getProviders,
+  getSupportedThinkingLevels,
   type Api,
   type Model,
+  type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
 
 import { hasPiOAuthProvider } from "./flue/oauth-auth";
@@ -14,21 +16,28 @@ export interface ModelEntry {
   modelId: string;
   name: string;
   reasoning: boolean;
+  thinkingLevels: ReasoningEffort[];
   variants: string[];
   releaseDate: string;
 }
+
+export const REASONING_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export interface ModelSelection {
   providerId: string;
   modelId: string;
   variant: string | null;
+  thinkingLevel: ReasoningEffort;
 }
 
 export type SelectedModel = ModelEntry & {
   variant: string | null;
+  thinkingLevel: ReasoningEffort;
 };
 
 const FALLBACK_FLUE_MODEL = "anthropic/claude-sonnet-4-6";
+const DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium";
 const configuredDefaultModel = process.env.BETTER_REVIEW_FLUE_MODEL?.trim();
 
 const providerAliases = new Map<string, string>([
@@ -40,6 +49,10 @@ let currentModel: ModelSelection | undefined;
 
 const getModelById = getModel as (provider: string, modelId: string) => Model<Api> | undefined;
 const getModelsByProvider = getModels as (provider: string) => Array<Model<Api>>;
+
+function isReasoningEffort(value: ModelThinkingLevel): value is ReasoningEffort {
+  return REASONING_EFFORTS.includes(value as ReasoningEffort);
+}
 
 function normalizeProviderId(providerId: string): string {
   return providerAliases.get(providerId) ?? providerId;
@@ -53,7 +66,7 @@ function parseFlueModel(model: string): ModelSelection | null {
   const modelId = model.slice(slash + 1);
   if (!providerId || !modelId) return null;
 
-  return { providerId, modelId, variant: null };
+  return { providerId, modelId, variant: null, thinkingLevel: DEFAULT_REASONING_EFFORT };
 }
 
 function toModelEntry(model: Model<Api>): ModelEntry {
@@ -62,6 +75,7 @@ function toModelEntry(model: Model<Api>): ModelEntry {
     modelId: model.id,
     name: model.name,
     reasoning: Boolean(model.reasoning),
+    thinkingLevels: getSupportedThinkingLevels(model).filter(isReasoningEffort),
     variants: [],
     releaseDate: "",
   };
@@ -78,8 +92,33 @@ function resolveVariant(_model: ModelEntry, input: { variant?: string | null }):
   return typeof input.variant === "string" && input.variant.length > 0 ? input.variant : null;
 }
 
-function toSelectedModel(model: ModelEntry, variant: string | null): SelectedModel {
-  return { ...model, variant };
+function resolveThinkingLevel(
+  model: ModelEntry,
+  input: { thinkingLevel?: ReasoningEffort | null },
+): ReasoningEffort {
+  const requested = input.thinkingLevel ?? currentModel?.thinkingLevel ?? DEFAULT_REASONING_EFFORT;
+  if (model.thinkingLevels.includes(requested)) return requested;
+
+  const requestedIndex = REASONING_EFFORTS.indexOf(requested);
+  for (let i = requestedIndex; i < REASONING_EFFORTS.length; i++) {
+    const candidate = REASONING_EFFORTS[i];
+    if (model.thinkingLevels.includes(candidate)) return candidate;
+  }
+
+  for (let i = requestedIndex - 1; i >= 0; i--) {
+    const candidate = REASONING_EFFORTS[i];
+    if (model.thinkingLevels.includes(candidate)) return candidate;
+  }
+
+  return "off";
+}
+
+function toSelectedModel(
+  model: ModelEntry,
+  variant: string | null,
+  thinkingLevel: ReasoningEffort,
+): SelectedModel {
+  return { ...model, variant, thinkingLevel: resolveThinkingLevel(model, { thinkingLevel }) };
 }
 
 function resolveDefaultModel(): SelectedModel {
@@ -87,7 +126,7 @@ function resolveDefaultModel(): SelectedModel {
 
   if (configured) {
     const model = getModelEntry(configured.providerId, configured.modelId);
-    if (model) return toSelectedModel(model, configured.variant);
+    if (model) return toSelectedModel(model, configured.variant, configured.thinkingLevel);
   }
 
   // Local dev usually has Pi's ChatGPT/Codex OAuth but no Anthropic token. Prefer
@@ -95,13 +134,13 @@ function resolveDefaultModel(): SelectedModel {
   // openai-codex when needed.
   if (hasPiOAuthProvider("openai-codex") && !process.env.OPENAI_API_KEY) {
     const openAiModel = getModelEntry("openai", "gpt-5.5");
-    if (openAiModel) return toSelectedModel(openAiModel, null);
+    if (openAiModel) return toSelectedModel(openAiModel, null, DEFAULT_REASONING_EFFORT);
   }
 
   const fallback = parseFlueModel(FALLBACK_FLUE_MODEL);
   if (fallback) {
     const model = getModelEntry(fallback.providerId, fallback.modelId);
-    if (model) return toSelectedModel(model, fallback.variant);
+    if (model) return toSelectedModel(model, fallback.variant, fallback.thinkingLevel);
   }
 
   const firstProvider = getProviders()[0];
@@ -110,7 +149,7 @@ function resolveDefaultModel(): SelectedModel {
     throw new Error("No Flue models are available");
   }
 
-  return toSelectedModel(toModelEntry(firstModel), null);
+  return toSelectedModel(toModelEntry(firstModel), null, DEFAULT_REASONING_EFFORT);
 }
 
 export function getSelectedModel(): SelectedModel {
@@ -120,6 +159,7 @@ export function getSelectedModel(): SelectedModel {
       providerId: resolved.providerId,
       modelId: resolved.modelId,
       variant: resolved.variant,
+      thinkingLevel: resolved.thinkingLevel,
     };
     return resolved;
   }
@@ -131,24 +171,28 @@ export function getSelectedModel(): SelectedModel {
       providerId: resolved.providerId,
       modelId: resolved.modelId,
       variant: resolved.variant,
+      thinkingLevel: resolved.thinkingLevel,
     };
     return resolved;
   }
 
   const variant = resolveVariant(model, { variant: currentModel.variant });
+  const thinkingLevel = resolveThinkingLevel(model, { thinkingLevel: currentModel.thinkingLevel });
   currentModel = {
     providerId: model.providerId,
     modelId: model.modelId,
     variant,
+    thinkingLevel,
   };
 
-  return toSelectedModel(model, variant);
+  return toSelectedModel(model, variant, thinkingLevel);
 }
 
 export function setSelectedModel(input: {
   providerId: string;
   modelId: string;
   variant?: string | null;
+  thinkingLevel?: ReasoningEffort | null;
 }): SelectedModel {
   const model = getModelEntry(input.providerId, input.modelId);
   if (!model) {
@@ -156,13 +200,15 @@ export function setSelectedModel(input: {
   }
 
   const variant = resolveVariant(model, { variant: input.variant });
+  const thinkingLevel = resolveThinkingLevel(model, { thinkingLevel: input.thinkingLevel });
   currentModel = {
     providerId: model.providerId,
     modelId: model.modelId,
     variant,
+    thinkingLevel,
   };
 
-  return toSelectedModel(model, variant);
+  return toSelectedModel(model, variant, thinkingLevel);
 }
 
 export function searchModels(query: string): {
@@ -212,4 +258,8 @@ export function getCurrentFlueModel(): string {
   }
 
   return `${selected.providerId}/${selected.modelId}`;
+}
+
+export function getCurrentFlueThinkingLevel(): ReasoningEffort {
+  return getSelectedModel().thinkingLevel;
 }

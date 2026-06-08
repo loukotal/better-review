@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { Effect, Layer } from "effect";
 
+import type { RepoAccessCheck } from "./pr-checkout";
 import { STORE_BASE_DIR, StoreService, StoreServiceLive } from "./store";
 
 export const FLUE_REVIEW_SESSIONS_NAMESPACE = "flue-review-sessions";
@@ -20,6 +21,7 @@ export interface FlueReviewSession {
   reviewMode: "full" | "commit";
   commitSha: string | null;
   worktreePath: string;
+  repoAccess?: RepoAccessCheck;
   files: string[];
   createdAt: number;
   updatedAt: number;
