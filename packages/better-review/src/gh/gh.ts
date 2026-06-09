@@ -215,6 +215,14 @@ const RawCommitSchema = Schema.Struct({
   ),
 });
 
+const PullRequestFileSchema = Schema.Struct({
+  filename: Schema.String,
+  status: Schema.String,
+  previous_filename: Schema.optional(Schema.NullOr(Schema.String)),
+  patch: Schema.optional(Schema.NullOr(Schema.String)),
+});
+type PullRequestFile = typeof PullRequestFileSchema.Type;
+
 // Schema for GraphQL PR in searchReviewRequested
 const GraphQLReviewSchema = Schema.Struct({
   author: Schema.Struct({ login: Schema.String }),
@@ -391,6 +399,81 @@ const getPrInfo = (urlOrNumber: string) =>
     const [owner, repo] = repoInfo.split("/");
 
     return { owner, repo, number: urlOrNumber };
+  });
+
+const hasPatch = (file: PullRequestFile): file is PullRequestFile & { patch: string } =>
+  typeof file.patch === "string" && file.patch.length > 0;
+
+function buildUnifiedDiffForPullFile(file: PullRequestFile): string {
+  const oldPath = file.previous_filename ?? file.filename;
+  const newPath = file.filename;
+  const lines: string[] = [`diff --git a/${oldPath} b/${newPath}`];
+
+  if (file.status === "added") {
+    lines.push("--- /dev/null", `+++ b/${newPath}`);
+  } else if (file.status === "removed") {
+    lines.push(`--- a/${oldPath}`, "+++ /dev/null");
+  } else if (file.status === "renamed") {
+    lines.push(
+      `rename from ${oldPath}`,
+      `rename to ${newPath}`,
+      `--- a/${oldPath}`,
+      `+++ b/${newPath}`,
+    );
+  } else {
+    lines.push(`--- a/${oldPath}`, `+++ b/${newPath}`);
+  }
+
+  if (hasPatch(file)) {
+    lines.push(file.patch.replace(/\n$/, ""));
+  }
+
+  return lines.join("\n");
+}
+
+export function buildUnifiedDiffFromPullFiles(files: readonly PullRequestFile[]): string {
+  return files.map(buildUnifiedDiffForPullFile).join("\n");
+}
+
+export const isPullRequestDiffTooLarge = (cause: unknown): boolean => {
+  const seen = new Set<unknown>();
+  const stack = [cause];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined || current === null || seen.has(current)) continue;
+    seen.add(current);
+
+    const message = current instanceof Error ? current.message : String(current);
+    if (
+      message.includes("PullRequest.diff too_large") ||
+      message.includes("diff exceeded the maximum number of files")
+    ) {
+      return true;
+    }
+
+    if (typeof current === "object" && "cause" in current) {
+      stack.push((current as { cause?: unknown }).cause);
+    }
+  }
+
+  return false;
+};
+
+const getDiffViaFilesApi = (urlOrNumber: string) =>
+  Effect.gen(function* () {
+    const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
+    const filesJson = yield* runGh(
+      "api",
+      `repos/${owner}/${repo}/pulls/${number}/files?per_page=100`,
+      "--paginate",
+      "--slurp",
+    );
+    const pages = yield* parseJsonPreserve(Schema.Array(Schema.Array(PullRequestFileSchema)))(
+      filesJson,
+    );
+    const files = pages.flat();
+    return buildUnifiedDiffFromPullFiles(files);
   });
 
 const toCamelCase = (value: string): string => {
@@ -740,7 +823,11 @@ const ghCli: GhCli = {
   getDiff: (urlOrNumber: string) =>
     Effect.gen(function* () {
       yield* validatePrUrl(urlOrNumber);
-      return yield* runGh("pr", "diff", urlOrNumber);
+      return yield* runGh("pr", "diff", urlOrNumber).pipe(
+        Effect.catchAll((cause) =>
+          isPullRequestDiffTooLarge(cause) ? getDiffViaFilesApi(urlOrNumber) : Effect.fail(cause),
+        ),
+      );
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getDiff", cause })),
       Effect.withSpan("GhService.getDiff", { attributes: { urlOrNumber } }),

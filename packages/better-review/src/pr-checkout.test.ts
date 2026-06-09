@@ -239,6 +239,74 @@ test("ensureReviewHistory deepens a shallow PR checkout until merge-base exists"
   }
 });
 
+test("ensureReviewHistory force-refreshes a non-fast-forward base ref", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-pr-checkout-non-ff-"));
+
+  try {
+    const source = join(root, "source");
+    const cache = join(root, "cache.git");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+
+    await commitFile(source, "src/app.ts", "old develop\n", "old develop");
+    await git(source, ["checkout", "-b", "develop"]);
+
+    await git(root, ["init", "--bare", cache]);
+    await git(cache, ["remote", "add", "origin", source]);
+    await git(cache, [
+      "fetch",
+      "--depth=1",
+      "origin",
+      "refs/heads/develop:refs/remotes/origin/develop",
+    ]);
+
+    await git(source, ["checkout", "--orphan", "rewritten-develop"]);
+    await git(source, ["rm", "-rf", "."]);
+    const rewrittenBaseSha = await commitFile(
+      source,
+      "src/app.ts",
+      "rewritten develop\n",
+      "rewritten develop",
+    );
+    await git(source, ["branch", "-M", "develop"]);
+    await git(source, ["checkout", "-b", "feature"]);
+    const headSha = await commitFile(source, "src/app.ts", "feature\n", "feature");
+    await git(source, ["update-ref", "refs/pull/1/head", "feature"]);
+
+    await git(cache, ["fetch", "--depth=1", "origin", "refs/pull/1/head"]);
+
+    const input: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha: rewrittenBaseSha,
+      headSha,
+      baseRef: "develop",
+      headRef: "feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/app.ts"],
+    };
+
+    await ensureReviewHistory(cache, input);
+
+    const refreshedBase = await git(cache, ["rev-parse", "refs/remotes/origin/develop"]);
+    const resolvedMergeBase = await git(cache, [
+      "merge-base",
+      "refs/remotes/origin/develop",
+      headSha,
+    ]);
+
+    assert.equal(refreshedBase, rewrittenBaseSha);
+    assert.equal(resolvedMergeBase, rewrittenBaseSha);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("verifyWorktreeAccess proves the reviewer can see changed and unchanged tracked files", async () => {
   const root = await mkdtemp(join(tmpdir(), "better-review-repo-access-"));
 

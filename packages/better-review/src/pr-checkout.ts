@@ -285,7 +285,7 @@ async function fetchBaseRef(
     "--filter=blob:none",
     ...historyArgs,
     "origin",
-    `refs/heads/${input.baseRef}:${baseRemoteRef(input)}`,
+    `+refs/heads/${input.baseRef}:${baseRemoteRef(input)}`,
   ]);
 }
 
@@ -377,7 +377,7 @@ async function fetchPullHeadBranch(
     "--filter=blob:none",
     "--depth=1",
     "origin",
-    `${pullHeadRef(input)}:refs/heads/${localBranch}`,
+    `+${pullHeadRef(input)}:refs/heads/${localBranch}`,
   ]);
 }
 
