@@ -13,7 +13,7 @@ interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: "bg-primary text-text hover:bg-primary-hover active:bg-primary",
+  primary: "bg-primary text-primary-text hover:bg-primary-hover active:bg-primary",
   secondary: "border border-border text-text-faint hover:text-text hover:border-text-faint",
   ghost: "text-text-faint hover:text-text",
   danger: "border border-error/50 text-error hover:bg-error/10",

@@ -18,6 +18,7 @@ import { CommitNavigator } from "./components/CommitNavigator";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
@@ -803,6 +804,7 @@ const AppContent: Component = () => {
                 >
                   Kanban
                 </A>
+                <ThemeToggle />
                 <SettingsPanel settings={settings()} onChange={setSettings} />
               </div>
             </div>

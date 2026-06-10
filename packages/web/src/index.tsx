@@ -6,6 +6,7 @@ import { render } from "solid-js/web";
 
 import App from "./App";
 import { queryClient, restoreCache } from "./lib/query";
+import { initializeUiTheme } from "./lib/theme";
 import AgentReviewPage from "./pages/AgentReviewPage";
 import DesignSystemPage from "./pages/DesignSystemPage";
 import KanbanPage from "./pages/KanbanPage";
@@ -13,6 +14,7 @@ import PrListPage from "./pages/PrListPage";
 
 // Restore cache from IndexedDB on startup
 restoreCache();
+initializeUiTheme();
 
 const root = document.getElementById("root");
 

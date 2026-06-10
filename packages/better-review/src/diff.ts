@@ -18,6 +18,15 @@ export interface FileDiffMeta {
   totalRemoved: number;
 }
 
+export type DiffCommentSide = "LEFT" | "RIGHT";
+
+export interface DiffCommentTarget {
+  line: number;
+  side: DiffCommentSide;
+  startLine?: number;
+  startSide?: DiffCommentSide;
+}
+
 // Parse line counts from a unified diff
 export function getLineChanges(diff: string): { added: number; removed: number } {
   let added = 0;
@@ -53,6 +62,30 @@ export function parseDiffMeta(diff: string): Omit<FileDiffMeta, "diff"> {
   }
 
   return { hunks, totalAdded, totalRemoved };
+}
+
+function lineRangeContains(line: number, start: number, count: number): boolean {
+  return count > 0 && line >= start && line < start + count;
+}
+
+function hunkContainsTarget(hunk: HunkInfo, line: number, side: DiffCommentSide): boolean {
+  return side === "LEFT"
+    ? lineRangeContains(line, hunk.oldStart, hunk.oldCount)
+    : lineRangeContains(line, hunk.newStart, hunk.newCount);
+}
+
+export function isDiffCommentTargetInPatch(
+  fileDiff: FileDiffMeta,
+  target: DiffCommentTarget,
+): boolean {
+  const startLine = target.startLine ?? target.line;
+  const startSide = target.startSide ?? target.side;
+
+  return fileDiff.hunks.some(
+    (hunk) =>
+      hunkContainsTarget(hunk, startLine, startSide) &&
+      hunkContainsTarget(hunk, target.line, target.side),
+  );
 }
 
 // Filter a unified diff to only include lines within the specified line range

@@ -65,7 +65,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   fullWidth
                   class={
                     props.settings.diffStyle === "split"
-                      ? "bg-primary text-text border-primary hover:text-text hover:border-primary"
+                      ? "bg-primary text-primary-text border-primary hover:text-primary-text hover:border-primary"
                       : "bg-bg text-text-muted"
                   }
                 >
@@ -79,7 +79,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   fullWidth
                   class={`border-l-0 ${
                     props.settings.diffStyle === "unified"
-                      ? "bg-primary text-text border-primary hover:text-text hover:border-primary"
+                      ? "bg-primary text-primary-text border-primary hover:text-primary-text hover:border-primary"
                       : "bg-bg text-text-muted"
                   }`}
                 >

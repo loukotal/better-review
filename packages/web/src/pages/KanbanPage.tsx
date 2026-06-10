@@ -13,6 +13,7 @@ import {
 
 import type { ProjectBoard, ProjectBoardItem } from "@better-review/shared";
 
+import { ThemeToggle } from "../components/ThemeToggle";
 import { Badge, Button, Card, Select, TextInput } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
 import { CircleIcon } from "../icons/circle-icon";
@@ -549,6 +550,7 @@ const KanbanPage: Component = () => {
               <A href="/review" class="text-text-faint hover:text-text transition-colors">
                 Review
               </A>
+              <ThemeToggle />
             </div>
           </div>
 

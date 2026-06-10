@@ -1228,7 +1228,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 disabled={
                   !sessionId() || chat.isStreaming() || creatingNewSession() || !input().trim()
                 }
-                class="px-3 py-1 bg-primary text-text text-sm font-medium hover:bg-primary-hover disabled:opacity-30 disabled:cursor-not-allowed"
+                class="px-3 py-1 bg-primary text-primary-text text-sm font-medium hover:bg-primary-hover disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {chat.isStreaming() ? "..." : "Send"}
               </button>

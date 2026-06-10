@@ -93,6 +93,8 @@ export interface AddCommentParams {
   line: number;
   body: string;
   side?: "LEFT" | "RIGHT";
+  startLine?: number;
+  startSide?: "LEFT" | "RIGHT";
 }
 
 export interface AddReplyParams {
@@ -949,8 +951,8 @@ const ghCli: GhCli = {
         ".head.sha",
       )).trim();
 
-      // Create a PR review comment
-      const result = yield* runGh(
+      const side = params.side ?? "RIGHT";
+      const args = [
         "api",
         `repos/${owner}/${repo}/pulls/${number}/comments`,
         "-X",
@@ -966,8 +968,20 @@ const ghCli: GhCli = {
         "-F",
         `line=${params.line}`,
         "-f",
-        `side=${params.side ?? "RIGHT"}`,
-      );
+        `side=${side}`,
+      ];
+
+      if (params.startLine !== undefined && params.startLine !== params.line) {
+        args.push(
+          "-F",
+          `start_line=${params.startLine}`,
+          "-f",
+          `start_side=${params.startSide ?? side}`,
+        );
+      }
+
+      // Create a PR review comment
+      const result = yield* runGh(...args);
       return yield* parseJsonPreserve(PRCommentSchema)(result);
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "addComment", cause })),

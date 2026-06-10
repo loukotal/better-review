@@ -20,6 +20,7 @@ import type {
   ReviewSessionResult,
 } from "@better-review/shared";
 
+import { ThemeToggle } from "../components/ThemeToggle";
 import { Badge, Button, Card, Select, Textarea } from "../design-system";
 import {
   DiffViewer,
@@ -532,6 +533,7 @@ export default function AgentReviewPage() {
                         </>
                       )}
                     </Show>
+                    <ThemeToggle />
                   </div>
                 </div>
               </header>
