@@ -202,6 +202,24 @@ async function runGit(repoGitDir: string, args: string[]): Promise<string> {
   return runRequired("git", ["-C", repoGitDir, ...args]);
 }
 
+export function githubRepoRemoteUrl(owner: string, repo: string, gitProtocol: string): string {
+  if (gitProtocol.trim() === "ssh") {
+    return `git@github.com:${owner}/${repo}.git`;
+  }
+  return `https://github.com/${owner}/${repo}.git`;
+}
+
+async function getConfiguredGitHubRepoRemoteUrl(owner: string, repo: string): Promise<string> {
+  const result = await runCommand("gh", ["config", "get", "git_protocol", "--host", "github.com"], {
+    timeoutMs: CHECKOUT_TIMEOUT_MS,
+  });
+  if (result.exitCode === 0 && !result.timedOut) {
+    return githubRepoRemoteUrl(owner, repo, result.stdout);
+  }
+
+  return githubRepoRemoteUrl(owner, repo, "https");
+}
+
 export async function withRepoGitQueue<T>(
   repoGitDir: string,
   operation: (queue: RepoGitQueueInfo) => Promise<T>,
@@ -233,6 +251,8 @@ export async function withRepoGitQueue<T>(
 }
 
 async function ensureBareRepo(owner: string, repo: string, repoGitDir: string): Promise<void> {
+  const remoteUrl = await getConfiguredGitHubRepoRemoteUrl(owner, repo);
+
   if (!(await pathExists(repoGitDir))) {
     await mkdir(join(repoGitDir, ".."), { recursive: true });
     await runRequired("gh", [
@@ -248,14 +268,7 @@ async function ensureBareRepo(owner: string, repo: string, repoGitDir: string): 
     ]);
   }
 
-  await runRequired("git", [
-    "-C",
-    repoGitDir,
-    "remote",
-    "set-url",
-    "origin",
-    `https://github.com/${owner}/${repo}.git`,
-  ]);
+  await runRequired("git", ["-C", repoGitDir, "remote", "set-url", "origin", remoteUrl]);
   await runRequired("git", ["-C", repoGitDir, "config", "remote.origin.promisor", "true"]);
   await runRequired("git", [
     "-C",

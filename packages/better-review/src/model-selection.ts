@@ -194,9 +194,21 @@ export function setSelectedModel(input: {
   variant?: string | null;
   thinkingLevel?: ReasoningEffort | null;
 }): SelectedModel {
-  const model = getModelEntry(input.providerId, input.modelId);
+  let model = getModelEntry(input.providerId, input.modelId);
   if (!model) {
     throw new Error(`Model not found: ${input.providerId}/${input.modelId}`);
+  }
+
+  if (model.providerId === "openai" && !process.env.OPENAI_API_KEY) {
+    const codexModel = hasPiOAuthProvider("openai-codex")
+      ? getModelEntry("openai-codex", model.modelId)
+      : null;
+    if (!codexModel) {
+      throw new Error(
+        `Model ${model.providerId}/${model.modelId} requires OPENAI_API_KEY. Select an openai-codex model or set OPENAI_API_KEY.`,
+      );
+    }
+    model = codexModel;
   }
 
   const variant = resolveVariant(model, { variant: input.variant });
@@ -220,7 +232,7 @@ export function searchModels(query: string): {
   const candidates: ModelEntry[] = [];
 
   for (const providerId of getProviders()) {
-    if (findEnvKeys(providerId)?.length) {
+    if (findEnvKeys(providerId)?.length || hasPiOAuthProvider(providerId)) {
       configuredProviders.add(providerId);
     }
 
@@ -229,16 +241,23 @@ export function searchModels(query: string): {
     }
   }
 
-  const models = (
-    normalizedQuery
-      ? candidates.filter(
-          (model) =>
-            model.providerId.toLowerCase().includes(normalizedQuery) ||
-            model.modelId.toLowerCase().includes(normalizedQuery) ||
-            model.name.toLowerCase().includes(normalizedQuery),
-        )
-      : candidates
-  ).slice(0, 50);
+  const filtered = normalizedQuery
+    ? candidates.filter(
+        (model) =>
+          model.providerId.toLowerCase().includes(normalizedQuery) ||
+          model.modelId.toLowerCase().includes(normalizedQuery) ||
+          model.name.toLowerCase().includes(normalizedQuery),
+      )
+    : candidates;
+
+  const models = filtered
+    .toSorted((a, b) => {
+      const aConfigured = configuredProviders.has(a.providerId);
+      const bConfigured = configuredProviders.has(b.providerId);
+      if (aConfigured !== bConfigured) return aConfigured ? -1 : 1;
+      return 0;
+    })
+    .slice(0, 50);
 
   return { models, connectedProvidersCount: configuredProviders.size };
 }

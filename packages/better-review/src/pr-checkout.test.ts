@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import {
   cleanupExpiredWorktrees,
   ensureReviewHistory,
+  githubRepoRemoteUrl,
   type RepoGitQueueInfo,
   verifyWorktreeAccess,
   withRepoGitQueue,
@@ -101,6 +102,14 @@ async function writeCheckoutReadyManifest(
     ),
   );
 }
+
+test("githubRepoRemoteUrl respects gh git protocol", () => {
+  assert.equal(githubRepoRemoteUrl("owner", "repo", "ssh\n"), "git@github.com:owner/repo.git");
+  assert.equal(
+    githubRepoRemoteUrl("owner", "repo", "https\n"),
+    "https://github.com/owner/repo.git",
+  );
+});
 
 test("withRepoGitQueue serializes operations for the same cached repository", async () => {
   const events: string[] = [];
