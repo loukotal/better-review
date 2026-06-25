@@ -81,6 +81,10 @@ function toModelEntry(model: Model<Api>): ModelEntry {
   };
 }
 
+function hasProviderCredentials(providerId: string): boolean {
+  return Boolean(findEnvKeys(providerId)?.length || hasPiOAuthProvider(providerId));
+}
+
 export function getModelEntry(providerId: string, modelId: string): ModelEntry | null {
   const normalizedProviderId = normalizeProviderId(providerId);
   const model = getModelById(normalizedProviderId, modelId);
@@ -211,6 +215,18 @@ export function setSelectedModel(input: {
     model = codexModel;
   }
 
+  if (model.providerId === "opencode" && !hasProviderCredentials("opencode")) {
+    const codexModel = hasProviderCredentials("openai-codex")
+      ? getModelEntry("openai-codex", model.modelId)
+      : null;
+    if (!codexModel) {
+      throw new Error(
+        `Model ${model.providerId}/${model.modelId} requires OPENCODE_API_KEY. Select an authenticated provider or set OPENCODE_API_KEY.`,
+      );
+    }
+    model = codexModel;
+  }
+
   const variant = resolveVariant(model, { variant: input.variant });
   const thinkingLevel = resolveThinkingLevel(model, { thinkingLevel: input.thinkingLevel });
   currentModel = {
@@ -232,7 +248,7 @@ export function searchModels(query: string): {
   const candidates: ModelEntry[] = [];
 
   for (const providerId of getProviders()) {
-    if (findEnvKeys(providerId)?.length || hasPiOAuthProvider(providerId)) {
+    if (hasProviderCredentials(providerId)) {
       configuredProviders.add(providerId);
     }
 
@@ -270,7 +286,16 @@ export function getCurrentFlueModel(): string {
   if (
     selected.providerId === "openai" &&
     !process.env.OPENAI_API_KEY &&
-    hasPiOAuthProvider("openai-codex") &&
+    hasProviderCredentials("openai-codex") &&
+    getModelEntry("openai-codex", selected.modelId)
+  ) {
+    return `openai-codex/${selected.modelId}`;
+  }
+
+  if (
+    selected.providerId === "opencode" &&
+    !hasProviderCredentials("opencode") &&
+    hasProviderCredentials("openai-codex") &&
     getModelEntry("openai-codex", selected.modelId)
   ) {
     return `openai-codex/${selected.modelId}`;
