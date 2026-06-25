@@ -67,26 +67,42 @@ function createAnnotationId(quote: string, comment: string): string {
   return `review-annotation-${Math.abs(hash).toString(36)}`;
 }
 
-function annotationLabel(annotation: ReviewSessionAnnotation): string {
-  if (annotation.filePath && annotation.startLine && annotation.endLine) {
-    if (annotation.startLine !== annotation.endLine) {
-      return `${annotation.filePath}:${annotation.startLine}-${annotation.endLine}`;
+function annotationLocation(annotation: ReviewSessionAnnotation): {
+  title: string;
+  detail: string | null;
+} {
+  if (annotation.filePath) {
+    if (annotation.startLine && annotation.endLine) {
+      const range =
+        annotation.startLine !== annotation.endLine
+          ? `Lines ${annotation.startLine}-${annotation.endLine}`
+          : `Line ${annotation.endLine}`;
+      return { title: annotation.filePath, detail: range };
     }
 
-    return `${annotation.filePath}:${annotation.endLine}`;
+    if (annotation.line) return { title: annotation.filePath, detail: `Line ${annotation.line}` };
+    return { title: annotation.filePath, detail: "File note" };
   }
 
-  if (annotation.filePath && annotation.line) {
-    return `${annotation.filePath}:${annotation.line}`;
-  }
+  if (annotation.kind === "line-range") return { title: "Line range", detail: null };
+  if (annotation.kind === "file") return { title: "File note", detail: null };
+  return { title: "Selection note", detail: null };
+}
 
-  if (annotation.filePath) {
-    return annotation.filePath;
-  }
+function annotationLabel(annotation: ReviewSessionAnnotation): string {
+  const location = annotationLocation(annotation);
+  return location.detail
+    ? `${location.title}:${location.detail.replace("Line ", "")}`
+    : location.title;
+}
 
-  if (annotation.kind === "line-range") return "Line range";
-  if (annotation.kind === "file") return "File note";
-  return "Selection note";
+function annotationInlineCommentId(annotation: ReviewSessionAnnotation): number {
+  let hash = 0;
+  for (let i = 0; i < annotation.id.length; i += 1) {
+    hash = (hash << 5) - hash + annotation.id.charCodeAt(i);
+    hash |= 0;
+  }
+  return -Math.abs(hash || 1);
 }
 
 interface FloatingComposerPosition {
@@ -242,6 +258,28 @@ export default function AgentReviewPage() {
   const diffLabel = createMemo(() => selectedDiffVariant()?.label ?? undefined);
 
   const diffRawPatch = createMemo(() => selectedDiffVariant()?.rawPatch ?? "");
+
+  const inlineReviewComments = createMemo(() =>
+    annotations()
+      .filter((annotation) => annotation.filePath && (annotation.line ?? annotation.endLine))
+      .map((annotation) => ({
+        id: annotationInlineCommentId(annotation),
+        node_id: annotation.id,
+        path: annotation.filePath!,
+        line: annotation.line ?? annotation.endLine ?? null,
+        original_line: annotation.line ?? annotation.endLine ?? null,
+        side: annotation.side ?? "RIGHT",
+        body: annotation.comment,
+        html_url: `#${annotation.id}`,
+        user: {
+          login: "You",
+          avatar_url:
+            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f59e0b'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-family='system-ui,sans-serif' font-size='14' font-weight='700' fill='%23120f0b'%3EY%3C/text%3E%3C/svg%3E",
+        },
+        created_at: new Date(annotation.createdAt).toISOString(),
+        canEdit: false,
+      })),
+  );
 
   const sessionPrUrl = createMemo(() => session()?.prUrl ?? null);
 
@@ -597,7 +635,7 @@ export default function AgentReviewPage() {
                     >
                       <DiffViewer
                         rawDiff={diffRawPatch()}
-                        comments={[]}
+                        comments={inlineReviewComments()}
                         settings={DEFAULT_DIFF_SETTINGS}
                         onFilesLoaded={setFiles}
                         onAddComment={addDiffAnnotation}
@@ -618,6 +656,9 @@ export default function AgentReviewPage() {
                             result={result}
                             isDiffSession={true}
                             onRemove={removeAnnotation}
+                            onNavigate={(annotation) => {
+                              if (annotation.filePath) scrollToFile(annotation.filePath);
+                            }}
                           />
                         </div>
                         <div class="border-t border-border flex-shrink-0">
@@ -763,6 +804,7 @@ function AnnotationsPanel(props: {
   result: Resource<ReviewSessionResult | null>;
   isDiffSession: boolean;
   onRemove: (id: string) => void;
+  onNavigate?: (annotation: ReviewSessionAnnotation) => void;
 }) {
   const items = () => props.result()?.annotations ?? props.annotations;
   const [annotationsHidden, setAnnotationsHidden] = createSignal(false);
@@ -809,31 +851,55 @@ function AnnotationsPanel(props: {
         >
           <div class="space-y-2">
             <For each={items()}>
-              {(annotation) => (
-                <div class="border border-border p-3">
-                  <div class="flex items-start justify-between gap-2">
-                    <div class="min-w-0 flex-1">
-                      <div class="text-xs text-text-faint">{annotationLabel(annotation)}</div>
-                      <blockquote class="m-0 mt-1.5 bg-accent/5 px-2 py-1 text-xs text-text">
-                        {annotation.quote}
-                      </blockquote>
-                      <p class="m-0 mt-1.5 whitespace-pre-wrap text-xs text-text-muted">
-                        {annotation.comment}
-                      </p>
-                    </div>
-                    <Show when={!props.result()}>
-                      <Button
+              {(annotation) => {
+                const location = () => annotationLocation(annotation);
+                return (
+                  <div id={annotation.id} class="border border-border bg-bg p-3">
+                    <div class="flex items-start justify-between gap-2">
+                      <button
                         type="button"
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => props.onRemove(annotation.id)}
+                        class="min-w-0 flex-1 text-left disabled:cursor-default"
+                        onClick={() => props.onNavigate?.(annotation)}
+                        disabled={!props.onNavigate}
+                        title={
+                          annotation.filePath ? `Go to ${annotationLabel(annotation)}` : undefined
+                        }
                       >
-                        ×
-                      </Button>
-                    </Show>
+                        <div class="flex min-w-0 items-baseline gap-2">
+                          <span
+                            class="truncate font-mono text-[11px] text-text"
+                            title={location().title}
+                          >
+                            {location().title}
+                          </span>
+                          <Show when={location().detail}>
+                            {(detail) => (
+                              <span class="shrink-0 text-[11px] text-text-faint">{detail()}</span>
+                            )}
+                          </Show>
+                        </div>
+                        <p class="m-0 mt-2 whitespace-pre-wrap text-xs leading-5 text-text">
+                          {annotation.comment}
+                        </p>
+                        <blockquote class="m-0 mt-2 line-clamp-3 border-l border-border pl-2 text-[11px] leading-4 text-text-faint">
+                          {annotation.quote}
+                        </blockquote>
+                      </button>
+                      <Show when={!props.result()}>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => props.onRemove(annotation.id)}
+                          title="Remove annotation"
+                        >
+                          ×
+                        </Button>
+                      </Show>
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              }}
             </For>
           </div>
         </Show>

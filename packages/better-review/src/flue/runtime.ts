@@ -1,18 +1,15 @@
-import { flue } from "@flue/runtime/app";
 import {
   Bash,
+  createDefaultFlueApp,
   InMemoryFs,
-  InMemoryRunRegistry,
-  InMemoryRunStore,
   bashFactoryToSessionEnv,
   configureFlueRuntime,
-  createDirectAgentHandler,
   createFlueContext,
-  createRunSubscriberRegistry,
+  createNodeAgentCoordinator,
+  createNodeDispatchQueue,
   resolveModel,
-  type AgentHandler,
 } from "@flue/runtime/internal";
-import { createNodeWebSocketTransport } from "@flue/runtime/node";
+import { sqlite } from "@flue/runtime/node";
 
 import { configureFlueOAuthProvidersFromPiAuth } from "./oauth-auth";
 import { prReviewerAgent } from "./pr-reviewer";
@@ -21,23 +18,25 @@ import { flueAgentSessionStore } from "./session-store";
 configureFlueOAuthProvidersFromPiAuth();
 
 const sessionStore = flueAgentSessionStore;
-const runStore = new InMemoryRunStore();
-const runSubscribers = createRunSubscriberRegistry();
-const runRegistry = new InMemoryRunRegistry();
+const persistence = sqlite(":memory:");
+await persistence.migrate?.();
+const stores = await persistence.connect();
+const runStore = stores.runStore;
+const eventStreamStore = stores.eventStreamStore;
 
 const manifest = {
   agents: [
     {
       name: "pr-reviewer",
-      transports: { http: true as const, websocket: true as const },
+      transports: { http: true as const },
       created: true,
     },
   ],
   workflows: [],
 };
 
-const agentHandlers: Record<string, AgentHandler> = {
-  "pr-reviewer": createDirectAgentHandler(prReviewerAgent),
+const createdAgents = {
+  "pr-reviewer": prReviewerAgent,
 };
 
 const createDefaultEnv = async () => {
@@ -66,29 +65,25 @@ const createContext = (
     payload,
     env: process.env,
     agentConfig: {
-      systemPrompt: "",
-      skills: {},
       packagedSkills: {},
-      model: undefined,
       resolveModel,
     },
     createDefaultEnv,
     defaultStore: sessionStore,
     req: request,
     initialEventIndex,
+    submissionStore: stores.executionStore.submissions,
   });
 
-const websocketTransport = createNodeWebSocketTransport({
-  manifest,
-  agentHandlers,
-  workflowHandlers: {},
+const coordinator = createNodeAgentCoordinator({
+  submissions: stores.executionStore.submissions,
+  sessions: sessionStore,
+  agents: createdAgents,
   createContext,
-  runStore,
-  runSubscribers,
-  runRegistry,
+  eventStreamStore,
 });
 
-export const flueWebSocketServer = websocketTransport.server;
+await coordinator.reconcileSubmissions();
 
 let configured = false;
 
@@ -97,17 +92,18 @@ export function createFlueReviewApp() {
     configureFlueRuntime({
       target: "node",
       manifest,
-      handlers: agentHandlers,
       workflowHandlers: {},
-      nodeWebSocketAgentRoute: websocketTransport.agentRoute,
-      nodeWebSocketWorkflowRoute: websocketTransport.workflowRoute,
       createContext,
+      createAdmission: {
+        "pr-reviewer": (instanceId) => coordinator.createAdmission("pr-reviewer", instanceId),
+      },
       runStore,
-      runSubscribers,
-      runRegistry,
+      eventStreamStore,
+      dispatchQueue: createNodeDispatchQueue(coordinator),
+      resolveDispatchAgentName: (agent) => (agent === prReviewerAgent ? "pr-reviewer" : undefined),
     });
     configured = true;
   }
 
-  return flue();
+  return createDefaultFlueApp();
 }

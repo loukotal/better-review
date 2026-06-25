@@ -1,4 +1,4 @@
-import { createFlueClient, type AgentSocket, type AttachedAgentEvent } from "@flue/sdk";
+import { createFlueClient, type AttachedAgentEvent, type FlueEventStream } from "@flue/sdk";
 import { batch, createEffect, createSignal, onCleanup } from "solid-js";
 
 export interface ToolCall {
@@ -34,11 +34,11 @@ export interface SendMessageOptions {
 
 const flueBaseUrl =
   (import.meta.env.VITE_FLUE_BASE_URL as string | undefined) ?? `${window.location.origin}/flue`;
-const flueWebSocketBasePath = new URL(flueBaseUrl, window.location.origin).pathname;
-
 const flueClient = createFlueClient({
   baseUrl: flueBaseUrl,
-  websocketBasePath: flueWebSocketBasePath,
+  // Chrome/Safari can throw "Illegal invocation" if a bare window.fetch
+  // reference is called without Window as `this` through SDK indirection.
+  fetch: globalThis.fetch.bind(globalThis),
 });
 
 function stringifyValue(value: unknown): string {
@@ -93,10 +93,8 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   const [activeTools, setActiveTools] = createSignal<ToolCall[]>([]);
   const [currentMessageId, setCurrentMessageId] = createSignal<string | null>(null);
 
-  let socket: AgentSocket | null = null;
-  let socketSessionId: string | null = null;
-  let unsubscribeEvents: (() => void) | null = null;
-  let pingTimer: ReturnType<typeof setInterval> | null = null;
+  let activeStream: FlueEventStream<AttachedAgentEvent> | null = null;
+  let activePromptAbort: AbortController | null = null;
   let isDisposed = false;
   let isConnecting = false;
   let socketFailed = false;
@@ -126,112 +124,29 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     });
   }
 
-  function stopPing() {
-    if (pingTimer) {
-      clearInterval(pingTimer);
-      pingTimer = null;
-    }
-  }
-
-  function startPing(activeSocket: AgentSocket) {
-    stopPing();
-    pingTimer = setInterval(() => {
-      activeSocket
-        .ping()
-        .then(() => {
-          if (activeSocket === socket) {
-            markConnected();
-          }
-        })
-        .catch(() => {
-          if (activeSocket !== socket || isDisposed) return;
-          socketFailed = true;
-          setIsConnected(false);
-          setConnectionStatus("degraded");
-          setUpstreamStatus("Error");
-          cleanupSocket();
-        });
-    }, 25_000);
-  }
-
   function cleanupSocket() {
-    stopPing();
-    if (unsubscribeEvents) {
-      unsubscribeEvents();
-      unsubscribeEvents = null;
-    }
-    if (socket) {
-      socket.close(1000, "client cleanup");
-      socket = null;
-    }
-    socketSessionId = null;
+    activePromptAbort?.abort();
+    activePromptAbort = null;
+    activeStream?.cancel("client cleanup");
+    activeStream = null;
     isConnecting = false;
-    socketFailed = false;
   }
 
-  function markSocketFailed(activeSocket: AgentSocket | null = socket) {
-    if (!activeSocket || activeSocket !== socket) return;
-    socketFailed = true;
-    cleanupSocket();
-  }
-
-  function isSocketConnectionError(message: string) {
-    // Flue can report "Request is malformed" when a dev-server restart/HMR leaves
-    // the browser holding a stale WebSocket. Treat it as reconnectable once.
-    return /websocket|socket|connection|request is malformed/i.test(message);
-  }
-
-  async function ensureSocket(): Promise<AgentSocket | null> {
+  async function ensureSocket(): Promise<boolean> {
     const sessionId = options.getSessionId();
     if (!sessionId || isDisposed) {
       cleanupSocket();
       setIsConnected(false);
       setConnectionStatus("offline");
-      return null;
+      return false;
     }
 
-    if (socket && socketSessionId === sessionId && !socketFailed) {
-      try {
-        await socket.ready;
-        return socket;
-      } catch {
-        markSocketFailed(socket);
-      }
-    }
-
-    cleanupSocket();
     isConnecting = true;
     setConnectionStatus("connecting");
     setUpstreamStatus("Connecting");
-
-    const nextSocket = flueClient.agents.connect("pr-reviewer", sessionId);
-    socket = nextSocket;
-    socketSessionId = sessionId;
-    unsubscribeEvents = nextSocket.onEvent((event, context) => {
-      handleFlueEvent(event, context.requestId);
-    });
-
-    try {
-      await nextSocket.ready;
-      if (nextSocket !== socket || isDisposed) return null;
-      markConnected();
-      startPing(nextSocket);
-      return nextSocket;
-    } catch (err) {
-      if (nextSocket !== socket || isDisposed) return null;
-      const message = err instanceof Error ? err.message : "Failed to connect to Flue";
-      setIsConnected(false);
-      setConnectionStatus("offline");
-      setUpstreamStatus("Error");
-      setError(message);
-      options.onError?.(message);
-      markSocketFailed(nextSocket);
-      return null;
-    } finally {
-      if (nextSocket === socket) {
-        isConnecting = false;
-      }
-    }
+    markConnected();
+    isConnecting = false;
+    return true;
   }
 
   createEffect(() => {
@@ -299,8 +214,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         setStreamingReasoning((prev) => prev + event.delta);
         break;
 
-      case "message_start":
-      case "message_update": {
+      case "message_start": {
         const snapshot = extractAssistantSnapshot(event.message);
         if (snapshot) {
           acceptAssistantEvent(requestId);
@@ -343,33 +257,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         });
         break;
 
-      case "tool_execution_start":
-        acceptAssistantEvent(requestId);
-        upsertTool({
-          id: event.toolCallId,
-          tool: event.toolName,
-          callId: event.toolCallId,
-          status: "running",
-          input: isRecord(event.args) ? event.args : {},
-          title: event.toolName,
-        });
-        break;
-
-      case "tool_execution_end":
-        acceptAssistantEvent(requestId);
-        upsertTool({
-          id: event.toolCallId,
-          tool: event.toolName,
-          callId: event.toolCallId,
-          status: event.isError ? "error" : "completed",
-          input: {},
-          output: event.isError ? undefined : stringifyValue(event.result),
-          error: event.isError ? stringifyValue(event.result) : undefined,
-          title: event.toolName,
-        });
-        break;
-
-      case "tool_call":
+      case "tool":
         acceptAssistantEvent(requestId);
         upsertTool({
           id: event.toolCallId,
@@ -467,8 +355,8 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     // Open a fresh socket for each prompt. This avoids stale dev/HMR sockets and
     // Flue sockets left in a bad protocol state after an interrupted request.
     cleanupSocket();
-    const activeSocket = await ensureSocket();
-    if (!activeSocket) return false;
+    const connected = await ensureSocket();
+    if (!connected) return false;
 
     const userMessage: StreamingMessage = {
       id: `user-${Date.now()}`,
@@ -488,52 +376,50 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     awaitingAssistantResponse = true;
     abortingPrompt = false;
 
-    let promptSocket = activeSocket;
-    let didRetrySocket = false;
+    try {
+      activePromptAbort = new AbortController();
+      const sent = await flueClient.agents.send("pr-reviewer", sessionId, {
+        message,
+        signal: activePromptAbort.signal,
+      });
 
-    while (promptSocket) {
-      try {
-        // The socket URL already carries the Flue agent instance/session id. Passing
-        // `session` here makes Flue build a longer affinity key, which breaks
-        // ChatGPT/Codex OAuth because its prompt_cache_key is limited to 64 chars.
-        await promptSocket.prompt(message);
-        finalizeMessage();
-        return true;
-      } catch (err) {
-        if (abortingPrompt) {
-          abortingPrompt = false;
-          return false;
-        }
+      activeStream = flueClient.agents.stream("pr-reviewer", sessionId, {
+        offset: sent.offset,
+        live: true,
+        signal: activePromptAbort.signal,
+      });
 
-        const message = err instanceof Error ? err.message : "Failed to send message";
-        const details =
-          isRecord(err) && isRecord(err.error) && typeof err.error.details === "string"
-            ? err.error.details
-            : "";
-        if (!didRetrySocket && isSocketConnectionError(`${message} ${details}`)) {
-          didRetrySocket = true;
-          markSocketFailed(promptSocket);
-          const reconnectedSocket = await ensureSocket();
-          if (reconnectedSocket) {
-            promptSocket = reconnectedSocket;
-            continue;
-          }
-        }
+      for await (const event of activeStream) {
+        if (abortingPrompt || isDisposed) break;
+        handleFlueEvent(event, sent.submissionId);
+        if (event.type === "idle" || event.type === "submission_settled") break;
+      }
 
-        if (isSocketConnectionError(`${message} ${details}`)) {
-          markSocketFailed(promptSocket);
-        }
-
-        setError(details ? `${message}: ${details}` : message);
-        setIsStreaming(false);
-        setAwaitingFirstToken(false);
-        awaitingAssistantResponse = false;
-        options.onError?.(message);
+      finalizeMessage();
+      activeStream = null;
+      activePromptAbort = null;
+      return !abortingPrompt;
+    } catch (err) {
+      if (abortingPrompt) {
+        abortingPrompt = false;
         return false;
       }
-    }
 
-    return false;
+      const errorMessage = err instanceof Error ? err.message : "Failed to send message";
+      const details =
+        isRecord(err) && isRecord(err.error) && typeof err.error.details === "string"
+          ? err.error.details
+          : "";
+
+      setError(details ? `${errorMessage}: ${details}` : errorMessage);
+      setIsStreaming(false);
+      setAwaitingFirstToken(false);
+      awaitingAssistantResponse = false;
+      setConnectionStatus("degraded");
+      setUpstreamStatus("Error");
+      options.onError?.(errorMessage);
+      return false;
+    }
   }
 
   async function abort(): Promise<void> {

@@ -1,9 +1,11 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { SessionData, SessionStore } from "@flue/runtime";
+import type { SessionData, SessionStore } from "@flue/runtime/internal";
 
 import { STORE_BASE_DIR } from "../store";
+
+export type { SessionData };
 
 const FLUE_AGENT_SESSIONS_DIR = path.join(STORE_BASE_DIR, "flue-agent-sessions");
 

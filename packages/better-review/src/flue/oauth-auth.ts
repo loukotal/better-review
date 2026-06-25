@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { configureProvider } from "@flue/runtime/app";
+import { registerProvider } from "@flue/runtime";
 
 const PI_AUTH_PATH =
   process.env.BETTER_REVIEW_PI_AUTH_PATH ?? path.join(homedir(), ".pi", "agent", "auth.json");
@@ -48,12 +48,12 @@ export function getPiAuthApiKey(provider: string): string | undefined {
 export function configureFlueOAuthProvidersFromPiAuth() {
   const anthropicToken = getPiAuthApiKey("anthropic");
   if (anthropicToken && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN) {
-    configureProvider("anthropic", { apiKey: anthropicToken });
+    registerProvider("anthropic", { apiKey: anthropicToken });
   }
 
   const openAiCodexToken = getPiAuthApiKey("openai-codex");
   if (openAiCodexToken) {
-    configureProvider("openai-codex", { apiKey: openAiCodexToken });
+    registerProvider("openai-codex", { apiKey: openAiCodexToken });
   }
 }
 

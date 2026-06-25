@@ -15,7 +15,7 @@ import { isGitHubAssetId } from "@better-review/shared/github-asset";
 import { ReviewSessionService } from "./agent-sessions";
 import { runCommand } from "./command";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
-import { createFlueReviewApp, flueWebSocketServer } from "./flue/runtime";
+import { createFlueReviewApp } from "./flue/runtime";
 import { GhService, type PrStatus } from "./gh/gh";
 import { PrCheckoutService } from "./pr-checkout";
 import { getErrorMessage } from "./response";
@@ -403,7 +403,6 @@ async function startServer(app: Hono, hostname: string, port: number): Promise<S
     server = serve(
       {
         fetch: app.fetch,
-        websocket: { server: flueWebSocketServer },
         hostname,
         port,
       },
