@@ -22,7 +22,7 @@ import { ThemeToggle } from "./components/ThemeToggle";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
-import { FONT_FAMILY_MAP } from "./diff/types";
+import { ACCENT_LABELS, ACCENT_THEME_VARS, FONT_FAMILY_MAP } from "./diff/types";
 import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
 import {
   DiffViewer,
@@ -47,6 +47,7 @@ import {
   addAnnotations as queryAddAnnotations,
   removeAnnotation as queryRemoveAnnotation,
 } from "./lib/query";
+import { uiTheme } from "./lib/theme";
 import { trpc } from "./lib/trpc";
 import type { Annotation } from "./utils/parseReviewTokens";
 
@@ -56,6 +57,17 @@ const FOCUS_MODE_STORAGE_KEY = "focus-mode";
 
 // Valid theme keys for validation
 const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
+const VALID_ACCENTS = new Set(Object.keys(ACCENT_LABELS));
+const ACCENT_CSS_VAR_MAP = {
+  accent: "--color-accent",
+  accentDim: "--color-accent-dim",
+  accentBright: "--color-accent-bright",
+  accentText: "--color-accent-text",
+  borderFocus: "--color-border-focus",
+  primary: "--color-primary",
+  primaryHover: "--color-primary-hover",
+  primaryText: "--color-primary-text",
+} as const;
 
 function loadSettings(): DiffSettings {
   try {
@@ -65,6 +77,9 @@ function loadSettings(): DiffSettings {
       // Validate theme - if invalid, use default
       if (parsed.theme && !VALID_THEMES.has(parsed.theme)) {
         parsed.theme = DEFAULT_DIFF_SETTINGS.theme;
+      }
+      if (parsed.accentColor && !VALID_ACCENTS.has(parsed.accentColor)) {
+        parsed.accentColor = DEFAULT_DIFF_SETTINGS.accentColor;
       }
       return { ...DEFAULT_DIFF_SETTINGS, ...parsed };
     }
@@ -457,10 +472,20 @@ const AppContent: Component = () => {
     }
   });
 
-  // Sync font-mono CSS variable with settings
+  // Sync user-configurable CSS variables with settings
   createEffect(() => {
     const fontFamily = FONT_FAMILY_MAP[settings().fontFamily];
     document.documentElement.style.setProperty("--font-mono", fontFamily);
+  });
+
+  createEffect(() => {
+    const accentVars = ACCENT_THEME_VARS[settings().accentColor][uiTheme()];
+    for (const [key, cssVar] of Object.entries(ACCENT_CSS_VAR_MAP)) {
+      document.documentElement.style.setProperty(
+        cssVar,
+        accentVars[key as keyof typeof accentVars],
+      );
+    }
   });
 
   const loadPr = async (e: Event) => {

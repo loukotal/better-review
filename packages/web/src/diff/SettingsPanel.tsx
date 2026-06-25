@@ -7,10 +7,13 @@ import {
   type DiffTheme,
   type LineDiffType,
   type FontFamily,
+  type AccentColor,
   FONT_FAMILY_MAP,
   FONT_LABELS,
   THEME_LABELS,
   LINE_DIFF_LABELS,
+  ACCENT_LABELS,
+  ACCENT_THEME_VARS,
 } from "./types";
 
 interface SettingsPanelProps {
@@ -114,6 +117,28 @@ export function SettingsPanel(props: SettingsPanelProps) {
               >
                 <For each={Object.entries(LINE_DIFF_LABELS)}>
                   {([value, label]) => <option value={value}>{label}</option>}
+                </For>
+              </Select>
+            </div>
+
+            {/* Accent */}
+            <div class="flex flex-col gap-1.5">
+              <label class="text-base text-text-faint">Accent</label>
+              <Select
+                value={props.settings.accentColor}
+                onChange={(e) => update("accentColor", e.currentTarget.value as AccentColor)}
+                compact
+                class="w-full"
+              >
+                <For each={Object.entries(ACCENT_LABELS)}>
+                  {([value, label]) => (
+                    <option
+                      value={value}
+                      style={{ color: ACCENT_THEME_VARS[value as AccentColor].dark.accent }}
+                    >
+                      {label}
+                    </option>
+                  )}
                 </For>
               </Select>
             </div>
