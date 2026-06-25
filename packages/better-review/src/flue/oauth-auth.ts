@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { findEnvKeys } from "@earendil-works/pi-ai";
 import { registerProvider } from "@flue/runtime";
 
 const PI_AUTH_PATH =
@@ -10,6 +11,8 @@ const PI_AUTH_PATH =
 type StoredCredential =
   | { type: "api_key"; key?: unknown }
   | { type: "oauth"; access?: unknown; expires?: unknown };
+
+const PI_OAUTH_PROVIDER_IDS = ["anthropic", "openai-codex", "github-copilot", "opencode"];
 
 function readPiAuth(): Record<string, StoredCredential> {
   if (!existsSync(PI_AUTH_PATH)) return {};
@@ -46,14 +49,11 @@ export function getPiAuthApiKey(provider: string): string | undefined {
 }
 
 export function configureFlueOAuthProvidersFromPiAuth() {
-  const anthropicToken = getPiAuthApiKey("anthropic");
-  if (anthropicToken && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN) {
-    registerProvider("anthropic", { apiKey: anthropicToken });
-  }
-
-  const openAiCodexToken = getPiAuthApiKey("openai-codex");
-  if (openAiCodexToken) {
-    registerProvider("openai-codex", { apiKey: openAiCodexToken });
+  for (const provider of PI_OAUTH_PROVIDER_IDS) {
+    const token = getPiAuthApiKey(provider);
+    if (token && !findEnvKeys(provider)?.length) {
+      registerProvider(provider, { apiKey: token });
+    }
   }
 }
 
