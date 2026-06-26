@@ -45,6 +45,16 @@ export default defineConfig(({ command }) => {
             });
           },
         },
+        "/flue": {
+          target: apiTarget,
+          changeOrigin: true,
+          ws: true,
+          configure(proxy) {
+            proxy.on("error", (error) => {
+              console.error(`[vite proxy] Could not reach Flue at ${apiTarget}: ${error.message}`);
+            });
+          },
+        },
       },
     },
     build: {

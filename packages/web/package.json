@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@better-review/shared": "workspace:*",
-    "@pierre/diffs": "1.1.21",
+    "@flue/sdk": "^1.0.0-beta.1",
+    "@pierre/diffs": "1.1.22",
     "@solidjs/router": "0.16.1",
     "@tanstack/query-persist-client-core": "5.100.9",
     "@tanstack/solid-query": "5.100.9",

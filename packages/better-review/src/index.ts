@@ -15,7 +15,9 @@ import { isGitHubAssetId } from "@better-review/shared/github-asset";
 import { ReviewSessionService } from "./agent-sessions";
 import { runCommand } from "./command";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
+import { createFlueReviewApp } from "./flue/runtime";
 import { GhService, type PrStatus } from "./gh/gh";
+import { PrCheckoutService } from "./pr-checkout";
 import { getErrorMessage } from "./response";
 import { runtime } from "./runtime";
 import { DiffCacheService, PrContextService, PrListCacheService } from "./state";
@@ -366,6 +368,7 @@ function createApp(routes: Record<string, unknown>): Hono {
   const app = new Hono();
 
   registerRoutes(app, routes);
+  app.route("/flue", createFlueReviewApp());
 
   app.notFound((c) => {
     if (isProduction) {
@@ -1012,10 +1015,15 @@ const main = Effect.gen(function* () {
   const prContext = yield* PrContextService;
   const prListCache = yield* PrListCacheService;
   const reviewSessions = yield* ReviewSessionService;
+  const checkout = yield* PrCheckoutService;
 
   // Start the PR list background refresh loop (fetches every 15 min)
   yield* prListCache.backgroundLoop.pipe(
     Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
+    Effect.forkScoped,
+  );
+  yield* checkout.backgroundCleanupLoop.pipe(
+    Effect.catchAll((e) => Effect.log(`[worktree-cleanup] Background loop exited: ${e}`)),
     Effect.forkScoped,
   );
 

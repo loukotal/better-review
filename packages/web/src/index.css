@@ -1,12 +1,11 @@
-/* JetBrains Mono - clean monospace for code */
+/* JetBrains Mono - clean monospace for code and UI chrome. */
 @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 @import "tailwindcss";
 
 @theme {
   /* === FONT CONFIGURATION === */
-  /* Monospace font - controlled by settings */
-  --font-mono: "JetBrains Mono", monospace;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* === MONOCHROME + ORANGE PALETTE === */
   /* Soft blacks - easier on the eyes than pure black */
@@ -18,6 +17,7 @@
   --color-accent: #ff6b00;
   --color-accent-dim: #662b00;
   --color-accent-bright: #ff8533;
+  --color-accent-text: #0a0a0a;
 
   /* Text hierarchy - white/gray spectrum */
   --color-text: #e5e5e5;
@@ -31,6 +31,7 @@
   /* Primary action - slightly darker than accent for readable text */
   --color-primary: #c75100;
   --color-primary-hover: #dd620f;
+  --color-primary-text: #fff7ed;
 
   /* Diff colors - muted for readability */
   --color-diff-add-bg: rgba(34, 197, 94, 0.1);
@@ -44,6 +45,84 @@
   --color-success: #22c55e;
   --color-info: #3b82f6;
   --color-merged: #a855f7;
+}
+
+/* === UI THEME VALUES === */
+:root,
+:root[data-ui-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-ui-theme="light"] {
+  color-scheme: light;
+
+  --color-bg: #f8fafc;
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #eef2f7;
+
+  --color-accent: #c2410c;
+  --color-accent-dim: #ffedd5;
+  --color-accent-bright: #9a3412;
+  --color-accent-text: #fff7ed;
+
+  --color-text: #171717;
+  --color-text-muted: #52525b;
+  --color-text-faint: #71717a;
+
+  --color-border: #d7dee8;
+  --color-border-focus: #c2410c;
+
+  --color-primary: #c2410c;
+  --color-primary-hover: #9a3412;
+  --color-primary-text: #fff7ed;
+
+  --color-diff-add-bg: rgba(22, 163, 74, 0.12);
+  --color-diff-add-text: #15803d;
+  --color-diff-remove-bg: rgba(220, 38, 38, 0.1);
+  --color-diff-remove-text: #b91c1c;
+
+  --color-error: #dc2626;
+  --color-warning: #a16207;
+  --color-success: #15803d;
+  --color-info: #2563eb;
+  --color-merged: #7e22ce;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-ui-theme]) {
+    color-scheme: light;
+
+    --color-bg: #f8fafc;
+    --color-bg-surface: #ffffff;
+    --color-bg-elevated: #eef2f7;
+
+    --color-accent: #c2410c;
+    --color-accent-dim: #ffedd5;
+    --color-accent-bright: #9a3412;
+    --color-accent-text: #fff7ed;
+
+    --color-text: #171717;
+    --color-text-muted: #52525b;
+    --color-text-faint: #71717a;
+
+    --color-border: #d7dee8;
+    --color-border-focus: #c2410c;
+
+    --color-primary: #c2410c;
+    --color-primary-hover: #9a3412;
+    --color-primary-text: #fff7ed;
+
+    --color-diff-add-bg: rgba(22, 163, 74, 0.12);
+    --color-diff-add-text: #15803d;
+    --color-diff-remove-bg: rgba(220, 38, 38, 0.1);
+    --color-diff-remove-text: #b91c1c;
+
+    --color-error: #dc2626;
+    --color-warning: #a16207;
+    --color-success: #15803d;
+    --color-info: #2563eb;
+    --color-merged: #7e22ce;
+  }
 }
 
 /* === BASE STYLES === */
@@ -66,7 +145,7 @@ body {
 /* Selection styling - orange */
 ::selection {
   background: var(--color-accent);
-  color: var(--color-bg);
+  color: var(--color-accent-text);
 }
 
 /* Scrollbar styling - minimal */
@@ -133,16 +212,27 @@ button:disabled {
   outline-offset: 1px;
 }
 
-/* Custom focus for buttons - no outline, just color change */
 button:focus-visible {
-  outline: none;
+  outline: 1px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 /* Smooth transitions */
 * {
   transition-property: color, background-color, border-color, opacity;
-  transition-duration: 100ms;
-  transition-timing-function: ease-out;
+  transition-duration: 120ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
 }
 
 /* Disable transitions for elements that shouldn't animate */

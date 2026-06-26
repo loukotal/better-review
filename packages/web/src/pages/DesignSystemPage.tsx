@@ -1,6 +1,8 @@
 import { A } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, type ParentProps, type Component } from "solid-js";
 
+import { ThemeToggle } from "../components/ThemeToggle";
+
 type CoverageStatus = "ready" | "partial" | "missing";
 
 const CANONICAL_COMPONENTS = [
@@ -185,6 +187,7 @@ const DesignSystemPage: Component = () => {
             <A href="/review" class="text-text-faint hover:text-text transition-colors">
               Review view
             </A>
+            <ThemeToggle />
           </div>
         </div>
       </header>
@@ -253,7 +256,7 @@ const DesignSystemPage: Component = () => {
           <div class="grid gap-4 lg:grid-cols-2">
             <PreviewCard title="Button" note="Default / secondary / destructive / disabled">
               <div class="flex flex-wrap gap-2">
-                <button class="px-3 py-1.5 bg-accent text-black hover:bg-accent-bright text-sm">
+                <button class="px-3 py-1.5 bg-accent text-accent-text hover:bg-accent-bright text-sm">
                   Primary
                 </button>
                 <button class="px-3 py-1.5 border border-border text-text-faint hover:text-text text-sm">
@@ -262,7 +265,7 @@ const DesignSystemPage: Component = () => {
                 <button class="px-3 py-1.5 border border-error/50 text-error text-sm">
                   Destructive
                 </button>
-                <button class="px-3 py-1.5 bg-accent text-black text-sm opacity-40" disabled>
+                <button class="px-3 py-1.5 bg-accent text-accent-text text-sm opacity-40" disabled>
                   Disabled
                 </button>
               </div>
@@ -272,21 +275,21 @@ const DesignSystemPage: Component = () => {
               <div class="inline-flex border border-border text-sm">
                 <button
                   class="px-3 py-1.5 border-r border-border"
-                  classList={{ "bg-accent text-black": selectedTab() === "Overview" }}
+                  classList={{ "bg-accent text-accent-text": selectedTab() === "Overview" }}
                   onClick={() => setSelectedTab("Overview")}
                 >
                   Overview
                 </button>
                 <button
                   class="px-3 py-1.5 border-r border-border"
-                  classList={{ "bg-accent text-black": selectedTab() === "Checks" }}
+                  classList={{ "bg-accent text-accent-text": selectedTab() === "Checks" }}
                   onClick={() => setSelectedTab("Checks")}
                 >
                   Checks
                 </button>
                 <button
                   class="px-3 py-1.5"
-                  classList={{ "bg-accent text-black": selectedTab() === "Activity" }}
+                  classList={{ "bg-accent text-accent-text": selectedTab() === "Activity" }}
                   onClick={() => setSelectedTab("Activity")}
                 >
                   Activity
@@ -513,7 +516,7 @@ const DesignSystemPage: Component = () => {
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
-                class="px-3 py-1.5 bg-accent text-black"
+                class="px-3 py-1.5 bg-accent text-accent-text"
               >
                 Confirm
               </button>

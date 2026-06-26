@@ -2,6 +2,7 @@ import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 
+import { ThemeToggle } from "../components/ThemeToggle";
 import { Badge, Button, Select } from "../design-system";
 import { SpinnerIcon } from "../icons/spinner-icon";
 import {
@@ -252,6 +253,7 @@ const PrListPage: Component = () => {
               <A href="/review" class="text-base text-text-faint hover:text-text transition-colors">
                 Enter PR URL manually
               </A>
+              <ThemeToggle />
             </div>
           </div>
         </div>

@@ -18,10 +18,11 @@ import { CommitNavigator } from "./components/CommitNavigator";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
-import { FONT_FAMILY_MAP } from "./diff/types";
+import { ACCENT_LABELS, ACCENT_THEME_VARS, FONT_FAMILY_MAP } from "./diff/types";
 import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
 import {
   DiffViewer,
@@ -46,6 +47,7 @@ import {
   addAnnotations as queryAddAnnotations,
   removeAnnotation as queryRemoveAnnotation,
 } from "./lib/query";
+import { uiTheme } from "./lib/theme";
 import { trpc } from "./lib/trpc";
 import type { Annotation } from "./utils/parseReviewTokens";
 
@@ -55,6 +57,17 @@ const FOCUS_MODE_STORAGE_KEY = "focus-mode";
 
 // Valid theme keys for validation
 const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
+const VALID_ACCENTS = new Set(Object.keys(ACCENT_LABELS));
+const ACCENT_CSS_VAR_MAP = {
+  accent: "--color-accent",
+  accentDim: "--color-accent-dim",
+  accentBright: "--color-accent-bright",
+  accentText: "--color-accent-text",
+  borderFocus: "--color-border-focus",
+  primary: "--color-primary",
+  primaryHover: "--color-primary-hover",
+  primaryText: "--color-primary-text",
+} as const;
 
 function loadSettings(): DiffSettings {
   try {
@@ -64,6 +77,9 @@ function loadSettings(): DiffSettings {
       // Validate theme - if invalid, use default
       if (parsed.theme && !VALID_THEMES.has(parsed.theme)) {
         parsed.theme = DEFAULT_DIFF_SETTINGS.theme;
+      }
+      if (parsed.accentColor && !VALID_ACCENTS.has(parsed.accentColor)) {
+        parsed.accentColor = DEFAULT_DIFF_SETTINGS.accentColor;
       }
       return { ...DEFAULT_DIFF_SETTINGS, ...parsed };
     }
@@ -131,6 +147,7 @@ const AppContent: Component = () => {
   // Review state
   const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
   const [aiAnnotations, setAiAnnotations] = createSignal<Annotation[]>([]);
+  const [reviewCommentsHidden, setReviewCommentsHidden] = createSignal(false);
   const [highlightedLine, setHighlightedLine] = createSignal<{
     file: string;
     line: number;
@@ -455,10 +472,20 @@ const AppContent: Component = () => {
     }
   });
 
-  // Sync font-mono CSS variable with settings
+  // Sync user-configurable CSS variables with settings
   createEffect(() => {
     const fontFamily = FONT_FAMILY_MAP[settings().fontFamily];
     document.documentElement.style.setProperty("--font-mono", fontFamily);
+  });
+
+  createEffect(() => {
+    const accentVars = ACCENT_THEME_VARS[settings().accentColor][uiTheme()];
+    for (const [key, cssVar] of Object.entries(ACCENT_CSS_VAR_MAP)) {
+      document.documentElement.style.setProperty(
+        cssVar,
+        accentVars[key as keyof typeof accentVars],
+      );
+    }
   });
 
   const loadPr = async (e: Event) => {
@@ -802,6 +829,7 @@ const AppContent: Component = () => {
                 >
                   Kanban
                 </A>
+                <ThemeToggle />
                 <SettingsPanel settings={settings()} onChange={setSettings} />
               </div>
             </div>
@@ -898,6 +926,20 @@ const AppContent: Component = () => {
                 />
               </div>
               <div class="flex items-center gap-2 flex-shrink-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={aiAnnotations().length === 0 && comments().length === 0}
+                  onClick={() => setReviewCommentsHidden((hidden) => !hidden)}
+                  title={
+                    reviewCommentsHidden()
+                      ? "Show all annotations and GitHub comments"
+                      : "Hide all annotations and GitHub comments"
+                  }
+                >
+                  {reviewCommentsHidden() ? "Show comments" : "Hide comments"}
+                </Button>
                 <ReviewModeToggle
                   mode={reviewMode()}
                   onModeChange={handleModeChange}
@@ -925,9 +967,7 @@ const AppContent: Component = () => {
       <Show when={focusMode()}>
         <div class="flex items-center justify-between px-3 py-1.5 bg-bg-surface border-b border-accent/30">
           <div class="flex items-center gap-2">
-            <span class="text-[10px] text-accent font-mono uppercase tracking-wide">
-              Focus mode
-            </span>
+            <span class="text-xs text-accent font-medium">Focus mode</span>
             <span class="text-xs text-text-faint">
               Diff takes priority. Press Esc or F to exit.
             </span>
@@ -977,49 +1017,40 @@ const AppContent: Component = () => {
                   <div class="w-full max-w-2xl px-6">
                     <div class="border border-border bg-bg-surface p-6 space-y-5">
                       <div class="space-y-2">
-                        <div class="text-xs text-accent font-mono uppercase tracking-wide">
-                          Review Flow
-                        </div>
-                        <h2 class="text-xl text-text">
-                          Load a PR and review it without losing context
+                        <h2 class="text-xl font-medium text-text">
+                          Load a PR and keep the review in one place
                         </h2>
-                        <p class="text-sm text-text-muted max-w-[60ch] leading-relaxed">
-                          Paste a GitHub pull request URL above, then use the left chat panel for AI
-                          review, the center diff for comments, and the right file tree to track
-                          what you have already read.
+                        <p class="text-sm text-text-muted max-w-[62ch] leading-relaxed">
+                          Paste a GitHub pull request URL above. Better Review will load the diff,
+                          keep top-level comments nearby, and let the chat panel produce file order
+                          and review notes without sending you back to GitHub for every step.
                         </p>
                       </div>
 
-                      <div class="grid gap-3 md:grid-cols-3">
-                        <div class="border border-border bg-bg p-3 space-y-1">
-                          <div class="text-xs text-text-faint font-mono uppercase tracking-wide">
-                            1. Load
-                          </div>
+                      <ol class="space-y-0 border border-border bg-bg">
+                        <li class="grid gap-3 border-b border-border px-3 py-2.5 md:grid-cols-[7rem_1fr]">
+                          <div class="text-sm font-medium text-text">Load the diff</div>
                           <p class="text-sm text-text-muted leading-relaxed">
                             Paste{" "}
                             <span class="font-mono text-text">github.com/owner/repo/pull/123</span>,
-                            then load the diff.
+                            then fetch the PR.
                           </p>
-                        </div>
-                        <div class="border border-border bg-bg p-3 space-y-1">
-                          <div class="text-xs text-text-faint font-mono uppercase tracking-wide">
-                            2. Review
-                          </div>
+                        </li>
+                        <li class="grid gap-3 border-b border-border px-3 py-2.5 md:grid-cols-[7rem_1fr]">
+                          <div class="text-sm font-medium text-text">Ask for order</div>
                           <p class="text-sm text-text-muted leading-relaxed">
-                            Use <span class="font-mono text-text">Start Review</span> in the chat
-                            panel for structured AI feedback and file order.
+                            Use <span class="font-mono text-text">Start review</span> in chat when
+                            you want structured feedback and a suggested file sequence.
                           </p>
-                        </div>
-                        <div class="border border-border bg-bg p-3 space-y-1">
-                          <div class="text-xs text-text-faint font-mono uppercase tracking-wide">
-                            3. Focus
-                          </div>
+                        </li>
+                        <li class="grid gap-3 px-3 py-2.5 md:grid-cols-[7rem_1fr]">
+                          <div class="text-sm font-medium text-text">Track progress</div>
                           <p class="text-sm text-text-muted leading-relaxed">
-                            Press <span class="font-mono text-text">F</span> for focus mode, then
-                            mark files as read from the file tree as you work.
+                            Press <span class="font-mono text-text">F</span> for focus mode and mark
+                            files as read from the file tree as you work.
                           </p>
-                        </div>
-                      </div>
+                        </li>
+                      </ol>
                     </div>
                   </div>
                 }
@@ -1058,9 +1089,9 @@ const AppContent: Component = () => {
               >
                 <DiffViewer
                   rawDiff={activeDiff()!}
-                  comments={comments()}
-                  aiAnnotations={aiAnnotations()}
-                  loadingComments={loadingComments()}
+                  comments={reviewCommentsHidden() ? [] : comments()}
+                  aiAnnotations={reviewCommentsHidden() ? [] : aiAnnotations()}
+                  loadingComments={!reviewCommentsHidden() && loadingComments()}
                   onAddComment={addComment}
                   onReplyToComment={replyToComment}
                   onEditComment={editComment}

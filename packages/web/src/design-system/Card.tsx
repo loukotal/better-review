@@ -13,7 +13,7 @@ interface CardProps extends ParentProps, JSX.HTMLAttributes<HTMLDivElement> {
 
 const variantClasses: Record<CardVariant, string> = {
   subtle: "border-border bg-bg",
-  raised: "border-border bg-bg shadow-sm",
+  raised: "border-border bg-bg-elevated",
   outline: "border-border/80 bg-bg-surface/50",
 };
 
@@ -37,7 +37,7 @@ export const Card: Component<CardProps> = (props) => {
         "border transition-all duration-150",
         variantClasses[local.variant ?? "subtle"],
         paddingClasses[local.padding ?? "md"],
-        local.interactive && "hover:border-accent/60 hover:bg-bg-surface hover:-translate-y-[1px]",
+        local.interactive && "hover:border-text-faint hover:bg-bg-surface",
         local.class,
       )}
       {...rest}

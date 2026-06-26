@@ -235,7 +235,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
             type="button"
             onClick={handleSubmitComment}
             disabled={!newCommentBody().trim() || isSubmitting()}
-            class="px-2 py-1 text-xs bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            class="px-2 py-1 text-xs bg-accent text-accent-text hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSubmitting() ? "Posting..." : "Reply"}
           </button>
@@ -356,7 +356,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                         type="button"
                         onClick={handleSubmitComment}
                         disabled={!newCommentBody().trim() || isSubmitting()}
-                        class="px-3 py-1 text-sm bg-accent text-white hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        class="px-3 py-1 text-sm bg-accent text-accent-text hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {isSubmitting() ? "Posting..." : "Comment"}
                       </button>

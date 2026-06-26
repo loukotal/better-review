@@ -11,8 +11,17 @@ overrides:
 cleanupUnusedCatalogs: true
 strictDepBuilds: true
 minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  - "@earendil-works/pi-agent-core"
+  - "@earendil-works/pi-ai"
 trustPolicy: no-downgrade
 blockExoticSubdeps: true
 allowBuilds:
+  '@google/genai': true
+  '@mongodb-js/zstd': true
   esbuild: true
   lefthook: true
+  node-liblzma: true
+  protobufjs: true
+  sharp: true
+  workerd: true

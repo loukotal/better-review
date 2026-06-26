@@ -5,12 +5,14 @@ import type { StoredSession } from "@better-review/shared";
 import { ChevronDownLargeIcon } from "../icons/chevron-down-icon";
 import { CloseLargeIcon } from "../icons/close-icon";
 import { PlusIcon } from "../icons/plus-icon";
+import { SpinnerIcon } from "../icons/spinner-icon";
 
 interface SessionSelectorProps {
   sessions: StoredSession[];
   activeSessionId: string | null;
   currentHeadSha?: string;
   disabled?: boolean;
+  creatingNewSession?: boolean;
   onSelect: (sessionId: string) => void;
   onNewSession: () => void;
   onHide?: (sessionId: string) => void;
@@ -51,6 +53,7 @@ export function SessionSelector(props: SessionSelectorProps) {
   };
 
   const handleNewSession = () => {
+    if (props.disabled || props.creatingNewSession) return;
     props.onNewSession();
     setIsOpen(false);
   };
@@ -147,10 +150,13 @@ export function SessionSelector(props: SessionSelectorProps) {
             <button
               type="button"
               onClick={handleNewSession}
-              class="w-full flex items-center gap-2 px-3 py-2 text-sm text-accent hover:bg-bg-elevated transition-colors"
+              disabled={props.disabled || props.creatingNewSession}
+              class="w-full flex items-center gap-2 px-3 py-2 text-sm text-accent hover:bg-bg-elevated transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <PlusIcon size={16} />
-              New Session
+              <Show when={props.creatingNewSession} fallback={<PlusIcon size={16} />}>
+                <SpinnerIcon size={16} class="animate-spin" />
+              </Show>
+              {props.creatingNewSession ? "Creating Session..." : "New Session"}
             </button>
           </div>
         </div>

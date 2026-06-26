@@ -16,23 +16,23 @@ type MessagePart = { type: "text"; text: string } | { type: "file"; file: string
 const severityConfig: Record<
   AnnotationSeverity,
   {
-    borderColor: string;
+    surface: string;
     iconColor: string;
     label: string;
   }
 > = {
   info: {
-    borderColor: "border-l-info/60",
+    surface: "border-info/35 bg-info/10",
     iconColor: "text-info",
     label: "Info",
   },
   warning: {
-    borderColor: "border-l-yellow-500/60",
+    surface: "border-yellow-500/35 bg-yellow-500/10",
     iconColor: "text-yellow-500",
     label: "Warning",
   },
   critical: {
-    borderColor: "border-l-error/60",
+    surface: "border-error/40 bg-error/10",
     iconColor: "text-error",
     label: "Critical",
   },
@@ -154,8 +154,8 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
   return (
     <div
       class={`
-        relative border-l-2 ${config().borderColor}
-        pl-3 pr-2 py-2 font-mono
+        relative border ${config().surface}
+        px-3 py-2 font-mono
         transition-colors duration-150
         ${isHovered() ? "bg-bg-surface/20" : ""}
       `}
