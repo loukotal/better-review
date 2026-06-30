@@ -37,6 +37,12 @@ const severityStyles: Record<
     icon: "text-error",
     label: "Critical",
   },
+  error: {
+    bg: "bg-error/10",
+    border: "border-error/30",
+    icon: "text-error",
+    label: "Error",
+  },
 };
 
 function SeverityIcon(props: { severity: AnnotationSeverity }) {
@@ -46,7 +52,7 @@ function SeverityIcon(props: { severity: AnnotationSeverity }) {
   if (props.severity === "warning") {
     return <WarningIcon size={12} />;
   }
-  // critical
+  // critical / error
   return <CriticalIcon size={12} />;
 }
 

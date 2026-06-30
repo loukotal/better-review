@@ -7,7 +7,7 @@
  * - [[file:path/to/file.ts]] or [[file:path/to/file.ts:42]]
  */
 
-export type AnnotationSeverity = "info" | "warning" | "critical";
+export type AnnotationSeverity = "info" | "warning" | "critical" | "error";
 
 export interface Annotation {
   id: string;
@@ -32,7 +32,7 @@ export interface ParsedMessage {
 // Regex patterns
 const REVIEW_ORDER_PATTERN = /<<REVIEW_ORDER>>([\s\S]*?)<<\/REVIEW_ORDER>>/g;
 const ANNOTATION_PATTERN =
-  /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
+  /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g;
 // Match file refs, optionally wrapped in ** (bold markdown)
 const FILE_REF_PATTERN = /\*{0,2}\[\[file:([^\]:\s]+)(?::(\d+))?\]\]\*{0,2}/g;
 
@@ -193,7 +193,7 @@ export function extractReviewOrder(content: string): string[] | null {
 export function extractAnnotations(content: string): Annotation[] {
   const annotations: Annotation[] = [];
   const pattern =
-    /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g;
+    /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g;
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(content)) !== null) {

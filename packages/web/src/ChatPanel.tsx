@@ -487,7 +487,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
       // Replace annotation blocks - keep non-dismissed, remove dismissed
       text = text.replace(
-        /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical)">>([^]*?)<<\/ANNOTATION>>/g,
+        /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g,
         (_match, file, lineStr, severity, message) => {
           const lineMatch = lineStr.match(/^(\d+)/);
           const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;

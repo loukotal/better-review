@@ -476,6 +476,16 @@ async function gitShowIndexFile(repoRoot: string, filePath: string): Promise<str
   return exitCode === 0 ? stdout : null;
 }
 
+function parseCommitRangeVariantId(
+  variantId: string | undefined,
+): { baseSha: string; headSha: string } | null {
+  if (!variantId?.startsWith("commit-range:")) return null;
+  const [, baseSha, headSha] = variantId.split(":");
+  if (!baseSha || !headSha) return null;
+  if (!/^[0-9a-fA-F]{7,40}$/.test(baseSha) || !/^[0-9a-fA-F]{7,40}$/.test(headSha)) return null;
+  return { baseSha, headSha };
+}
+
 async function readWorkingTreeFile(repoRoot: string, filePath: string): Promise<string | null> {
   const resolved = resolveRepoFilePath(repoRoot, filePath);
   if (!resolved) return null;
@@ -826,6 +836,68 @@ ${fileStats.join("\n")}`;
           return Response.json(result);
         }
 
+        if (resource === "commits") {
+          const session = await runtime.runPromise(reviewSessions.getSession(sessionId));
+          if (!session) {
+            return Response.json({ error: "Session not found" }, { status: 404 });
+          }
+
+          const repoRoot = session.repoRoot ?? session.cwd;
+          if (!repoRoot) {
+            return Response.json({ error: "Session has no repoRoot/cwd" }, { status: 400 });
+          }
+
+          const { stdout, stderr, exitCode } = await runCommand("git", [
+            "-C",
+            repoRoot,
+            "log",
+            "--max-count=100",
+            "--pretty=format:%H%x00%h%x00%s",
+          ]);
+          if (exitCode !== 0) {
+            return Response.json({ error: stderr || "Failed to list commits" }, { status: 500 });
+          }
+
+          return Response.json({
+            commits: stdout
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => {
+                const [sha, shortSha, subject] = line.split("\0");
+                return { sha, shortSha, subject };
+              }),
+          });
+        }
+
+        if (resource === "diff") {
+          const baseSha = url.searchParams.get("baseSha");
+          const session = await runtime.runPromise(reviewSessions.getSession(sessionId));
+          if (!session) {
+            return Response.json({ error: "Session not found" }, { status: 404 });
+          }
+
+          const repoRoot = session.repoRoot ?? session.cwd;
+          if (!repoRoot || !baseSha || !/^[0-9a-fA-F]{7,40}$/.test(baseSha)) {
+            return Response.json({ error: "Missing or invalid baseSha" }, { status: 400 });
+          }
+
+          const head = await runCommand("git", ["-C", repoRoot, "rev-parse", "HEAD"]);
+          if (head.exitCode !== 0) {
+            return Response.json(
+              { error: head.stderr || "Failed to resolve HEAD" },
+              { status: 500 },
+            );
+          }
+          const headSha = head.stdout.trim();
+
+          const diff = await runCommand("git", ["-C", repoRoot, "diff", baseSha, headSha]);
+          if (diff.exitCode !== 0) {
+            return Response.json({ error: diff.stderr || "Failed to build diff" }, { status: 500 });
+          }
+
+          return Response.json({ rawPatch: diff.stdout, headSha });
+        }
+
         if (resource === "file-content") {
           const filePath = url.searchParams.get("path");
           const prevPath = url.searchParams.get("prevPath") ?? undefined;
@@ -848,7 +920,10 @@ ${fileStats.join("\n")}`;
             session.payload.kind === "diff"
               ? (session.payload.variants ?? []).find((variant) => variant.id === variantId)
               : undefined;
-          const contentSource = selectedVariant?.contentSource;
+          const rangeVariant = parseCommitRangeVariantId(variantId);
+          const contentSource =
+            selectedVariant?.contentSource ??
+            (rangeVariant ? { kind: "git-refs" as const, ...rangeVariant } : undefined);
 
           if (repoRoot && contentSource) {
             if (contentSource.kind === "unstaged") {

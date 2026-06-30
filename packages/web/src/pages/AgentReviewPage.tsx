@@ -114,6 +114,9 @@ type ReviewSessionWithContext = ReviewSession & {
   prUrl?: string | null;
 };
 
+type SessionCommit = { sha: string; shortSha: string; subject: string };
+type SessionDiffResponse = { rawPatch: string; headSha: string };
+
 interface AgentReviewPanelVisibility {
   files: boolean;
   review: boolean;
@@ -166,6 +169,7 @@ export default function AgentReviewPage() {
   const [annotationComment, setAnnotationComment] = createSignal("");
   const [draftQuote, setDraftQuote] = createSignal<string | null>(null);
   const [currentDiffVariantId, setCurrentDiffVariantId] = createSignal<string | null>(null);
+  const [rangeBaseSha, setRangeBaseSha] = createSignal<string | null>(null);
   const [composerOpen, setComposerOpen] = createSignal(false);
   const [composerPosition, setComposerPosition] = createSignal<FloatingComposerPosition | null>(
     null,
@@ -200,6 +204,28 @@ export default function AgentReviewPage() {
       return (await response.json()) as ReviewSessionResult;
     },
   );
+
+  const [commits] = createResource(
+    () => (session()?.payload.kind === "diff" ? params.sessionId : null),
+    async (sessionId) => {
+      if (!sessionId) return [];
+      const response = await fetchWithApiAuth(
+        `/api/sessions/${encodeURIComponent(sessionId)}/commits`,
+      );
+      if (!response.ok) return [];
+      const body = (await response.json()) as { commits: SessionCommit[] };
+      return body.commits;
+    },
+  );
+
+  const [rangeDiff] = createResource(rangeBaseSha, async (baseSha) => {
+    const url = new URL(
+      `/api/sessions/${encodeURIComponent(params.sessionId)}/diff`,
+      window.location.origin,
+    );
+    url.searchParams.set("baseSha", baseSha);
+    return fetchJson<SessionDiffResponse>(url.toString());
+  });
 
   const renderedContent = createMemo(() => {
     const value = session();
@@ -255,9 +281,28 @@ export default function AgentReviewPage() {
     };
   });
 
-  const diffLabel = createMemo(() => selectedDiffVariant()?.label ?? undefined);
+  const selectedRangeCommit = createMemo(
+    () => commits()?.find((commit) => commit.sha === rangeBaseSha()) ?? null,
+  );
 
-  const diffRawPatch = createMemo(() => selectedDiffVariant()?.rawPatch ?? "");
+  const diffLabel = createMemo(() => {
+    const rangeCommit = selectedRangeCommit();
+    if (rangeCommit) return `Since ${rangeCommit.shortSha}`;
+    return selectedDiffVariant()?.label ?? undefined;
+  });
+
+  const activeVariantId = createMemo(() => {
+    const baseSha = rangeBaseSha();
+    const diff = rangeDiff();
+    if (baseSha && diff?.headSha) return `commit-range:${baseSha}:${diff.headSha}`;
+    return currentDiffVariantId();
+  });
+
+  const diffRawPatch = createMemo(() => {
+    const baseSha = rangeBaseSha();
+    if (baseSha) return rangeDiff()?.rawPatch ?? "";
+    return selectedDiffVariant()?.rawPatch ?? "";
+  });
 
   const inlineReviewComments = createMemo(() =>
     annotations()
@@ -277,9 +322,24 @@ export default function AgentReviewPage() {
             "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f59e0b'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-family='system-ui,sans-serif' font-size='14' font-weight='700' fill='%23120f0b'%3EY%3C/text%3E%3C/svg%3E",
         },
         created_at: new Date(annotation.createdAt).toISOString(),
-        canEdit: false,
+        canEdit: !result(),
       })),
   );
+
+  const findAnnotationByInlineCommentId = (commentId: number) =>
+    annotations().find((annotation) => annotationInlineCommentId(annotation) === commentId);
+
+  const editInlineAnnotationComment = async (commentId: number, body: string) => {
+    const annotation = findAnnotationByInlineCommentId(commentId);
+    if (!annotation) return;
+    updateAnnotation(annotation.id, body);
+  };
+
+  const deleteInlineAnnotationComment = async (commentId: number) => {
+    const annotation = findAnnotationByInlineCommentId(commentId);
+    if (!annotation) return;
+    removeAnnotation(annotation.id);
+  };
 
   const sessionPrUrl = createMemo(() => session()?.prUrl ?? null);
 
@@ -380,6 +440,14 @@ export default function AgentReviewPage() {
 
   const removeAnnotation = (annotationId: string) => {
     setAnnotations((current) => current.filter((annotation) => annotation.id !== annotationId));
+  };
+
+  const updateAnnotation = (annotationId: string, comment: string) => {
+    setAnnotations((current) =>
+      current.map((annotation) =>
+        annotation.id === annotationId ? { ...annotation, comment } : annotation,
+      ),
+    );
   };
 
   const addDiffAnnotation = async ({
@@ -609,17 +677,40 @@ export default function AgentReviewPage() {
                 </Show>
 
                 <div class="flex-1 min-w-0 flex flex-col">
-                  <Show when={availableDiffVariants().length > 0}>
-                    <div class="flex items-center gap-2 border-b border-border px-3 py-2 bg-bg-surface shrink-0">
+                  <Show when={availableDiffVariants().length > 0 || (commits()?.length ?? 0) > 0}>
+                    <div class="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 bg-bg-surface shrink-0">
+                      <Show when={availableDiffVariants().length > 0}>
+                        <Select
+                          compact
+                          value={currentDiffVariantId() ?? ""}
+                          disabled={Boolean(rangeBaseSha())}
+                          onInput={(event) => setCurrentDiffVariantId(event.currentTarget.value)}
+                        >
+                          <For each={availableDiffVariants()}>
+                            {(variant) => <option value={variant.id}>{variant.label}</option>}
+                          </For>
+                        </Select>
+                      </Show>
                       <Select
                         compact
-                        value={currentDiffVariantId() ?? ""}
-                        onInput={(event) => setCurrentDiffVariantId(event.currentTarget.value)}
+                        value={rangeBaseSha() ?? ""}
+                        title="Review changes since this commit"
+                        onInput={(event) =>
+                          setRangeBaseSha(event.currentTarget.value.trim() || null)
+                        }
                       >
-                        <For each={availableDiffVariants()}>
-                          {(variant) => <option value={variant.id}>{variant.label}</option>}
+                        <option value="">Review original diff</option>
+                        <For each={commits() ?? []}>
+                          {(commit) => (
+                            <option value={commit.sha}>
+                              Since {commit.shortSha} — {commit.subject}
+                            </option>
+                          )}
                         </For>
                       </Select>
+                      <Show when={rangeDiff.loading}>
+                        <span class="text-xs text-text-faint">Loading diff...</span>
+                      </Show>
                       <Show when={diffLabel()}>
                         {(label) => <Badge variant="accent">{label()}</Badge>}
                       </Show>
@@ -640,10 +731,10 @@ export default function AgentReviewPage() {
                         onFilesLoaded={setFiles}
                         onAddComment={addDiffAnnotation}
                         onReplyToComment={async () => ({ success: true })}
-                        onEditComment={async () => ({ success: true })}
-                        onDeleteComment={async () => ({ success: true })}
+                        onEditComment={editInlineAnnotationComment}
+                        onDeleteComment={deleteInlineAnnotationComment}
                         sessionId={params.sessionId}
-                        variantId={currentDiffVariantId()}
+                        variantId={activeVariantId()}
                         prUrl={sessionPrUrl()}
                       />
                     </div>
@@ -656,6 +747,7 @@ export default function AgentReviewPage() {
                             result={result}
                             isDiffSession={true}
                             onRemove={removeAnnotation}
+                            onUpdate={updateAnnotation}
                             onNavigate={(annotation) => {
                               if (annotation.filePath) scrollToFile(annotation.filePath);
                             }}
@@ -706,6 +798,7 @@ export default function AgentReviewPage() {
                         result={result}
                         isDiffSession={false}
                         onRemove={removeAnnotation}
+                        onUpdate={updateAnnotation}
                       />
                     </div>
                     <div class="border-t border-border flex-shrink-0">
@@ -804,10 +897,31 @@ function AnnotationsPanel(props: {
   result: Resource<ReviewSessionResult | null>;
   isDiffSession: boolean;
   onRemove: (id: string) => void;
+  onUpdate: (id: string, comment: string) => void;
   onNavigate?: (annotation: ReviewSessionAnnotation) => void;
 }) {
   const items = () => props.result()?.annotations ?? props.annotations;
   const [annotationsHidden, setAnnotationsHidden] = createSignal(false);
+  const [editingAnnotationId, setEditingAnnotationId] = createSignal<string | null>(null);
+  const [editingComment, setEditingComment] = createSignal("");
+
+  const startEditing = (annotation: ReviewSessionAnnotation) => {
+    setEditingAnnotationId(annotation.id);
+    setEditingComment(annotation.comment);
+  };
+
+  const cancelEditing = () => {
+    setEditingAnnotationId(null);
+    setEditingComment("");
+  };
+
+  const saveEditing = () => {
+    const annotationId = editingAnnotationId();
+    const comment = editingComment().trim();
+    if (!annotationId || comment.length === 0) return;
+    props.onUpdate(annotationId, comment);
+    cancelEditing();
+  };
 
   return (
     <div class="p-3 space-y-3">
@@ -856,16 +970,16 @@ function AnnotationsPanel(props: {
                 return (
                   <div id={annotation.id} class="border border-border bg-bg p-3">
                     <div class="flex items-start justify-between gap-2">
-                      <button
-                        type="button"
-                        class="min-w-0 flex-1 text-left disabled:cursor-default"
-                        onClick={() => props.onNavigate?.(annotation)}
-                        disabled={!props.onNavigate}
-                        title={
-                          annotation.filePath ? `Go to ${annotationLabel(annotation)}` : undefined
-                        }
-                      >
-                        <div class="flex min-w-0 items-baseline gap-2">
+                      <div class="min-w-0 flex-1 text-left">
+                        <button
+                          type="button"
+                          class="flex min-w-0 max-w-full items-baseline gap-2 text-left disabled:cursor-default"
+                          onClick={() => props.onNavigate?.(annotation)}
+                          disabled={!props.onNavigate}
+                          title={
+                            annotation.filePath ? `Go to ${annotationLabel(annotation)}` : undefined
+                          }
+                        >
                           <span
                             class="truncate font-mono text-[11px] text-text"
                             title={location().title}
@@ -877,24 +991,84 @@ function AnnotationsPanel(props: {
                               <span class="shrink-0 text-[11px] text-text-faint">{detail()}</span>
                             )}
                           </Show>
-                        </div>
-                        <p class="m-0 mt-2 whitespace-pre-wrap text-xs leading-5 text-text">
-                          {annotation.comment}
-                        </p>
+                        </button>
+                        <Show
+                          when={editingAnnotationId() === annotation.id}
+                          fallback={
+                            <p class="m-0 mt-2 whitespace-pre-wrap text-xs leading-5 text-text">
+                              {annotation.comment}
+                            </p>
+                          }
+                        >
+                          <Textarea
+                            value={editingComment()}
+                            onInput={(event) => setEditingComment(event.currentTarget.value)}
+                            onKeyDown={(event) => {
+                              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                                event.preventDefault();
+                                saveEditing();
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelEditing();
+                              }
+                            }}
+                            class="mt-2 min-h-20 text-xs"
+                            onClick={(event) => event.stopPropagation()}
+                          />
+                        </Show>
                         <blockquote class="m-0 mt-2 line-clamp-3 border-l border-border pl-2 text-[11px] leading-4 text-text-faint">
                           {annotation.quote}
                         </blockquote>
-                      </button>
+                      </div>
                       <Show when={!props.result()}>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => props.onRemove(annotation.id)}
-                          title="Remove annotation"
-                        >
-                          ×
-                        </Button>
+                        <div class="flex shrink-0 flex-col gap-1">
+                          <Show
+                            when={editingAnnotationId() === annotation.id}
+                            fallback={
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  onClick={() => startEditing(annotation)}
+                                  title="Edit annotation"
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  onClick={() => props.onRemove(annotation.id)}
+                                  title="Remove annotation"
+                                >
+                                  ×
+                                </Button>
+                              </>
+                            }
+                          >
+                            <Button
+                              type="button"
+                              variant="primary"
+                              size="xs"
+                              disabled={editingComment().trim().length === 0}
+                              onClick={saveEditing}
+                              title="Save annotation"
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              onClick={cancelEditing}
+                              title="Cancel editing"
+                            >
+                              Cancel
+                            </Button>
+                          </Show>
+                        </div>
                       </Show>
                     </div>
                   </div>
