@@ -6,13 +6,15 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { app, BrowserWindow, nativeImage, session, shell } from "electron";
+import { app, BrowserWindow, ipcMain, nativeImage, session, shell } from "electron";
 
 interface ApiServerInfo {
   apiUrl: string;
   webUrl: string;
   apiToken: string;
 }
+
+type StopFindAction = Parameters<Electron.WebContents["stopFindInPage"]>[0];
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const discoveryFile = path.join(
@@ -26,6 +28,26 @@ const discoveryFile = path.join(
 let serverInfo: ApiServerInfo | undefined;
 
 app.setName("Better Review");
+
+function configureFindIpc(): void {
+  ipcMain.handle("better-review:find-in-page", (event, text: unknown, options: unknown) => {
+    if (typeof text !== "string" || text.length === 0) return 0;
+
+    const rawOptions = options && typeof options === "object" ? options : {};
+    const record = rawOptions as Record<string, unknown>;
+    return event.sender.findInPage(text, {
+      forward: record.forward !== false,
+      findNext: record.findNext === true,
+      matchCase: record.matchCase === true,
+    });
+  });
+
+  ipcMain.handle("better-review:stop-find-in-page", (event, action: unknown) => {
+    const safeAction: StopFindAction =
+      action === "keepSelection" || action === "activateSelection" ? action : "clearSelection";
+    event.sender.stopFindInPage(safeAction);
+  });
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -71,8 +93,18 @@ function resourcePath(packagedPath: string, devPathFromDesktopDist: string): str
     : path.resolve(currentDir, devPathFromDesktopDist);
 }
 
+function appFilePath(packagedPath: string, devPathFromDesktopDist: string): string {
+  return app.isPackaged
+    ? path.join(app.getAppPath(), packagedPath)
+    : path.resolve(currentDir, devPathFromDesktopDist);
+}
+
 function iconPath(): string {
   return resourcePath("icon.png", "../assets/icon.png");
+}
+
+function preloadPath(): string {
+  return appFilePath(path.join("dist", "preload.cjs"), "preload.cjs");
 }
 
 function setAppIcon(): void {
@@ -167,16 +199,14 @@ function configureApiAuth(info: ApiServerInfo): void {
   );
 }
 
-function configureSwipeNavigation(window: BrowserWindow): void {
-  if (process.platform !== "darwin") return;
-
-  window.on("swipe", (_event, direction) => {
-    const history = window.webContents.navigationHistory;
-    if (direction === "right" && history.canGoBack()) {
-      history.goBack();
-    } else if (direction === "left" && history.canGoForward()) {
-      history.goForward();
-    }
+function configureFindEvents(window: BrowserWindow): void {
+  window.webContents.on("found-in-page", (_event, result) => {
+    window.webContents.send("better-review:found-in-page", {
+      requestId: result.requestId,
+      activeMatchOrdinal: result.activeMatchOrdinal,
+      matches: result.matches,
+      finalUpdate: result.finalUpdate,
+    });
   });
 }
 
@@ -198,11 +228,12 @@ async function createMainWindow(info: ApiServerInfo): Promise<void> {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: preloadPath(),
       sandbox: true,
     },
   });
 
-  configureSwipeNavigation(window);
+  configureFindEvents(window);
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(info.webUrl)) return { action: "allow" };
@@ -231,6 +262,7 @@ app.on("window-all-closed", () => {
 app
   .whenReady()
   .then(async () => {
+    configureFindIpc();
     setAppIcon();
     serverInfo = await startApiServer();
     configureApiAuth(serverInfo);
