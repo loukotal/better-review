@@ -30,6 +30,9 @@ importers:
       concurrently:
         specifier: 9.2.1
         version: 9.2.1
+      esbuild:
+        specifier: 0.27.7
+        version: 0.27.7
       lefthook:
         specifier: 2.1.6
         version: 2.1.6

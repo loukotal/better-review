@@ -30,7 +30,9 @@ import { appRouter } from "./trpc/routers";
 
 const isProduction = process.env.NODE_ENV === "production";
 const currentDir = fileURLToPath(new URL(".", import.meta.url));
-const staticDir = path.resolve(currentDir, "../../web/dist");
+const staticDir = process.env.BETTER_REVIEW_STATIC_DIR
+  ? path.resolve(process.env.BETTER_REVIEW_STATIC_DIR)
+  : path.resolve(currentDir, "../../web/dist");
 const repoRoot = path.resolve(currentDir, "../../..");
 const devTokenFile = path.join(repoRoot, ".better-review-api-token");
 const webPort = process.env.WEB_PORT ?? "3000";

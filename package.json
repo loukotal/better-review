@@ -29,6 +29,7 @@
     "@flue/cli": "1.0.0-beta.1",
     "@types/node": "25.6.2",
     "concurrently": "9.2.1",
+    "esbuild": "0.27.7",
     "lefthook": "2.1.6",
     "oxfmt": "0.48.0",
     "oxlint": "1.63.0",
