@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { app, BrowserWindow, session, shell } from "electron";
+import { app, BrowserWindow, nativeImage, session, shell } from "electron";
 
 interface ApiServerInfo {
   apiUrl: string;
@@ -24,6 +24,8 @@ const discoveryFile = path.join(
 );
 
 let serverInfo: ApiServerInfo | undefined;
+
+app.setName("Better Review");
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -67,6 +69,19 @@ function resourcePath(packagedPath: string, devPathFromDesktopDist: string): str
   return app.isPackaged
     ? path.join(process.resourcesPath, packagedPath)
     : path.resolve(currentDir, devPathFromDesktopDist);
+}
+
+function iconPath(): string {
+  return resourcePath("icon.png", "../assets/icon.png");
+}
+
+function setAppIcon(): void {
+  if (process.platform !== "darwin") return;
+
+  const icon = nativeImage.createFromPath(iconPath());
+  if (!icon.isEmpty()) {
+    app.dock.setIcon(icon);
+  }
 }
 
 async function waitForHealth(apiUrl: string, timeoutMs = 30_000): Promise<void> {
@@ -159,7 +174,7 @@ async function createMainWindow(info: ApiServerInfo): Promise<void> {
     minWidth: 900,
     minHeight: 650,
     title: "Better Review",
-    icon: resourcePath("icon.png", "../assets/icon.png"),
+    icon: iconPath(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -193,6 +208,7 @@ app.on("window-all-closed", () => {
 app
   .whenReady()
   .then(async () => {
+    setAppIcon();
     serverInfo = await startApiServer();
     configureApiAuth(serverInfo);
     await createMainWindow(serverInfo);
