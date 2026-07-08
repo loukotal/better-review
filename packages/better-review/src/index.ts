@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { access, readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -77,8 +77,7 @@ function resolveStaticFilePath(urlPathname: string): string | null {
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
-    await access(filePath);
-    return true;
+    return (await stat(filePath)).isFile();
   } catch (error) {
     if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
       return false;
