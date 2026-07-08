@@ -39,8 +39,8 @@ export const queryClient = new QueryClient({
 });
 
 // Set up persistence to IndexedDB
-export function restoreCache(): void {
-  persistQueryClient({
+export async function restoreCache(): Promise<void> {
+  const [, restorePromise] = persistQueryClient({
     queryClient,
     persister: {
       persistClient: async (client) => {
@@ -55,6 +55,7 @@ export function restoreCache(): void {
     },
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   });
+  await restorePromise;
 }
 
 // Re-export types from shared

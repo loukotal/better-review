@@ -167,12 +167,32 @@ function configureApiAuth(info: ApiServerInfo): void {
   );
 }
 
+function configureSwipeNavigation(window: BrowserWindow): void {
+  if (process.platform !== "darwin") return;
+
+  window.on("swipe", (_event, direction) => {
+    const history = window.webContents.navigationHistory;
+    if (direction === "right" && history.canGoBack()) {
+      history.goBack();
+    } else if (direction === "left" && history.canGoForward()) {
+      history.goForward();
+    }
+  });
+}
+
 async function createMainWindow(info: ApiServerInfo): Promise<void> {
   const window = new BrowserWindow({
+    ...(process.platform === "darwin"
+      ? {
+          titleBarStyle: "hiddenInset",
+          trafficLightPosition: { x: 16, y: 14 },
+        }
+      : {}),
     width: 1440,
     height: 1000,
     minWidth: 900,
     minHeight: 650,
+    show: false,
     title: "Better Review",
     icon: iconPath(),
     webPreferences: {
@@ -181,6 +201,8 @@ async function createMainWindow(info: ApiServerInfo): Promise<void> {
       sandbox: true,
     },
   });
+
+  configureSwipeNavigation(window);
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith(info.webUrl)) return { action: "allow" };
@@ -195,6 +217,7 @@ async function createMainWindow(info: ApiServerInfo): Promise<void> {
   });
 
   await window.loadURL(info.webUrl);
+  window.show();
 }
 
 app.on("before-quit", () => {

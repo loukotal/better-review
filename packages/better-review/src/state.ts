@@ -525,6 +525,8 @@ export const PrContextServiceLive = PrContextService.Default.pipe(Layer.provide(
 // =============================================================================
 
 const PR_LIST_REFRESH_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const PR_LIST_CACHE_NAMESPACE = "pr-list-cache";
+const PR_LIST_CACHE_KEY = "current";
 
 interface PrListCacheData {
   prs: readonly SearchedPr[];
@@ -532,9 +534,23 @@ interface PrListCacheData {
 }
 
 const makePrListCacheService = Effect.gen(function* () {
-  const cache = yield* Ref.make<PrListCacheData | null>(null);
-  const refreshing = yield* Ref.make(false);
   const gh = yield* GhService;
+  const store = yield* StoreService;
+  const initialCache = yield* store
+    .get<PrListCacheData>(PR_LIST_CACHE_NAMESPACE, PR_LIST_CACHE_KEY)
+    .pipe(
+      Effect.catchAll((e) =>
+        Effect.log(`[pr-list-cache] Failed to load disk cache: ${e}`).pipe(Effect.as(null)),
+      ),
+    );
+  const cache = yield* Ref.make<PrListCacheData | null>(initialCache);
+  const refreshing = yield* Ref.make(false);
+
+  if (initialCache) {
+    yield* Effect.log(
+      `[pr-list-cache] Loaded disk cache age=${Math.round((Date.now() - initialCache.fetchedAt) / 1000)}s, count=${initialCache.prs.length}`,
+    );
+  }
 
   /**
    * Fetch fresh PR list from GitHub and update the cache.
@@ -544,7 +560,10 @@ const makePrListCacheService = Effect.gen(function* () {
     // Skip if already refreshing (dedup concurrent calls)
     const isRefreshing = yield* Ref.get(refreshing);
     if (isRefreshing) {
-      yield* Effect.log("[pr-list-cache] Refresh already in progress, skipping");
+      yield* Effect.log("[pr-list-cache] Refresh already in progress, waiting");
+      while (yield* Ref.get(refreshing)) {
+        yield* Effect.sleep(100);
+      }
       return yield* Ref.get(cache);
     }
 
@@ -556,6 +575,11 @@ const makePrListCacheService = Effect.gen(function* () {
       const prs = yield* gh.searchReviewRequested();
       const data: PrListCacheData = { prs, fetchedAt: Date.now() };
       yield* Ref.set(cache, data);
+      yield* store
+        .set(PR_LIST_CACHE_NAMESPACE, PR_LIST_CACHE_KEY, data)
+        .pipe(
+          Effect.catchAll((e) => Effect.log(`[pr-list-cache] Failed to write disk cache: ${e}`)),
+        );
       yield* Effect.log(
         `[pr-list-cache] Refreshed ${prs.length} PRs in ${Date.now() - startTime}ms`,
       );
@@ -649,4 +673,7 @@ export class PrListCacheService extends Effect.Service<PrListCacheService>()("Pr
   effect: makePrListCacheService,
 }) {}
 
-export const PrListCacheServiceLive = PrListCacheService.Default.pipe(Layer.provide(GhServiceLive));
+export const PrListCacheServiceLive = PrListCacheService.Default.pipe(
+  Layer.provide(GhServiceLive),
+  Layer.provide(StoreServiceLive),
+);

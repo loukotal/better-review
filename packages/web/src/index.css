@@ -138,6 +138,31 @@ body {
   min-height: 100vh;
 }
 
+@supports (-webkit-app-region: drag) {
+  html[data-desktop-app="true"] #root .h-screen > header:first-child,
+  html[data-desktop-app="true"] #root .h-screen > :first-child:not(header):not(main) {
+    -webkit-app-region: drag;
+  }
+
+  html[data-desktop-app="true"] #root .h-screen > header:first-child > div:first-child,
+  html[data-desktop-app="true"] #root .h-screen > :first-child:not(header):not(main) {
+    padding-left: max(6rem, 96px);
+  }
+
+  html[data-desktop-app="true"]
+    #root
+    .h-screen
+    > header:first-child
+    :is(a, button, input, textarea, select, label, [role="button"]),
+  html[data-desktop-app="true"]
+    #root
+    .h-screen
+    > :first-child:not(header):not(main)
+    :is(a, button, input, textarea, select, label, [role="button"]) {
+    -webkit-app-region: no-drag;
+  }
+}
+
 * {
   font-family: var(--font-mono);
 }
