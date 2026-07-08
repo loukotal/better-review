@@ -159,6 +159,7 @@ async function createMainWindow(info: ApiServerInfo): Promise<void> {
     minWidth: 900,
     minHeight: 650,
     title: "Better Review",
+    icon: resourcePath("icon.png", "../assets/icon.png"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

@@ -20,6 +20,7 @@
   "build": {
     "appId": "dev.better-review.app",
     "productName": "Better Review",
+    "icon": "assets/icon",
     "directories": {
       "output": "release"
     },
@@ -35,12 +36,21 @@
       {
         "from": "../better-review/dist",
         "to": "server"
+      },
+      {
+        "from": "assets/icon.png",
+        "to": "icon.png"
       }
     ],
     "mac": {
+      "icon": "assets/icon.icns",
       "category": "public.app-category.developer-tools"
     },
+    "win": {
+      "icon": "assets/icon.ico"
+    },
     "linux": {
+      "icon": "assets/icon.png",
       "category": "Development"
     }
   }
