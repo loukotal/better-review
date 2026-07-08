@@ -53,6 +53,12 @@ Currently you need to pull the repo and run it locally.
 1. `pnpm install`
 2. `pnpm dev` or `pnpm start`
 
+To run the desktop shell:
+
+1. `pnpm desktop:start`
+2. `pnpm desktop:pack` to create an unpacked local app build
+3. `pnpm desktop:dist` to create unsigned distributables
+
 In dev, `pnpm dev` creates a local `.better-review-api-token` file before starting the API and
 Vite. Both servers read that same token automatically. Set `BETTER_REVIEW_API_TOKEN` only if you
 want to override the generated dev token. For production builds, set `VITE_BETTER_REVIEW_API_TOKEN`
@@ -81,7 +87,7 @@ Current flow:
   - `feedbackMarkdown` for mode-specific exported feedback
   - `agentMessage` for a ready-to-send runtime-facing message
 
-For now, keep the app running with `pnpm dev` or `pnpm start` before using the CLI.
+For now, keep the app running with `pnpm dev`, `pnpm start`, or the desktop app before using the CLI. When the desktop app is running, the CLI automatically discovers its local server and API token.
 
 ### Local Command Install
 

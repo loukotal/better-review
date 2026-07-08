@@ -136,6 +136,13 @@ async function fileResponse(filePath: string, headers: HeadersInit = {}): Promis
   return new Response(await readFile(filePath), { headers: responseHeaders });
 }
 
+function getStaticHtmlHeaders(): Record<string, string> {
+  if (!apiToken || apiAuthDisabled) return {};
+  return {
+    "Set-Cookie": `${apiTokenCookieName}=${encodeURIComponent(apiToken)}; Path=/api; SameSite=Strict`,
+  };
+}
+
 async function serveStatic(pathname: string): Promise<Response> {
   if (pathname === "/api" || pathname.startsWith("/api/")) {
     return new Response("Not Found", { status: 404 });
@@ -144,11 +151,16 @@ async function serveStatic(pathname: string): Promise<Response> {
   const resolved = resolveStaticFilePath(pathname);
   if (resolved) {
     if (await fileExists(resolved)) {
-      return fileResponse(resolved);
+      const headers =
+        path.extname(resolved).toLowerCase() === ".html" ? getStaticHtmlHeaders() : {};
+      return fileResponse(resolved, headers);
     }
   }
 
-  return fileResponse(path.join(staticDir, "index.html"), { "Content-Type": "text/html" });
+  return fileResponse(path.join(staticDir, "index.html"), {
+    "Content-Type": "text/html",
+    ...getStaticHtmlHeaders(),
+  });
 }
 
 function getCorsHeaders(req: Request): Record<string, string> {

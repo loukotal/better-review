@@ -5,7 +5,8 @@ export {};
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -357,6 +358,48 @@ function readDevApiToken(): string | undefined {
   return token.length > 0 ? token : undefined;
 }
 
+const desktopServerFile = join(
+  homedir(),
+  ".local",
+  "share",
+  "better-review",
+  "desktop-server.json",
+);
+
+function isProcessRunning(pid: unknown): boolean {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+function readDesktopServer(): Pick<CliOptions, "apiUrl" | "webUrl" | "apiToken"> | undefined {
+  if (!existsSync(desktopServerFile)) return undefined;
+
+  try {
+    const parsed = JSON.parse(readFileSync(desktopServerFile, "utf8")) as {
+      apiUrl?: unknown;
+      webUrl?: unknown;
+      apiToken?: unknown;
+      pid?: unknown;
+    };
+
+    if (!isProcessRunning(parsed.pid) || typeof parsed.apiUrl !== "string") {
+      return undefined;
+    }
+
+    const apiUrl = normalizeBaseUrl(parsed.apiUrl);
+    const webUrl = typeof parsed.webUrl === "string" ? normalizeBaseUrl(parsed.webUrl) : apiUrl;
+    const apiToken = typeof parsed.apiToken === "string" ? parsed.apiToken : undefined;
+    return { apiUrl, webUrl, apiToken };
+  } catch {
+    return undefined;
+  }
+}
+
 function buildSessionUrl(webUrl: string, sessionId: string): string {
   return `${normalizeBaseUrl(webUrl)}/agent-review/${encodeURIComponent(sessionId)}`;
 }
@@ -393,13 +436,18 @@ function parseArgs(argv: string[]): {
   positionals: string[];
   options: CliOptions;
 } {
+  const desktopServer = readDesktopServer();
   const options: CliOptions = {
     origin: "manual",
-    apiUrl: normalizeBaseUrl(process.env.BETTER_REVIEW_API_URL ?? "http://127.0.0.1:3001"),
-    webUrl: normalizeBaseUrl(
-      process.env.BETTER_REVIEW_WEB_URL ?? `http://127.0.0.1:${process.env.WEB_PORT ?? "3000"}`,
+    apiUrl: normalizeBaseUrl(
+      process.env.BETTER_REVIEW_API_URL ?? desktopServer?.apiUrl ?? "http://127.0.0.1:3001",
     ),
-    apiToken: process.env.BETTER_REVIEW_API_TOKEN ?? readDevApiToken(),
+    webUrl: normalizeBaseUrl(
+      process.env.BETTER_REVIEW_WEB_URL ??
+        desktopServer?.webUrl ??
+        `http://127.0.0.1:${process.env.WEB_PORT ?? "3000"}`,
+    ),
+    apiToken: process.env.BETTER_REVIEW_API_TOKEN ?? desktopServer?.apiToken ?? readDevApiToken(),
     openBrowser: true,
     printUrlOnly: false,
     timeoutMs: 60 * 60 * 1000,
