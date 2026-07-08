@@ -1,0 +1,47 @@
+{
+  "name": "@better-review/desktop",
+  "version": "1.0.50",
+  "private": true,
+  "description": "Desktop shell for better-review",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/main.mjs",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/main.mjs --external:electron",
+    "start": "electron dist/main.mjs",
+    "package:dir": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "43.0.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.27.7"
+  },
+  "build": {
+    "appId": "dev.better-review.app",
+    "productName": "Better Review",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web-dist"
+      },
+      {
+        "from": "../better-review/dist",
+        "to": "server"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "category": "Development"
+    }
+  }
+}
