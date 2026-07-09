@@ -6,6 +6,7 @@ import { render } from "solid-js/web";
 
 import App from "./App";
 import { DesktopFindBar } from "./components/DesktopFindBar";
+import { DesktopTabs } from "./components/DesktopTabs";
 import { queryClient, restoreCache } from "./lib/query";
 import { initializeUiTheme } from "./lib/theme";
 import AgentReviewPage from "./pages/AgentReviewPage";
@@ -35,6 +36,7 @@ async function start(): Promise<void> {
   render(
     () => (
       <QueryClientProvider client={queryClient}>
+        <DesktopTabs />
         <DesktopFindBar />
         <Router>
           <Route path="/" component={PrListPage} />

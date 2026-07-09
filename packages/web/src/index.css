@@ -51,6 +51,11 @@
 :root,
 :root[data-ui-theme="dark"] {
   color-scheme: dark;
+  --desktop-tabs-height: 0px;
+}
+
+html[data-desktop-tabs="true"] {
+  --desktop-tabs-height: 40px;
 }
 
 :root[data-ui-theme="light"] {
@@ -138,23 +143,44 @@ body {
   min-height: 100vh;
 }
 
+html[data-desktop-tabs="true"] #root .h-screen {
+  height: calc(100vh - var(--desktop-tabs-height));
+}
+
+html[data-desktop-tabs="true"] #root .min-h-screen {
+  min-height: calc(100vh - var(--desktop-tabs-height));
+}
+
 @supports (-webkit-app-region: drag) {
-  html[data-desktop-app="true"] #root .h-screen > header:first-child,
-  html[data-desktop-app="true"] #root .h-screen > :first-child:not(header):not(main) {
+  html[data-desktop-app="true"]:not([data-desktop-tabs="true"])
+    #root
+    .h-screen
+    > header:first-child,
+  html[data-desktop-app="true"]:not([data-desktop-tabs="true"])
+    #root
+    .h-screen
+    > :first-child:not(header):not(main) {
     -webkit-app-region: drag;
   }
 
-  html[data-desktop-app="true"] #root .h-screen > header:first-child > div:first-child,
-  html[data-desktop-app="true"] #root .h-screen > :first-child:not(header):not(main) {
+  html[data-desktop-app="true"]:not([data-desktop-tabs="true"])
+    #root
+    .h-screen
+    > header:first-child
+    > div:first-child,
+  html[data-desktop-app="true"]:not([data-desktop-tabs="true"])
+    #root
+    .h-screen
+    > :first-child:not(header):not(main) {
     padding-left: max(6rem, 96px);
   }
 
-  html[data-desktop-app="true"]
+  html[data-desktop-app="true"]:not([data-desktop-tabs="true"])
     #root
     .h-screen
     > header:first-child
     :is(a, button, input, textarea, select, label, [role="button"]),
-  html[data-desktop-app="true"]
+  html[data-desktop-app="true"]:not([data-desktop-tabs="true"])
     #root
     .h-screen
     > :first-child:not(header):not(main)

@@ -6,7 +6,15 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { app, BrowserWindow, ipcMain, nativeImage, session, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  nativeImage,
+  session,
+  shell,
+  WebContentsView,
+} from "electron";
 
 interface ApiServerInfo {
   apiUrl: string;
@@ -16,6 +24,28 @@ interface ApiServerInfo {
 
 type StopFindAction = Parameters<Electron.WebContents["stopFindInPage"]>[0];
 
+interface DesktopTabSnapshot {
+  id: number;
+  title: string;
+  url: string;
+}
+
+interface DesktopTabsSnapshot {
+  activeTabId: number;
+  tabs: DesktopTabSnapshot[];
+}
+
+interface DesktopTab {
+  id: number;
+  title: string;
+  url: string;
+  view: WebContentsView;
+}
+
+interface CreateTabOptions {
+  activate?: boolean;
+}
+
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const discoveryFile = path.join(
   homedir(),
@@ -24,8 +54,10 @@ const discoveryFile = path.join(
   "better-review",
   "desktop-server.json",
 );
+const appBackgroundColor = "#0a0a0a";
 
 let serverInfo: ApiServerInfo | undefined;
+const tabControllers = new Set<DesktopTabController>();
 
 app.setName("Better Review");
 
@@ -46,6 +78,39 @@ function configureFindIpc(): void {
     const safeAction: StopFindAction =
       action === "keepSelection" || action === "activateSelection" ? action : "clearSelection";
     event.sender.stopFindInPage(safeAction);
+  });
+}
+
+function tabControllerForSender(sender: Electron.WebContents): DesktopTabController | undefined {
+  for (const controller of tabControllers) {
+    if (controller.hasWebContents(sender)) return controller;
+  }
+}
+
+function configureTabsIpc(): void {
+  ipcMain.handle("better-review:tabs:get", (event) => {
+    return tabControllerForSender(event.sender)?.snapshot() ?? null;
+  });
+
+  ipcMain.handle("better-review:tabs:open", async (event, url: unknown, options: unknown) => {
+    const controller = tabControllerForSender(event.sender);
+    if (!controller || typeof url !== "string") return null;
+
+    const record =
+      options && typeof options === "object" ? (options as Record<string, unknown>) : {};
+    return await controller.createTab(url, { activate: record.activate !== false });
+  });
+
+  ipcMain.handle("better-review:tabs:switch", (event, tabId: unknown) => {
+    const controller = tabControllerForSender(event.sender);
+    if (!controller || typeof tabId !== "number") return;
+    controller.activateTab(tabId);
+  });
+
+  ipcMain.handle("better-review:tabs:close", (event, tabId: unknown) => {
+    const controller = tabControllerForSender(event.sender);
+    if (!controller || typeof tabId !== "number") return;
+    controller.closeTab(tabId);
   });
 }
 
@@ -105,6 +170,57 @@ function iconPath(): string {
 
 function preloadPath(): string {
   return appFilePath(path.join("dist", "preload.cjs"), "preload.cjs");
+}
+
+function appWebPreferences(): Electron.WebPreferences {
+  return {
+    contextIsolation: true,
+    nodeIntegration: false,
+    preload: preloadPath(),
+    sandbox: true,
+  };
+}
+
+function resolveAppUrl(info: ApiServerInfo, input: string): string | undefined {
+  try {
+    const baseUrl = info.webUrl.endsWith("/") ? info.webUrl : `${info.webUrl}/`;
+    return new URL(input, baseUrl).href;
+  } catch {
+    return undefined;
+  }
+}
+
+function isAppUrl(info: ApiServerInfo, input: string): boolean {
+  const url = resolveAppUrl(info, input);
+  if (!url) return false;
+
+  try {
+    return new URL(url).origin === new URL(info.webUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+function tabTitleFromUrl(info: ApiServerInfo, input: string): string {
+  const fallback = "Better Review";
+  const url = resolveAppUrl(info, input);
+  if (!url) return fallback;
+
+  const parsed = new URL(url);
+  if (parsed.pathname === "/") return "Review Requests";
+  if (parsed.pathname === "/kanban") return "Kanban";
+  if (parsed.pathname === "/design-system" || parsed.pathname === "/_debug/design-system") {
+    return "Design System";
+  }
+  if (parsed.pathname.startsWith("/agent-review/")) return "Agent Review";
+  if (parsed.pathname === "/review") {
+    const prUrl = parsed.searchParams.get("prUrl");
+    const match = prUrl?.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+    if (match) return `${match[1]}/${match[2]}#${match[3]}`;
+    return "Review";
+  }
+
+  return fallback;
 }
 
 function setAppIcon(): void {
@@ -199,15 +315,200 @@ function configureApiAuth(info: ApiServerInfo): void {
   );
 }
 
-function configureFindEvents(window: BrowserWindow): void {
-  window.webContents.on("found-in-page", (_event, result) => {
-    window.webContents.send("better-review:found-in-page", {
+function configureFindEvents(webContents: Electron.WebContents): void {
+  webContents.on("found-in-page", (_event, result) => {
+    webContents.send("better-review:found-in-page", {
       requestId: result.requestId,
       activeMatchOrdinal: result.activeMatchOrdinal,
       matches: result.matches,
       finalUpdate: result.finalUpdate,
     });
   });
+}
+
+class DesktopTabController {
+  private readonly tabs: DesktopTab[] = [];
+  private activeTabId = 0;
+  private nextTabId = 1;
+  private destroyed = false;
+
+  constructor(
+    private readonly window: BrowserWindow,
+    private readonly info: ApiServerInfo,
+  ) {
+    window.on("resize", () => this.layoutTabs());
+  }
+
+  hasWebContents(webContents: Electron.WebContents): boolean {
+    return !this.destroyed && this.tabs.some((tab) => tab.view.webContents === webContents);
+  }
+
+  snapshot(): DesktopTabsSnapshot {
+    return {
+      activeTabId: this.activeTabId,
+      tabs: this.tabs.map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+        url: tab.url,
+      })),
+    };
+  }
+
+  async createTab(
+    inputUrl: string,
+    options: CreateTabOptions = {},
+  ): Promise<DesktopTabSnapshot | null> {
+    if (this.destroyed) return null;
+
+    const url = resolveAppUrl(this.info, inputUrl);
+    if (!url) return null;
+
+    if (!isAppUrl(this.info, url)) {
+      void shell.openExternal(url);
+      return null;
+    }
+
+    const shouldActivate = options.activate !== false;
+    const view = new WebContentsView({ webPreferences: appWebPreferences() });
+    view.setBackgroundColor(appBackgroundColor);
+    view.setVisible(false);
+    const tab: DesktopTab = {
+      id: this.nextTabId++,
+      title: tabTitleFromUrl(this.info, url),
+      url,
+      view,
+    };
+
+    this.tabs.push(tab);
+    this.window.contentView.addChildView(view);
+    this.configureTab(tab);
+    this.layoutTabs();
+    this.broadcastTabs();
+
+    try {
+      await view.webContents.loadURL(url);
+    } catch (error) {
+      if (!this.destroyed && !view.webContents.isDestroyed() && this.tabs.includes(tab)) {
+        console.error(`[desktop] Failed to load tab ${url}:`, error);
+      }
+    }
+
+    if (view.webContents.isDestroyed() || !this.tabs.includes(tab)) return null;
+
+    this.updateTabUrl(tab, view.webContents.getURL() || url);
+    if (shouldActivate) this.activateTab(tab.id);
+
+    return { id: tab.id, title: tab.title, url: tab.url };
+  }
+
+  activateTab(tabId: number): void {
+    if (this.destroyed) return;
+
+    const activeTab = this.tabs.find((tab) => tab.id === tabId);
+    if (!activeTab) return;
+
+    this.activeTabId = tabId;
+    for (const tab of this.tabs) {
+      tab.view.setVisible(tab.id === tabId);
+    }
+
+    this.window.contentView.addChildView(activeTab.view);
+    this.layoutTabs();
+    activeTab.view.webContents.focus();
+    this.broadcastTabs();
+  }
+
+  closeTab(tabId: number): void {
+    if (this.destroyed) return;
+
+    if (this.tabs.length <= 1) return;
+
+    const tabIndex = this.tabs.findIndex((tab) => tab.id === tabId);
+    if (tabIndex === -1) return;
+
+    const [tab] = this.tabs.splice(tabIndex, 1);
+    this.disposeTab(tab);
+
+    if (this.activeTabId === tabId) {
+      const nextTab = this.tabs[Math.max(0, tabIndex - 1)] ?? this.tabs[0];
+      this.activateTab(nextTab.id);
+      return;
+    }
+
+    this.broadcastTabs();
+  }
+
+  destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+
+    for (const tab of this.tabs) {
+      this.disposeTab(tab);
+    }
+    this.tabs.length = 0;
+  }
+
+  private configureTab(tab: DesktopTab): void {
+    const { webContents } = tab.view;
+    configureFindEvents(webContents);
+
+    webContents.setWindowOpenHandler(({ url }) => {
+      if (isAppUrl(this.info, url)) {
+        void this.createTab(url, { activate: true });
+      } else {
+        void shell.openExternal(url);
+      }
+      return { action: "deny" };
+    });
+
+    webContents.on("will-navigate", (event, url) => {
+      if (isAppUrl(this.info, url)) return;
+      event.preventDefault();
+      void shell.openExternal(url);
+    });
+
+    webContents.on("did-navigate", (_event, url) => {
+      this.updateTabUrl(tab, url);
+    });
+
+    webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+      if (isMainFrame) this.updateTabUrl(tab, url);
+    });
+  }
+
+  private updateTabUrl(tab: DesktopTab, url: string): void {
+    if (this.destroyed || !this.tabs.includes(tab) || tab.view.webContents.isDestroyed()) return;
+    if (!isAppUrl(this.info, url)) return;
+    tab.url = url;
+    tab.title = tabTitleFromUrl(this.info, url);
+    this.broadcastTabs();
+  }
+
+  private disposeTab(tab: DesktopTab): void {
+    this.window.contentView.removeChildView(tab.view);
+    tab.view.setVisible(false);
+    if (!tab.view.webContents.isDestroyed()) {
+      tab.view.webContents.close({ waitForBeforeUnload: false });
+    }
+  }
+
+  private layoutTabs(): void {
+    const [width, height] = this.window.getContentSize();
+    for (const tab of this.tabs) {
+      tab.view.setBounds({ x: 0, y: 0, width, height });
+    }
+  }
+
+  private broadcastTabs(): void {
+    if (this.destroyed) return;
+
+    const snapshot = this.snapshot();
+    for (const tab of this.tabs) {
+      if (!tab.view.webContents.isDestroyed()) {
+        tab.view.webContents.send("better-review:tabs:changed", snapshot);
+      }
+    }
+  }
 }
 
 async function createMainWindow(info: ApiServerInfo): Promise<void> {
@@ -222,32 +523,27 @@ async function createMainWindow(info: ApiServerInfo): Promise<void> {
     height: 1000,
     minWidth: 900,
     minHeight: 650,
+    backgroundColor: appBackgroundColor,
     show: false,
     title: "Better Review",
     icon: iconPath(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: preloadPath(),
       sandbox: true,
     },
   });
 
-  configureFindEvents(window);
-
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith(info.webUrl)) return { action: "allow" };
-    void shell.openExternal(url);
-    return { action: "deny" };
+  const tabController = new DesktopTabController(window, info);
+  tabControllers.add(tabController);
+  window.on("close", () => {
+    tabController.destroy();
+  });
+  window.on("closed", () => {
+    tabControllers.delete(tabController);
   });
 
-  window.webContents.on("will-navigate", (event, url) => {
-    if (url.startsWith(info.webUrl)) return;
-    event.preventDefault();
-    void shell.openExternal(url);
-  });
-
-  await window.loadURL(info.webUrl);
+  await tabController.createTab(info.webUrl, { activate: true });
   window.show();
 }
 
@@ -263,6 +559,7 @@ app
   .whenReady()
   .then(async () => {
     configureFindIpc();
+    configureTabsIpc();
     setAppIcon();
     serverInfo = await startApiServer();
     configureApiAuth(serverInfo);

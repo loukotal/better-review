@@ -127,7 +127,7 @@ export function DesktopFindBar() {
 
   return (
     <Show when={api() && visible()}>
-      <div class="fixed right-3 top-3 z-[1000] flex items-center gap-1 border border-border bg-bg-surface px-2 py-1.5 shadow-lg [-webkit-app-region:no-drag]">
+      <div class="fixed right-3 top-[calc(var(--desktop-tabs-height,0px)+0.75rem)] z-[1000] flex items-center gap-1 border border-border bg-bg-surface px-2 py-1.5 shadow-lg [-webkit-app-region:no-drag]">
         <input
           ref={(element) => {
             inputRef = element;
