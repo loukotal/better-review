@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { setSelectedModel } from "./model-selection";
+import { searchModels, setSelectedModel } from "./model-selection";
+
+test("includes GPT-5.6 models in catalog searches", () => {
+  const { models } = searchModels("gpt-5.6");
+
+  assert.ok(
+    models.some((model) => model.providerId === "openai-codex" && model.modelId === "gpt-5.6-sol"),
+  );
+});
 
 test("rejects OpenAI models that cannot be routed without an OpenAI API key", () => {
   const originalOpenAiApiKey = process.env.OPENAI_API_KEY;

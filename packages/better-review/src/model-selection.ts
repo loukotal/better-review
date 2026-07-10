@@ -1,13 +1,11 @@
 import {
-  findEnvKeys,
-  getModel,
-  getModels,
-  getProviders,
   getSupportedThinkingLevels,
   type Api,
   type Model,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
+import { findEnvKeys } from "@earendil-works/pi-ai/compat";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 import { hasPiOAuthProvider } from "./flue/oauth-auth";
 
@@ -47,8 +45,12 @@ const providerAliases = new Map<string, string>([
 
 let currentModel: ModelSelection | undefined;
 
-const getModelById = getModel as (provider: string, modelId: string) => Model<Api> | undefined;
-const getModelsByProvider = getModels as (provider: string) => Array<Model<Api>>;
+const modelCatalog = builtinModels();
+const getModelById = (provider: string, modelId: string): Model<Api> | undefined =>
+  modelCatalog.getModel(provider, modelId);
+const getModelsByProvider = (provider: string): readonly Model<Api>[] =>
+  modelCatalog.getModels(provider);
+const getProviderIds = (): string[] => modelCatalog.getProviders().map((provider) => provider.id);
 
 function isReasoningEffort(value: ModelThinkingLevel): value is ReasoningEffort {
   return REASONING_EFFORTS.includes(value as ReasoningEffort);
@@ -147,7 +149,7 @@ function resolveDefaultModel(): SelectedModel {
     if (model) return toSelectedModel(model, fallback.variant, fallback.thinkingLevel);
   }
 
-  const firstProvider = getProviders()[0];
+  const firstProvider = getProviderIds()[0];
   const firstModel = firstProvider ? getModelsByProvider(firstProvider)[0] : undefined;
   if (!firstModel) {
     throw new Error("No Flue models are available");
@@ -247,7 +249,7 @@ export function searchModels(query: string): {
   const configuredProviders = new Set<string>();
   const candidates: ModelEntry[] = [];
 
-  for (const providerId of getProviders()) {
+  for (const providerId of getProviderIds()) {
     if (hasProviderCredentials(providerId)) {
       configuredProviders.add(providerId);
     }

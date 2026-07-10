@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { findEnvKeys } from "@earendil-works/pi-ai";
+import { findEnvKeys } from "@earendil-works/pi-ai/compat";
 import { registerProvider } from "@flue/runtime";
 
 const PI_AUTH_PATH =
