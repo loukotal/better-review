@@ -404,6 +404,9 @@ const PrListPage: Component = () => {
                           <Badge variant="danger">Changes requested</Badge>
                         </Show>
                       </div>
+                      <span class="hidden w-28 shrink-0 truncate text-xs text-text-muted md:block">
+                        @{pr.author.login}
+                      </span>
                       <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint sm:block">
                         {formatRelativeTime(pr.createdAt)}
                       </span>
