@@ -606,7 +606,7 @@ export function ChatPanel(props: ChatPanelProps) {
       setHtml(updatedHtml);
     }
 
-    return <span class="markdown-content" innerHTML={html()} />;
+    return <div class="typeset" innerHTML={html()} />;
   }
 
   // Helper to escape HTML for placeholders
@@ -745,6 +745,40 @@ export function ChatPanel(props: ChatPanelProps) {
   // Render tool call status
   function ToolCallView(toolProps: { tool: ToolCall }) {
     const tool = toolProps.tool;
+    const targetKeys = ["path", "filePath", "file", "url", "query", "command", "pattern"];
+    const rangeKeys = ["offset", "limit", "line", "startLine", "endLine"];
+
+    const targetEntry = () =>
+      targetKeys
+        .map((key) => [key, tool.input[key]] as const)
+        .find((entry): entry is readonly [string, string] => typeof entry[1] === "string");
+
+    const rangeLabel = () => {
+      const line = tool.input.line;
+      if (typeof line === "number") return `L${line}`;
+
+      const startLine = tool.input.startLine;
+      const endLine = tool.input.endLine;
+      if (typeof startLine === "number") {
+        return typeof endLine === "number" ? `L${startLine}-${endLine}` : `L${startLine}`;
+      }
+
+      const offset = tool.input.offset;
+      const limit = tool.input.limit;
+      if (typeof offset === "number") {
+        return typeof limit === "number" && limit > 0
+          ? `L${offset}-${offset + limit - 1}`
+          : `L${offset}`;
+      }
+
+      return null;
+    };
+
+    const remainingInput = () => {
+      const hiddenKeys = new Set([...(targetEntry() ? [targetEntry()![0]] : []), ...rangeKeys]);
+      return Object.fromEntries(Object.entries(tool.input).filter(([key]) => !hiddenKeys.has(key)));
+    };
+
     const statusColor = () => {
       switch (tool.status) {
         case "pending":
@@ -774,48 +808,53 @@ export function ChatPanel(props: ChatPanelProps) {
       }
     };
 
-    const hasMetadata = () =>
-      Object.keys(tool.input).length > 0 ||
-      Boolean(tool.output) ||
-      Boolean(tool.error) ||
-      Boolean(tool.callId);
+    const hasDetails = () =>
+      Object.keys(remainingInput()).length > 0 || Boolean(tool.output) || Boolean(tool.error);
 
     return (
       <details
-        class="text-sm px-2 py-1 bg-bg border border-border mb-1"
+        class="mb-1 min-w-0 max-w-full overflow-hidden border border-border bg-bg px-2 py-1 font-mono text-sm"
         open={tool.status === "running"}
       >
-        <summary class="cursor-pointer list-none flex items-center gap-2">
-          <span class={statusColor()}>{statusIcon()}</span>
-          <span class="text-text-muted">{tool.title || tool.tool}</span>
-          <span class="text-text-faint text-xs">{tool.tool}</span>
+        <summary class="flex min-w-0 cursor-pointer list-none items-center gap-2 overflow-hidden">
+          <span class={`shrink-0 ${statusColor()}`}>{statusIcon()}</span>
+          <span class="shrink-0 text-text-muted">{tool.tool}</span>
+          <Show when={targetEntry()?.[1]}>
+            {(target) => (
+              <span class="min-w-0 truncate text-xs text-text-faint" title={target()}>
+                {target()}
+              </span>
+            )}
+          </Show>
+          <Show when={rangeLabel()}>
+            {(range) => <span class="shrink-0 text-xs text-text-faint">{range()}</span>}
+          </Show>
           <Show when={tool.status === "running"}>
-            <span class="animate-pulse">...</span>
+            <span class="shrink-0 animate-pulse">...</span>
           </Show>
         </summary>
-        <Show when={hasMetadata()}>
-          <div class="mt-1 space-y-1 border-t border-border pt-1 font-mono text-[11px] leading-relaxed text-text-faint">
-            <div>
-              <span class="text-text-muted">call:</span> {tool.callId}
-            </div>
-            <Show when={Object.keys(tool.input).length > 0}>
-              <div>
-                <div class="text-text-muted">input:</div>
-                <pre class="overflow-x-auto whitespace-pre-wrap">
-                  {JSON.stringify(tool.input, null, 2)}
+        <Show when={hasDetails()}>
+          <div class="mt-1 min-w-0 max-w-full space-y-1 overflow-hidden border-t border-border pt-1 text-[11px] leading-relaxed text-text-faint">
+            <Show when={Object.keys(remainingInput()).length > 0}>
+              <div class="min-w-0 max-w-full overflow-hidden">
+                <div class="text-text-muted">Arguments</div>
+                <pre class="max-w-full overflow-auto whitespace-pre">
+                  {JSON.stringify(remainingInput(), null, 2)}
                 </pre>
               </div>
             </Show>
             <Show when={tool.output}>
-              <div>
-                <div class="text-text-muted">output:</div>
-                <pre class="max-h-40 overflow-auto whitespace-pre-wrap">{tool.output}</pre>
+              <div class="min-w-0 max-w-full overflow-hidden">
+                <div class="text-text-muted">Result</div>
+                <pre class="max-h-56 max-w-full overflow-auto whitespace-pre leading-5">
+                  {tool.output}
+                </pre>
               </div>
             </Show>
             <Show when={tool.error}>
-              <div>
-                <div class="text-error">error:</div>
-                <pre class="max-h-40 overflow-auto whitespace-pre-wrap text-error">
+              <div class="min-w-0 max-w-full overflow-hidden">
+                <div class="text-error">Error</div>
+                <pre class="max-h-40 max-w-full overflow-auto whitespace-pre text-error">
                   {tool.error}
                 </pre>
               </div>
@@ -873,11 +912,10 @@ export function ChatPanel(props: ChatPanelProps) {
 
   return (
     <div
-      class="border-r border-border flex flex-col bg-bg-surface relative"
+      id="chat-panel"
+      class="chat-panel border-r border-border flex flex-col bg-bg-surface relative"
       style={{
-        width: `${width()}px`,
-        "min-width": `${MIN_WIDTH}px`,
-        "max-width": `${MAX_WIDTH}px`,
+        "--chat-panel-width": `${width()}px`,
       }}
     >
       {/* Resize handle */}
@@ -889,7 +927,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
       {/* Header */}
       <div class="px-3 py-2 border-b border-border">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">
             <span class="text-accent text-sm shrink-0">AI</span>
             <h2 class="text-sm text-text font-medium truncate">Review Assistant</h2>
@@ -920,8 +958,9 @@ export function ChatPanel(props: ChatPanelProps) {
                 variant="primary"
                 size="xs"
                 class="whitespace-nowrap"
+                title="Start review"
               >
-                {width() < 300 ? "Review" : "Start Review"}
+                Review
               </Button>
             </Show>
             <Show when={sessionId() && !chat.isStreaming()}>
@@ -929,11 +968,12 @@ export function ChatPanel(props: ChatPanelProps) {
                 type="button"
                 onClick={startAdversarialReview}
                 disabled={creatingNewSession()}
-                variant="danger"
+                variant="ghost"
                 size="xs"
-                class="whitespace-nowrap"
+                class="whitespace-nowrap text-error hover:text-error hover:bg-error/10"
+                title="Start adversarial review"
               >
-                {width() < 300 ? "Adversarial" : "Adversarial Review"}
+                Adversarial
               </Button>
             </Show>
             <Show when={chat.isStreaming()}>
@@ -971,15 +1011,12 @@ export function ChatPanel(props: ChatPanelProps) {
                 type="button"
                 onClick={handleNewSession}
                 disabled={chat.isStreaming() || initializing() || creatingNewSession()}
-                class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-accent text-accent hover:bg-accent hover:text-bg transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                class="flex size-6 shrink-0 items-center justify-center border border-border text-sm text-text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
                 title={creatingNewSession() ? "Creating new session" : "Create new session"}
+                aria-label={creatingNewSession() ? "Creating new session" : "Create new session"}
               >
-                <Show
-                  when={creatingNewSession()}
-                  fallback={<span>{width() < 300 ? "+New" : "+ New"}</span>}
-                >
+                <Show when={creatingNewSession()} fallback={<span aria-hidden="true">+</span>}>
                   <SpinnerIcon size={10} class="animate-spin" />
-                  <span>{width() < 300 ? "New..." : "Creating..."}</span>
                 </Show>
               </button>
             </div>
@@ -1039,7 +1076,7 @@ export function ChatPanel(props: ChatPanelProps) {
               }
             >
               <div class="text-text-faint text-sm mb-3">
-                Click "Start Review" or "Adversarial Review", or ask questions about this PR
+                Choose a review mode, or ask about the PR.
               </div>
             </Show>
             <div class="flex flex-wrap gap-1.5 justify-center">

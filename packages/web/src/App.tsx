@@ -7,6 +7,7 @@ import {
   createMemo,
   Show,
   onMount,
+  onCleanup,
   on,
 } from "solid-js";
 
@@ -22,7 +23,7 @@ import { ThemeToggle } from "./components/ThemeToggle";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
-import { ACCENT_LABELS, ACCENT_THEME_VARS, FONT_FAMILY_MAP } from "./diff/types";
+import { ACCENT_LABELS, ACCENT_THEME_VARS } from "./diff/types";
 import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
 import {
   DiffViewer,
@@ -129,7 +130,6 @@ const AppContent: Component = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [prUrl, setPrUrl] = createSignal("");
   const [loadedPrUrl, setLoadedPrUrl] = createSignal<string | null>(null);
-  const [showPrSwitcher, setShowPrSwitcher] = createSignal(false);
   const [initialLoadTriggered, setInitialLoadTriggered] = createSignal(false);
   const [prQueue, setPrQueue] = createSignal<QueuedPr[]>([]);
   const [prInfo, setPrInfo] = createSignal<PrInfo | null>(null);
@@ -155,18 +155,34 @@ const AppContent: Component = () => {
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
 
   // Panel visibility
+  const [compactLayout, setCompactLayout] = createSignal(false);
   const [panelVisibility, setPanelVisibility] =
     createSignal<PanelVisibility>(loadPanelVisibility());
   const togglePanel = (panel: keyof PanelVisibility) => {
-    const newVisibility = {
-      ...panelVisibility(),
-      [panel]: !panelVisibility()[panel],
-    };
+    const opening = !panelVisibility()[panel];
+    const newVisibility =
+      compactLayout() && opening
+        ? { chat: panel === "chat", files: panel === "files" }
+        : { ...panelVisibility(), [panel]: opening };
     setPanelVisibility(newVisibility);
     savePanelVisibility(newVisibility);
   };
-  console.log({ panelVisibility: panelVisibility() });
 
+  onMount(() => {
+    const query = window.matchMedia("(max-width: 1024px)");
+    const syncLayout = () => {
+      const enteringCompactLayout = query.matches && !compactLayout();
+      setCompactLayout(query.matches);
+
+      if (enteringCompactLayout) {
+        setPanelVisibility({ chat: false, files: false });
+      }
+    };
+
+    syncLayout();
+    query.addEventListener("change", syncLayout);
+    onCleanup(() => query.removeEventListener("change", syncLayout));
+  });
   // Focus mode - hides header and chat, maximizes diff area
   const [focusMode, setFocusMode] = createSignal(
     localStorage.getItem(FOCUS_MODE_STORAGE_KEY) === "true",
@@ -404,7 +420,6 @@ const AppContent: Component = () => {
   createEffect(() => {
     const loaded = loadedPrUrl();
     if (loaded) {
-      setShowPrSwitcher(false);
       setSearchParams({ prUrl: loaded });
     }
   });
@@ -470,12 +485,6 @@ const AppContent: Component = () => {
     } else {
       document.title = "better-review";
     }
-  });
-
-  // Sync user-configurable CSS variables with settings
-  createEffect(() => {
-    const fontFamily = FONT_FAMILY_MAP[settings().fontFamily];
-    document.documentElement.style.setProperty("--font-mono", fontFamily);
   });
 
   createEffect(() => {
@@ -783,29 +792,34 @@ const AppContent: Component = () => {
       {/* Header Bar - hidden in focus mode */}
       <Show when={!focusMode()}>
         <header class="border-b border-border bg-bg-surface">
-          {/* Main Header */}
-          <div class="px-4 py-3">
-            <div class="flex items-center justify-between mb-3">
-              <A href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
-                <span class="text-accent text-base">●</span>
-                <h1 class="text-base text-text">better-review</h1>
+          <div class="px-4 py-2.5">
+            <div class="flex items-center justify-between mb-2.5">
+              <A href="/" class="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+                <span class="w-2 h-2 bg-accent" aria-hidden="true" />
+                <h1 class="text-sm font-mono font-semibold tracking-tight text-text">
+                  better-review
+                </h1>
               </A>
-              <div class="flex items-center gap-4">
-                <div class="flex items-center gap-1 border-r border-border pr-4">
+              <div class="flex items-center gap-1 text-sm font-mono">
+                <div class="flex items-center gap-0.5 border-r border-border pr-2 mr-1">
                   <Button
                     onClick={() => togglePanel("chat")}
-                    variant="secondary"
+                    variant="ghost"
                     size="sm"
-                    class={panelVisibility().chat ? "border-primary/50" : "text-text-faint"}
+                    class={panelVisibility().chat ? "bg-bg-elevated text-text" : "text-text-muted"}
+                    aria-pressed={panelVisibility().chat}
+                    aria-controls="chat-panel"
                     title="Toggle chat panel"
                   >
                     Chat
                   </Button>
                   <Button
                     onClick={() => togglePanel("files")}
-                    variant="secondary"
+                    variant="ghost"
                     size="sm"
-                    class={panelVisibility().files ? "border-primary/50" : "text-text-faint"}
+                    class={panelVisibility().files ? "bg-bg-elevated text-text" : "text-text-muted"}
+                    aria-pressed={panelVisibility().files}
+                    aria-controls="file-tree-panel"
                     title="Toggle file tree panel"
                   >
                     Files
@@ -815,97 +829,60 @@ const AppContent: Component = () => {
                   onClick={toggleFocusMode}
                   variant="ghost"
                   size="sm"
-                  class="text-base"
                   title="Enter focus mode (F)"
                 >
                   Focus
                 </Button>
-                <A href="/" class="text-base text-text-faint hover:text-text transition-colors">
-                  Browse PRs
+                <A
+                  href="/"
+                  class="max-xl:hidden px-2 py-1.5 text-text-muted hover:text-text transition-colors"
+                >
+                  Reviews
                 </A>
                 <A
                   href="/kanban"
-                  class="text-base text-text-faint hover:text-text transition-colors"
+                  class="max-xl:hidden px-2 py-1.5 text-text-muted hover:text-text transition-colors"
                 >
-                  Kanban
+                  Projects
                 </A>
                 <ThemeToggle />
                 <SettingsPanel settings={settings()} onChange={setSettings} />
               </div>
             </div>
 
-            <Show
-              when={!loadedPrUrl() || showPrSwitcher()}
-              fallback={
-                <div class="flex items-center justify-between gap-3 border border-border bg-bg px-3 py-2">
-                  <div class="min-w-0 flex-1">
-                    <div class="text-xs text-text-faint">Current PR</div>
-                    <div class="truncate text-sm font-mono text-text">
-                      {prInfo()?.owner && prInfo()?.repo && prInfo()?.number
-                        ? `${prInfo()!.owner}/${prInfo()!.repo}#${prInfo()!.number}`
-                        : loadedPrUrl()}
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-2 flex-shrink-0">
-                    <Show when={nextPr()}>
-                      {(next) => (
-                        <A
-                          href={`/review?prUrl=${encodeURIComponent(next().url)}`}
-                          class="px-3 py-1.5 border border-border text-sm text-text-faint hover:text-text hover:border-text-faint transition-colors flex items-center gap-1"
-                          title={`Next: ${next().title}`}
-                        >
-                          Next <span class="text-accent">→</span>
-                        </A>
-                      )}
-                    </Show>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setShowPrSwitcher(true)}
-                    >
-                      Change PR
-                    </Button>
-                  </div>
-                </div>
-              }
-            >
-              <form onSubmit={loadPr} class="flex gap-2">
-                <div class="flex-1">
-                  <TextInput
-                    type="text"
-                    value={prUrl()}
-                    onInput={(e) => setPrUrl(e.currentTarget.value)}
-                    placeholder="github.com/owner/repo/pull/123"
-                    class="text-base font-mono"
-                  />
-                </div>
-                <Button type="submit" disabled={loading() || !prUrl()} variant="primary" size="lg">
-                  {loading() ? "..." : loadedPrUrl() ? "Switch" : "Load"}
+            <form onSubmit={loadPr} class="flex items-center gap-2 border-t border-border pt-2.5">
+              <TextInput
+                type="text"
+                inputMode="url"
+                size="sm"
+                value={prUrl()}
+                onInput={(e) => setPrUrl(e.currentTarget.value)}
+                placeholder="github.com/owner/repo/pull/123"
+                aria-label="Pull request URL"
+                class="min-w-0 flex-1 font-mono"
+              />
+              <Show when={!loadedPrUrl() || prUrl().trim() !== loadedPrUrl()}>
+                <Button
+                  type="submit"
+                  disabled={loading() || !prUrl().trim()}
+                  variant="primary"
+                  size="sm"
+                >
+                  {loading() ? "Opening…" : "Open"}
                 </Button>
-                <Show when={loadedPrUrl()}>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowPrSwitcher(false)}
+              </Show>
+              <Show when={nextPr()}>
+                {(next) => (
+                  <A
+                    href={`/review?prUrl=${encodeURIComponent(next().url)}`}
+                    class="flex items-center gap-1 px-2 py-1.5 font-mono text-xs text-text-muted transition-colors hover:text-text"
+                    title={`Next: ${next().title}`}
                   >
-                    Cancel
-                  </Button>
-                </Show>
-                <Show when={!loadedPrUrl() && nextPr()}>
-                  {(next) => (
-                    <A
-                      href={`/review?prUrl=${encodeURIComponent(next().url)}`}
-                      class="px-4 py-2 border border-border text-text-faint hover:text-text hover:border-text-faint transition-colors text-base flex items-center gap-1"
-                      title={`Next: ${next().title}`}
-                    >
-                      Next PR <span class="text-accent">→</span>
-                    </A>
-                  )}
-                </Show>
-              </form>
-            </Show>
+                    Next <span aria-hidden="true">→</span>
+                  </A>
+                )}
+              </Show>
+            </form>
 
             {error() && (
               <div class="mt-3 px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-base">
@@ -985,7 +962,7 @@ const AppContent: Component = () => {
       </Show>
 
       {/* Main content */}
-      <div class="flex-1 flex overflow-hidden">
+      <div class="relative flex min-w-0 flex-1 overflow-hidden">
         {/* Chat panel (left) - hidden in focus mode */}
         <Show when={panelVisibility().chat && !focusMode()}>
           <ChatPanel
@@ -1014,44 +991,16 @@ const AppContent: Component = () => {
               <Show
                 when={loading()}
                 fallback={
-                  <div class="w-full max-w-2xl px-6">
-                    <div class="border border-border bg-bg-surface p-6 space-y-5">
-                      <div class="space-y-2">
-                        <h2 class="text-xl font-medium text-text">
-                          Load a PR and keep the review in one place
-                        </h2>
-                        <p class="text-sm text-text-muted max-w-[62ch] leading-relaxed">
-                          Paste a GitHub pull request URL above. Better Review will load the diff,
-                          keep top-level comments nearby, and let the chat panel produce file order
-                          and review notes without sending you back to GitHub for every step.
-                        </p>
-                      </div>
-
-                      <ol class="space-y-0 border border-border bg-bg">
-                        <li class="grid gap-3 border-b border-border px-3 py-2.5 md:grid-cols-[7rem_1fr]">
-                          <div class="text-sm font-medium text-text">Load the diff</div>
-                          <p class="text-sm text-text-muted leading-relaxed">
-                            Paste{" "}
-                            <span class="font-mono text-text">github.com/owner/repo/pull/123</span>,
-                            then fetch the PR.
-                          </p>
-                        </li>
-                        <li class="grid gap-3 border-b border-border px-3 py-2.5 md:grid-cols-[7rem_1fr]">
-                          <div class="text-sm font-medium text-text">Ask for order</div>
-                          <p class="text-sm text-text-muted leading-relaxed">
-                            Use <span class="font-mono text-text">Start review</span> in chat when
-                            you want structured feedback and a suggested file sequence.
-                          </p>
-                        </li>
-                        <li class="grid gap-3 px-3 py-2.5 md:grid-cols-[7rem_1fr]">
-                          <div class="text-sm font-medium text-text">Track progress</div>
-                          <p class="text-sm text-text-muted leading-relaxed">
-                            Press <span class="font-mono text-text">F</span> for focus mode and mark
-                            files as read from the file tree as you work.
-                          </p>
-                        </li>
-                      </ol>
-                    </div>
+                  <div class="w-full max-w-md px-6 text-center">
+                    <h2 class="text-lg font-semibold tracking-tight text-text">
+                      Open a pull request
+                    </h2>
+                    <p class="mt-2 text-sm leading-relaxed text-text-muted">
+                      Paste a GitHub PR URL above to load its diff, comments, and review tools.
+                    </p>
+                    <p class="mt-4 font-mono text-xs text-text-faint">
+                      github.com/owner/repo/pull/123
+                    </p>
                   </div>
                 }
               >
@@ -1064,7 +1013,7 @@ const AppContent: Component = () => {
           }
         >
           {/* Diff viewer (center) */}
-          <div class="flex-1 overflow-y-auto flex flex-col">
+          <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
             {/* Commit navigator (when in commit mode) */}
             <Show when={reviewMode() === "commit" && commits().length > 0}>
               <CommitNavigator
@@ -1114,13 +1063,15 @@ const AppContent: Component = () => {
 
           {/* File tree panel (right) */}
           <Show when={panelVisibility().files}>
-            <FileTreePanel
-              files={orderedFiles()}
-              onFileSelect={(file) => scrollToFile(file)}
-              reviewOrder={reviewOrder()}
-              readFiles={readFiles()}
-              onToggleRead={toggleFileRead}
-            />
+            <div id="file-tree-panel" class="file-tree-shell flex shrink-0">
+              <FileTreePanel
+                files={orderedFiles()}
+                onFileSelect={(file) => scrollToFile(file)}
+                reviewOrder={reviewOrder()}
+                readFiles={readFiles()}
+                onToggleRead={toggleFileRead}
+              />
+            </div>
           </Show>
         </Show>
       </div>

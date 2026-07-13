@@ -1,0 +1,274 @@
+/*
+ * Adapted from shadcn/typeset for Better Review's rendered Markdown surfaces.
+ * https://ui.shadcn.com/typeset
+ */
+
+@layer components {
+  .typeset {
+    --typeset-font-body: var(--font-sans);
+    --typeset-font-heading: var(--font-sans);
+    --typeset-font-mono: var(--font-mono);
+    --typeset-size: 1em;
+    --typeset-leading: 1.65;
+    --typeset-flow: 1em;
+    --typeset-muted: var(--color-text-muted);
+    --typeset-rule: var(--color-border);
+
+    color: inherit;
+    font-family: var(--typeset-font-body);
+    font-size: var(--typeset-size);
+    line-height: var(--typeset-leading);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .typeset *:not(:where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *)) {
+    &:where(p) {
+      margin-block: var(--typeset-flow) 0;
+    }
+
+    &:where(h1, h2, h3, h4, h5, h6) {
+      color: var(--color-text);
+      font-family: var(--typeset-font-heading);
+      font-weight: 600;
+      margin-block-end: 0;
+    }
+
+    &:where(h1) {
+      font-size: 1.5em;
+      line-height: 1.3;
+      margin-block-start: var(--typeset-flow);
+    }
+
+    &:where(h2) {
+      font-size: 1.25em;
+      line-height: 1.4;
+      margin-block-start: calc(var(--typeset-flow) * 1.4);
+    }
+
+    &:where(h3) {
+      font-size: 1.125em;
+      line-height: 1.45;
+      margin-block-start: var(--typeset-flow);
+    }
+
+    &:where(h4) {
+      font-size: 1em;
+      line-height: 1.5;
+      margin-block-start: var(--typeset-flow);
+    }
+
+    &:where(h5, h6) {
+      color: var(--typeset-muted);
+      font-size: 0.875em;
+      font-weight: 500;
+      margin-block-start: var(--typeset-flow);
+    }
+
+    &:where(h6) {
+      font-size: 0.8125em;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    &:where([id]) {
+      scroll-margin-block-start: var(--typeset-flow);
+    }
+
+    &:where(h1 + *, h2 + *, h3 + *, h4 + *, h5 + *, h6 + *) {
+      margin-block-start: 0.75em;
+    }
+
+    &:where(a) {
+      color: var(--color-accent);
+      font-weight: 500;
+      text-decoration-line: underline;
+      text-decoration-color: color-mix(in oklab, currentColor 35%, transparent);
+      text-underline-offset: 0.14em;
+    }
+
+    &:where(a:hover) {
+      text-decoration-color: currentColor;
+    }
+
+    &:where(a:focus-visible) {
+      border-radius: 0.125em;
+      outline: 2px solid var(--color-border-focus);
+      outline-offset: 2px;
+    }
+
+    &:where(strong, b) {
+      color: var(--color-text);
+      font-weight: 600;
+    }
+
+    &:where(mark) {
+      background-color: color-mix(in oklab, var(--color-warning) 25%, transparent);
+      color: inherit;
+      padding: 0.05em 0.15em;
+    }
+
+    &:where(del, s) {
+      color: var(--typeset-muted);
+    }
+
+    &:where(ul) {
+      list-style-type: disc;
+    }
+
+    &:where(ol) {
+      list-style-type: decimal;
+    }
+
+    &:where(ul ul) {
+      list-style-type: circle;
+    }
+
+    &:where(ul, ol) {
+      margin-block: var(--typeset-flow) 0;
+      padding-inline-start: 1.5em;
+    }
+
+    &:where(li) {
+      margin-block-start: 0.4em;
+      padding-inline-start: 0.25em;
+    }
+
+    &:where(li > p, li > ul, li > ol) {
+      margin-block-start: 0.4em;
+    }
+
+    &:where(li)::marker {
+      color: var(--typeset-muted);
+    }
+
+    &:where(ul.contains-task-list) {
+      list-style-type: none;
+      padding-inline-start: 0.25em;
+    }
+
+    &:where(li.task-list-item > input[type="checkbox"]) {
+      accent-color: var(--color-accent);
+      margin-inline-end: 0.5em;
+      vertical-align: -0.1em;
+    }
+
+    &:where(details) {
+      margin-block: var(--typeset-flow) 0;
+    }
+
+    &:where(summary) {
+      cursor: pointer;
+      font-weight: 500;
+    }
+
+    &:where(kbd) {
+      border: 1px solid var(--typeset-rule);
+      border-block-end-width: 2px;
+      font-family: var(--typeset-font-mono);
+      font-size: 0.8em;
+      font-weight: 500;
+      padding: 0.0625em 0.35em;
+    }
+
+    &:where(:not(pre) > code) {
+      background: var(--color-bg-elevated);
+      color: var(--color-text);
+      font-family: var(--typeset-font-mono);
+      font-size: 0.85em;
+      padding: 0.125em 0.3em;
+    }
+
+    &:where(pre) {
+      background: var(--color-bg-elevated);
+      border: 1px solid var(--typeset-rule);
+      font-family: var(--typeset-font-mono);
+      font-size: 0.875em;
+      line-height: 1.5;
+      margin-block: calc(var(--typeset-flow) / 0.875) 0;
+      overflow-x: auto;
+      padding: 0.75em 1em;
+      tab-size: 2;
+    }
+
+    &:where(pre.shiki) {
+      background-color: var(--shiki-color-background, var(--color-bg-elevated));
+    }
+
+    &:where(pre code) {
+      background: transparent;
+      color: inherit;
+      font-family: inherit;
+      font-size: inherit;
+      padding: 0;
+    }
+
+    &:where(blockquote) {
+      border-inline-start: 2px solid var(--typeset-rule);
+      color: var(--typeset-muted);
+      margin-block: var(--typeset-flow) 0;
+      margin-inline: 0;
+      padding-inline-start: 1em;
+    }
+
+    &:where(hr) {
+      border: 0;
+      border-block-start: 1px solid var(--typeset-rule);
+      margin-block: calc(var(--typeset-flow) * 2) 0;
+    }
+
+    &:where(img, video) {
+      height: auto;
+      margin-block: var(--typeset-flow) 0;
+      max-width: 100%;
+    }
+
+    &:where(figure) {
+      margin-block: var(--typeset-flow) 0;
+      margin-inline: 0;
+    }
+
+    &:where(figcaption, caption) {
+      color: var(--typeset-muted);
+      font-size: 0.875em;
+      margin-block-start: 0.75em;
+      text-align: center;
+    }
+
+    &:where(table) {
+      border-block-end: 1px solid var(--typeset-rule);
+      border-collapse: separate;
+      border-spacing: 0;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.5;
+      margin-block: var(--typeset-flow) 0;
+      max-width: 100%;
+    }
+
+    &:where(thead th) {
+      font-weight: 500;
+      padding: 0.65em 1em;
+      text-align: start;
+      white-space: nowrap;
+    }
+
+    &:where(:is(tbody, tfoot) :is(td, th)) {
+      border-block-start: 1px solid var(--typeset-rule);
+      padding: 0.75em 1em;
+      text-align: start;
+      vertical-align: top;
+    }
+  }
+
+  .typeset
+    > :where(:first-child):not(
+      :where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *)
+    ),
+  .typeset
+    :where(li, blockquote, td, th, figure)
+    > :where(:first-child):not(
+      :where(.not-typeset, [data-not-typeset], .not-typeset *, [data-not-typeset] *)
+    ) {
+    margin-block-start: 0;
+  }
+}

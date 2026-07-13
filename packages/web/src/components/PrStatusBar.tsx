@@ -245,7 +245,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                   </button>
                 </div>
                 <div
-                  class="text-sm text-text-muted p-4 leading-relaxed overflow-y-auto markdown-content"
+                  class="typeset overflow-y-auto p-4 text-sm text-text-muted"
                   style={{ "max-height": "calc(min(400px, 50vh) - 48px)" }}
                   innerHTML={parseMarkdown(status().body, githubContext())}
                 />

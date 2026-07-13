@@ -248,7 +248,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
 
         {/* Comment body - markdown rendered */}
         <div
-          class="text-sm text-text-muted leading-relaxed markdown-content"
+          class="typeset text-sm text-text-muted"
           innerHTML={parseMarkdown(
             props.comment.displayBody ?? props.comment.body,
             props.githubContext,

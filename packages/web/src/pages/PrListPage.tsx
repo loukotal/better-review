@@ -62,9 +62,9 @@ const LinesChanged: Component<{ additions: number; deletions: number }> = (props
   };
 
   return (
-    <span class="font-mono">
+    <span class="font-mono text-xs tabular-nums">
       <span class="text-diff-add-text">+{format(props.additions)}</span>
-      <span class="text-text-faint mx-0.5">/</span>
+      <span class="text-text-faint mx-1">/</span>
       <span class="text-diff-remove-text">-{format(props.deletions)}</span>
     </span>
   );
@@ -240,45 +240,55 @@ const PrListPage: Component = () => {
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header */}
       <header class="border-b border-border bg-bg-surface flex-shrink-0">
-        <div class="px-6 py-4">
+        <div class="max-w-5xl mx-auto px-6 h-14">
           <div class="flex items-center justify-between">
-            <A href="/" class="flex items-center gap-2 hover:opacity-80 transition-opacity">
-              <span class="text-accent text-base">●</span>
-              <h1 class="text-base text-text">better-review</h1>
+            <A href="/" class="flex items-center gap-2.5 h-14 hover:opacity-80 transition-opacity">
+              <span class="w-2 h-2 bg-accent" aria-hidden="true" />
+              <h1 class="text-sm font-mono font-semibold tracking-tight text-text">
+                better-review
+              </h1>
             </A>
-            <div class="flex items-center gap-4">
-              <A href="/kanban" class="text-base text-text-faint hover:text-text transition-colors">
-                Kanban
+            <nav class="flex items-center gap-1 text-sm font-mono" aria-label="Main navigation">
+              <A
+                href="/kanban"
+                class="px-2.5 py-1.5 text-text-muted hover:text-text transition-colors"
+              >
+                Projects
               </A>
-              <A href="/review" class="text-base text-text-faint hover:text-text transition-colors">
-                Enter PR URL manually
+              <A
+                href="/review"
+                class="px-2.5 py-1.5 text-text-muted hover:text-text transition-colors"
+              >
+                Open PR
               </A>
               <ThemeToggle />
-            </div>
+            </nav>
           </div>
         </div>
       </header>
 
       {/* Content */}
       <main class="flex-1 overflow-y-auto">
-        <div class="max-w-4xl mx-auto px-6 py-8">
-          <div class="flex items-center justify-between mb-6">
+        <div class="max-w-5xl mx-auto px-6 py-8">
+          <div class="flex items-end justify-between gap-6 mb-5">
             <div>
-              <h2 class="text-lg font-medium text-text">Review Requests</h2>
-              <p class="text-base text-text-faint mt-1">
-                PRs where you're requested as a reviewer or have already reviewed
-              </p>
+              <h2 class="text-2xl font-mono font-semibold tracking-tight text-text">Reviews</h2>
+              <Show when={!prsQuery.isPending}>
+                <p class="text-sm text-text-muted mt-1">
+                  {filteredPrs().length}{" "}
+                  {filteredPrs().length === 1 ? "pull request" : "pull requests"}
+                </p>
+              </Show>
             </div>
-            <div class="flex items-center gap-3 flex-shrink-0 whitespace-nowrap">
+            <div class="flex items-center gap-2 flex-shrink-0 whitespace-nowrap">
               <Show when={lastUpdatedText()}>
-                <span class="text-sm text-text-faint">Updated {lastUpdatedText()}</span>
+                <span class="text-xs text-text-faint">Updated {lastUpdatedText()}</span>
               </Show>
               <Button
                 onClick={hardRefresh}
                 disabled={hardRefreshing() || prsQuery.isFetching}
                 variant="secondary"
-                size="md"
-                class="text-base"
+                size="sm"
               >
                 <Show when={hardRefreshing() || prsQuery.isFetching}>
                   <SpinnerIcon size={12} class="animate-spin" />
@@ -288,49 +298,48 @@ const PrListPage: Component = () => {
             </div>
           </div>
 
-          {/* Filter chips */}
-          <div class="flex items-center gap-2 mb-6 text-sm">
-            <span class="text-text-faint mr-1">Filters:</span>
-            <Button
-              onClick={() => setSearchParams({ mine: showMyPrs() ? undefined : "1" })}
-              variant="secondary"
-              size="sm"
-              class={
-                showMyPrs()
-                  ? "border-accent bg-accent/10 text-accent hover:text-accent hover:border-accent"
-                  : "text-text-faint"
-              }
+          <div class="flex items-center justify-between gap-3 mb-4 border-y border-border py-2">
+            <div
+              class="flex items-center gap-1 text-sm"
+              role="group"
+              aria-label="Filter pull requests"
             >
-              My PRs
-            </Button>
-            <Button
-              onClick={() => setSearchParams({ drafts: showDrafts() ? undefined : "1" })}
-              variant="secondary"
-              size="sm"
-              class={
-                showDrafts()
-                  ? "border-accent bg-accent/10 text-accent hover:text-accent hover:border-accent"
-                  : "text-text-faint"
-              }
-            >
-              Drafts
-            </Button>
-            <Button
-              onClick={() =>
-                setSearchParams({
-                  needsReview: showNeedsReview() ? "0" : undefined,
-                })
-              }
-              variant="secondary"
-              size="sm"
-              class={
-                showNeedsReview()
-                  ? "border-accent bg-accent/10 text-accent hover:text-accent hover:border-accent"
-                  : "text-text-faint"
-              }
-            >
-              Needs Review
-            </Button>
+              <For
+                each={[
+                  {
+                    label: "Needs review",
+                    active: showNeedsReview,
+                    toggle: () =>
+                      setSearchParams({ needsReview: showNeedsReview() ? "0" : undefined }),
+                  },
+                  {
+                    label: "Authored by me",
+                    active: showMyPrs,
+                    toggle: () => setSearchParams({ mine: showMyPrs() ? undefined : "1" }),
+                  },
+                  {
+                    label: "Drafts",
+                    active: showDrafts,
+                    toggle: () => setSearchParams({ drafts: showDrafts() ? undefined : "1" }),
+                  },
+                ]}
+              >
+                {(filter) => (
+                  <button
+                    type="button"
+                    aria-pressed={filter.active()}
+                    onClick={filter.toggle}
+                    class={`px-2.5 py-1.5 text-xs font-mono font-medium ${
+                      filter.active()
+                        ? "bg-bg-elevated text-text"
+                        : "text-text-muted hover:text-text hover:bg-bg-surface"
+                    }`}
+                  >
+                    {filter.label}
+                  </button>
+                )}
+              </For>
+            </div>
             <Select
               id="repo-filter"
               compact
@@ -338,8 +347,8 @@ const PrListPage: Component = () => {
               onChange={(e) => setSearchParams({ repo: e.currentTarget.value || undefined })}
               class={
                 repoFilter()
-                  ? "border-accent bg-accent/10 text-accent"
-                  : "text-text-faint hover:border-text-faint"
+                  ? "border-accent text-accent"
+                  : "text-text-muted hover:border-text-faint"
               }
             >
               <option value="">All repos</option>
@@ -372,61 +381,60 @@ const PrListPage: Component = () => {
               !(prsQuery.isPending || prsQuery.isFetching)
             }
           >
-            <div class="text-center py-12 border border-border">
-              <div class="text-text-faint text-base">No PRs match your filters</div>
-              <p class="text-base text-text-faint mt-2">Try adjusting your filter settings</p>
+            <div class="text-center py-16 border-y border-border">
+              <div class="text-text text-sm font-medium">No matching pull requests</div>
+              <p class="text-sm text-text-muted mt-1">
+                Change or clear a filter to widen the queue.
+              </p>
             </div>
           </Show>
 
           {/* PR list */}
           <Show when={filteredPrs().length > 0}>
-            <div class="space-y-2">
+            <div class="border-t border-border">
               <For each={filteredPrs()}>
                 {(pr) => (
                   <A
                     href={`/review?prUrl=${encodeURIComponent(pr.url)}`}
-                    class="block border border-border hover:border-text-faint transition-colors"
+                    class="group block border-b border-border hover:bg-bg-surface transition-colors"
                     onMouseDown={() => handleMouseDown(pr.url)}
                   >
-                    <div class="px-4 py-3">
-                      <div class="flex items-start justify-between gap-4">
+                    <div class="px-3 py-3.5">
+                      <div class="flex items-center justify-between gap-5">
                         <div class="flex-1 min-w-0">
-                          <div class="text-sm text-text-faint mb-1 font-mono">
-                            {pr.repository.nameWithOwner}
-                          </div>
-                          <div class="flex items-center gap-2">
-                            <span class="text-sm text-text truncate">{pr.title}</span>
+                          <div class="flex items-center gap-2.5 min-w-0">
+                            <span class="text-[15px] font-medium text-text truncate group-hover:text-accent">
+                              {pr.title}
+                            </span>
                             <Show when={pr.isDraft}>
-                              <Badge
-                                variant="neutral"
-                                class="text-sm border-text-faint/50 bg-text-faint/10 text-text-muted"
-                              >
-                                DRAFT
-                              </Badge>
+                              <Badge variant="neutral">Draft</Badge>
                             </Show>
                             <Show when={pr.myReviewState === "APPROVED"}>
-                              <Badge variant="accent" class="text-sm">
-                                APPROVED
-                              </Badge>
+                              <Badge variant="success">Approved</Badge>
                             </Show>
                             <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
-                              <Badge variant="danger" class="text-sm">
-                                CHANGES REQUESTED
-                              </Badge>
+                              <Badge variant="danger">Changes requested</Badge>
                             </Show>
                           </div>
-                          <div class="text-sm text-text-faint mt-1.5 flex items-center justify-between">
-                            <span>
-                              #{pr.number} opened {formatRelativeTime(pr.createdAt)} by{" "}
-                              {pr.author.login}
+                          <div class="text-xs text-text-muted mt-1.5 flex items-center gap-2 min-w-0">
+                            <span class="font-mono truncate">
+                              {pr.repository.nameWithOwner}#{pr.number}
                             </span>
-                            <span class="flex items-center gap-3 text-sm">
-                              <LinesChanged additions={pr.additions} deletions={pr.deletions} />
-                              <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
-                            </span>
+                            <span class="text-border">·</span>
+                            <span>{pr.author.login}</span>
+                            <span class="text-border">·</span>
+                            <span>{formatRelativeTime(pr.createdAt)}</span>
                           </div>
                         </div>
-                        <div class="text-text-faint text-sm mt-1">→</div>
+                        <div class="flex items-center justify-end gap-4 shrink-0 text-xs text-text-muted tabular-nums">
+                          <LinesChanged additions={pr.additions} deletions={pr.deletions} />
+                          <span class="min-w-12 text-right font-mono">
+                            <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
+                          </span>
+                          <span class="text-text-faint group-hover:text-accent" aria-hidden="true">
+                            →
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </A>
