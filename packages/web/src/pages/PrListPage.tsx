@@ -39,8 +39,12 @@ const CiStatusBadgeInner: Component<{ status: CiStatus }> = (props) => {
   };
 
   return (
-    <span class={statusColor()} title={`CI: ${props.status.passed}/${props.status.total} passed`}>
-      {statusIcon()} {props.status.passed}/{props.status.total}
+    <span
+      class={statusColor()}
+      title={`CI: ${props.status.passed}/${props.status.total} passed`}
+      aria-label={`CI: ${props.status.passed}/${props.status.total} passed`}
+    >
+      {statusIcon()}
     </span>
   );
 };
@@ -52,22 +56,6 @@ const CiStatusBadge: Component<{ prUrl: string; ciStatuses: Record<string, CiSta
   const status = () => props.ciStatuses[props.prUrl];
 
   return <Show when={status()}>{(s) => <CiStatusBadgeInner status={s()} />}</Show>;
-};
-
-// Lines changed indicator
-const LinesChanged: Component<{ additions: number; deletions: number }> = (props) => {
-  const format = (n: number) => {
-    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-    return n.toString();
-  };
-
-  return (
-    <span class="font-mono text-xs tabular-nums">
-      <span class="text-diff-add-text">+{format(props.additions)}</span>
-      <span class="text-text-faint mx-1">/</span>
-      <span class="text-diff-remove-text">-{format(props.deletions)}</span>
-    </span>
-  );
 };
 
 function formatRelativeTime(dateString: string): string {
@@ -240,9 +228,9 @@ const PrListPage: Component = () => {
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header */}
       <header class="border-b border-border bg-bg-surface flex-shrink-0">
-        <div class="max-w-5xl mx-auto px-6 h-14">
+        <div class="mx-auto h-12 max-w-6xl px-4">
           <div class="flex items-center justify-between">
-            <A href="/" class="flex items-center gap-2.5 h-14 hover:opacity-80 transition-opacity">
+            <A href="/" class="flex h-12 items-center gap-2.5 transition-opacity hover:opacity-80">
               <span class="w-2 h-2 bg-accent" aria-hidden="true" />
               <h1 class="text-sm font-mono font-semibold tracking-tight text-text">
                 better-review
@@ -269,26 +257,25 @@ const PrListPage: Component = () => {
 
       {/* Content */}
       <main class="flex-1 overflow-y-auto">
-        <div class="max-w-5xl mx-auto px-6 py-8">
-          <div class="flex items-end justify-between gap-6 mb-5">
-            <div>
-              <h2 class="text-2xl font-mono font-semibold tracking-tight text-text">Reviews</h2>
+        <div class="mx-auto max-w-6xl px-4 py-4">
+          <div class="mb-3 flex items-center justify-between gap-4">
+            <div class="flex min-w-0 items-baseline gap-2.5">
+              <h2 class="font-mono text-lg font-semibold tracking-tight text-text">Reviews</h2>
               <Show when={!prsQuery.isPending}>
-                <p class="text-sm text-text-muted mt-1">
-                  {filteredPrs().length}{" "}
-                  {filteredPrs().length === 1 ? "pull request" : "pull requests"}
-                </p>
+                <span class="font-mono text-xs text-text-faint">{filteredPrs().length}</span>
               </Show>
             </div>
             <div class="flex items-center gap-2 flex-shrink-0 whitespace-nowrap">
               <Show when={lastUpdatedText()}>
-                <span class="text-xs text-text-faint">Updated {lastUpdatedText()}</span>
+                <span class="hidden text-xs text-text-faint sm:inline">
+                  Updated {lastUpdatedText()}
+                </span>
               </Show>
               <Button
                 onClick={hardRefresh}
                 disabled={hardRefreshing() || prsQuery.isFetching}
                 variant="secondary"
-                size="sm"
+                size="xs"
               >
                 <Show when={hardRefreshing() || prsQuery.isFetching}>
                   <SpinnerIcon size={12} class="animate-spin" />
@@ -298,7 +285,7 @@ const PrListPage: Component = () => {
             </div>
           </div>
 
-          <div class="flex items-center justify-between gap-3 mb-4 border-y border-border py-2">
+          <div class="mb-3 flex items-center justify-between gap-3 border-y border-border py-1">
             <div
               class="flex items-center gap-1 text-sm"
               role="group"
@@ -329,7 +316,7 @@ const PrListPage: Component = () => {
                     type="button"
                     aria-pressed={filter.active()}
                     onClick={filter.toggle}
-                    class={`px-2.5 py-1.5 text-xs font-mono font-medium ${
+                    class={`px-2 py-1 text-xs font-mono font-medium ${
                       filter.active()
                         ? "bg-bg-elevated text-text"
                         : "text-text-muted hover:text-text hover:bg-bg-surface"
@@ -399,43 +386,30 @@ const PrListPage: Component = () => {
                     class="group block border-b border-border hover:bg-bg-surface transition-colors"
                     onMouseDown={() => handleMouseDown(pr.url)}
                   >
-                    <div class="px-3 py-3.5">
-                      <div class="flex items-center justify-between gap-5">
-                        <div class="flex-1 min-w-0">
-                          <div class="flex items-center gap-2.5 min-w-0">
-                            <span class="text-[15px] font-medium text-text truncate group-hover:text-accent">
-                              {pr.title}
-                            </span>
-                            <Show when={pr.isDraft}>
-                              <Badge variant="neutral">Draft</Badge>
-                            </Show>
-                            <Show when={pr.myReviewState === "APPROVED"}>
-                              <Badge variant="success">Approved</Badge>
-                            </Show>
-                            <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
-                              <Badge variant="danger">Changes requested</Badge>
-                            </Show>
-                          </div>
-                          <div class="text-xs text-text-muted mt-1.5 flex items-center gap-2 min-w-0">
-                            <span class="font-mono truncate">
-                              {pr.repository.nameWithOwner}#{pr.number}
-                            </span>
-                            <span class="text-border">·</span>
-                            <span>{pr.author.login}</span>
-                            <span class="text-border">·</span>
-                            <span>{formatRelativeTime(pr.createdAt)}</span>
-                          </div>
-                        </div>
-                        <div class="flex items-center justify-end gap-4 shrink-0 text-xs text-text-muted tabular-nums">
-                          <LinesChanged additions={pr.additions} deletions={pr.deletions} />
-                          <span class="min-w-12 text-right font-mono">
-                            <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
-                          </span>
-                          <span class="text-text-faint group-hover:text-accent" aria-hidden="true">
-                            →
-                          </span>
-                        </div>
+                    <div class="flex min-w-0 items-center gap-3 px-2 py-2">
+                      <span class="hidden w-48 shrink-0 truncate font-mono text-xs text-text-muted sm:block lg:w-56">
+                        {pr.repository.nameWithOwner}#{pr.number}
+                      </span>
+                      <div class="flex min-w-0 flex-1 items-center gap-2">
+                        <span class="truncate text-sm text-text group-hover:text-accent">
+                          {pr.title}
+                        </span>
+                        <Show when={pr.isDraft}>
+                          <Badge variant="neutral">Draft</Badge>
+                        </Show>
+                        <Show when={pr.myReviewState === "APPROVED"}>
+                          <Badge variant="success">Approved</Badge>
+                        </Show>
+                        <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
+                          <Badge variant="danger">Changes requested</Badge>
+                        </Show>
                       </div>
+                      <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint sm:block">
+                        {formatRelativeTime(pr.createdAt)}
+                      </span>
+                      <span class="w-4 shrink-0 text-center font-mono text-xs">
+                        <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
+                      </span>
                     </div>
                   </A>
                 )}

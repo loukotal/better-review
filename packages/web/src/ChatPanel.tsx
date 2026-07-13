@@ -796,9 +796,9 @@ export function ChatPanel(props: ChatPanelProps) {
     const statusIcon = () => {
       switch (tool.status) {
         case "pending":
-          return "...";
+          return "○";
         case "running":
-          return "...";
+          return "●";
         case "completed":
           return "✓";
         case "error":
@@ -812,12 +812,13 @@ export function ChatPanel(props: ChatPanelProps) {
       Object.keys(remainingInput()).length > 0 || Boolean(tool.output) || Boolean(tool.error);
 
     return (
-      <details
-        class="mb-1 min-w-0 max-w-full overflow-hidden border border-border bg-bg px-2 py-1 font-mono text-sm"
-        open={tool.status === "running"}
-      >
+      <details class="mb-1 min-w-0 max-w-full overflow-hidden border border-border bg-bg px-2 py-1 font-mono text-sm">
         <summary class="flex min-w-0 cursor-pointer list-none items-center gap-2 overflow-hidden">
-          <span class={`shrink-0 ${statusColor()}`}>{statusIcon()}</span>
+          <span
+            class={`shrink-0 ${statusColor()} ${tool.status === "running" ? "animate-pulse" : ""}`}
+          >
+            {statusIcon()}
+          </span>
           <span class="shrink-0 text-text-muted">{tool.tool}</span>
           <Show when={targetEntry()?.[1]}>
             {(target) => (
@@ -828,9 +829,6 @@ export function ChatPanel(props: ChatPanelProps) {
           </Show>
           <Show when={rangeLabel()}>
             {(range) => <span class="shrink-0 text-xs text-text-faint">{range()}</span>}
-          </Show>
-          <Show when={tool.status === "running"}>
-            <span class="shrink-0 animate-pulse">...</span>
           </Show>
         </summary>
         <Show when={hasDetails()}>
@@ -909,6 +907,9 @@ export function ChatPanel(props: ChatPanelProps) {
     document.removeEventListener("mousemove", handleMouseMove);
     document.removeEventListener("mouseup", handleMouseUp);
   });
+
+  const streamingToolsOnly = () =>
+    chat.activeTools().length > 0 && !chat.streamingContent() && !chat.streamingReasoning();
 
   return (
     <div
@@ -1101,38 +1102,55 @@ export function ChatPanel(props: ChatPanelProps) {
 
         {/* Completed messages */}
         <For each={chat.messages()}>
-          {(msg) => (
-            <div class={`text-sm ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
-              <div
-                class={`px-2.5 py-2 ${
-                  msg.role === "user"
-                    ? "bg-accent/10 border border-accent/20"
-                    : "bg-bg-elevated border border-border"
-                }`}
-              >
-                <div class="text-sm text-text-faint mb-1">
-                  {msg.role === "user" ? "You" : "Assistant"}
-                </div>
+          {(msg) => {
+            const toolOnly = () =>
+              msg.role === "assistant" &&
+              msg.toolCalls.length > 0 &&
+              !msg.reasoning &&
+              !msg.content.trim();
 
-                {/* Show tool calls for assistant messages */}
-                <Show when={msg.role === "assistant" && msg.toolCalls.length > 0}>
-                  <div class="mb-2">
+            return (
+              <Show
+                when={!toolOnly()}
+                fallback={
+                  <div class="mr-2 min-w-0">
                     <For each={msg.toolCalls}>{(tool) => <ToolCallView tool={tool} />}</For>
                   </div>
-                </Show>
+                }
+              >
+                <div class={`text-sm ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
+                  <div
+                    class={`px-2.5 py-2 ${
+                      msg.role === "user"
+                        ? "bg-accent/10 border border-accent/20"
+                        : "bg-bg-elevated border border-border"
+                    }`}
+                  >
+                    <div class="text-sm text-text-faint mb-1">
+                      {msg.role === "user" ? "You" : "Assistant"}
+                    </div>
 
-                <Show when={msg.role === "assistant" && msg.reasoning}>
-                  <ReasoningBlock content={msg.reasoning!} />
-                </Show>
+                    {/* Show tool calls for assistant messages */}
+                    <Show when={msg.role === "assistant" && msg.toolCalls.length > 0}>
+                      <div class="mb-2">
+                        <For each={msg.toolCalls}>{(tool) => <ToolCallView tool={tool} />}</For>
+                      </div>
+                    </Show>
 
-                <Show when={msg.content.trim()}>
-                  <div class="text-text wrap-break-word leading-relaxed text-sm">
-                    <MessageContent role={msg.role} content={msg.content} />
+                    <Show when={msg.role === "assistant" && msg.reasoning}>
+                      <ReasoningBlock content={msg.reasoning!} />
+                    </Show>
+
+                    <Show when={msg.content.trim()}>
+                      <div class="text-text wrap-break-word leading-relaxed text-sm">
+                        <MessageContent role={msg.role} content={msg.content} />
+                      </div>
+                    </Show>
                   </div>
-                </Show>
-              </div>
-            </div>
-          )}
+                </div>
+              </Show>
+            );
+          }}
         </For>
 
         {/* Streaming message */}
@@ -1145,8 +1163,14 @@ export function ChatPanel(props: ChatPanelProps) {
           }
         >
           <div class="mr-2">
-            <div class="px-2.5 py-2 bg-bg-elevated border border-border">
-              <div class="text-sm text-text-faint mb-1">Assistant</div>
+            <div
+              class={
+                streamingToolsOnly() ? "min-w-0" : "px-2.5 py-2 bg-bg-elevated border border-border"
+              }
+            >
+              <Show when={!streamingToolsOnly()}>
+                <div class="text-sm text-text-faint mb-1">Assistant</div>
+              </Show>
 
               <Show when={chat.streamingReasoning()}>
                 <ReasoningBlock content={chat.streamingReasoning()} streaming={true} />
@@ -1154,7 +1178,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
               {/* Active tool calls */}
               <Show when={chat.activeTools().length > 0}>
-                <div class="mb-2">
+                <div class={streamingToolsOnly() ? "" : "mb-2"}>
                   <For each={chat.activeTools()}>{(tool) => <ToolCallView tool={tool} />}</For>
                 </div>
               </Show>
