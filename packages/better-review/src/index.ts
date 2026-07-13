@@ -14,6 +14,7 @@ import { isGitHubAssetId } from "@better-review/shared/github-asset";
 
 import { ReviewSessionService } from "./agent-sessions";
 import { runCommand } from "./command";
+import { corsMiddleware, withCors } from "./cors";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
 import { createFlueReviewApp } from "./flue/runtime";
 import { GhService, type PrStatus } from "./gh/gh";
@@ -33,8 +34,6 @@ const currentDir = fileURLToPath(new URL(".", import.meta.url));
 const staticDir = path.resolve(currentDir, "../../web/dist");
 const repoRoot = path.resolve(currentDir, "../../..");
 const devTokenFile = path.join(repoRoot, ".better-review-api-token");
-const webPort = process.env.WEB_PORT ?? "3000";
-const allowedDevOrigins = new Set([`http://localhost:${webPort}`, `http://127.0.0.1:${webPort}`]);
 
 function readDevTokenFile(): string | null {
   if (!existsSync(devTokenFile)) return null;
@@ -147,32 +146,6 @@ async function serveStatic(pathname: string): Promise<Response> {
   }
 
   return fileResponse(path.join(staticDir, "index.html"), { "Content-Type": "text/html" });
-}
-
-function getCorsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get("origin");
-  if (!origin || !allowedDevOrigins.has(origin)) return {};
-
-  return {
-    "Access-Control-Allow-Origin": origin,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "authorization, content-type, trpc-accept, x-trpc-source",
-    "Access-Control-Allow-Credentials": "true",
-    Vary: "Origin",
-  };
-}
-
-function withCors(req: Request, response: Response): Response {
-  const headers = new Headers(response.headers);
-  for (const [key, value] of Object.entries(getCorsHeaders(req))) {
-    headers.set(key, value);
-  }
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
@@ -367,6 +340,9 @@ function registerRoutes(app: Hono, routes: Record<string, unknown>): void {
 function createApp(routes: Record<string, unknown>): Hono {
   const app = new Hono();
 
+  // Flue is mounted as a Hono sub-app rather than through createRoutes, so CORS
+  // must run at the parent-app boundary to cover its streaming endpoints too.
+  app.use("*", corsMiddleware);
   registerRoutes(app, routes);
   app.route("/flue", createFlueReviewApp());
 
