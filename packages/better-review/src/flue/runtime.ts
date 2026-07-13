@@ -8,36 +8,29 @@ import {
   createNodeAgentCoordinator,
   createNodeDispatchQueue,
   resolveModel,
+  type CreateAgentContextOptions,
+  type CreateWorkflowContextOptions,
 } from "@flue/runtime/internal";
 import { sqlite } from "@flue/runtime/node";
+import type { MiddlewareHandler } from "hono";
 
 import { configureFlueOAuthProvidersFromPiAuth } from "./oauth-auth";
 import { prReviewerAgent } from "./pr-reviewer";
-import { flueAgentSessionStore } from "./session-store";
 
 configureFlueOAuthProvidersFromPiAuth();
 
-const sessionStore = flueAgentSessionStore;
 const persistence = sqlite(":memory:");
 await persistence.migrate?.();
 const stores = await persistence.connect();
-const runStore = stores.runStore;
-const eventStreamStore = stores.eventStreamStore;
 
-const manifest = {
-  agents: [
-    {
-      name: "pr-reviewer",
-      transports: { http: true as const },
-      created: true,
-    },
-  ],
-  workflows: [],
-};
-
-const createdAgents = {
-  "pr-reviewer": prReviewerAgent,
-};
+const exposeOverHttp: MiddlewareHandler = async (_context, next) => next();
+const agents = [
+  {
+    name: "pr-reviewer",
+    definition: prReviewerAgent,
+    route: exposeOverHttp,
+  },
+];
 
 const createDefaultEnv = async () => {
   const fs = new InMemoryFs();
@@ -50,37 +43,49 @@ const createDefaultEnv = async () => {
   );
 };
 
-const createContext = (
-  id: string,
-  runId: string | undefined,
-  payload: unknown,
-  request: Request,
-  initialEventIndex?: number,
-  dispatchId?: string,
-) =>
+const createContext = ({
+  id,
+  agentName,
+  request,
+  initialEventIndex,
+  dispatchId,
+}: CreateAgentContextOptions) =>
   createFlueContext({
     id,
-    runId,
+    agentName,
     dispatchId,
-    payload,
     env: process.env,
     agentConfig: {
-      packagedSkills: {},
       resolveModel,
     },
     createDefaultEnv,
-    defaultStore: sessionStore,
     req: request,
     initialEventIndex,
-    submissionStore: stores.executionStore.submissions,
+    attachmentStore: stores.attachmentStore,
+  });
+
+const createWorkflowContext = ({
+  runId,
+  request,
+  initialEventIndex,
+}: CreateWorkflowContextOptions) =>
+  createFlueContext({
+    id: runId,
+    runId,
+    env: process.env,
+    agentConfig: { resolveModel },
+    createDefaultEnv,
+    req: request,
+    initialEventIndex,
+    attachmentStore: stores.attachmentStore,
   });
 
 const coordinator = createNodeAgentCoordinator({
   submissions: stores.executionStore.submissions,
-  sessions: sessionStore,
-  agents: createdAgents,
+  agents,
   createContext,
-  eventStreamStore,
+  conversationStreamStore: stores.conversationStreamStore,
+  attachmentStore: stores.attachmentStore,
 });
 
 await coordinator.reconcileSubmissions();
@@ -91,16 +96,21 @@ export function createFlueReviewApp() {
   if (!configured) {
     configureFlueRuntime({
       target: "node",
-      manifest,
-      workflowHandlers: {},
-      createContext,
-      createAdmission: {
-        "pr-reviewer": (instanceId) => coordinator.createAdmission("pr-reviewer", instanceId),
+      agents,
+      workflows: [],
+      createWorkflowContext,
+      createAgentAdmission: (agentName, instanceId) =>
+        coordinator.createAdmission(agentName, instanceId),
+      abortAgentInstance: (agentName, instanceId) =>
+        coordinator.abortInstance(agentName, instanceId),
+      admitWorkflow: async ({ workflowName }) => {
+        throw new Error(`Unknown workflow: ${workflowName}`);
       },
-      runStore,
-      eventStreamStore,
+      runStore: stores.runStore,
+      eventStreamStore: stores.eventStreamStore,
+      conversationStreamStore: stores.conversationStreamStore,
+      attachmentStore: stores.attachmentStore,
       dispatchQueue: createNodeDispatchQueue(coordinator),
-      resolveDispatchAgentName: (agent) => (agent === prReviewerAgent ? "pr-reviewer" : undefined),
     });
     configured = true;
   }

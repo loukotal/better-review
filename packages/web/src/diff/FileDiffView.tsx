@@ -49,6 +49,7 @@ interface FileDiffViewProps {
   onDeleteComment: (commentId: number) => Promise<unknown>;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<unknown>;
   onDismissAiAnnotation?: (annotationId: string) => void;
+  onCommentDraftChange?: (hasDraft: boolean) => void;
   settings: DiffSettings;
   highlightedLine?: number;
   repoOwner?: string | null;
@@ -611,6 +612,7 @@ export function FileDiffView(props: FileDiffViewProps) {
               setPendingComment(null);
               setTimeout(rerender, 0);
             },
+            onDraftChange: props.onCommentDraftChange,
           });
           disposeList.push(dispose);
         }

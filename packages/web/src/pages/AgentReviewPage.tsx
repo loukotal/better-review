@@ -178,6 +178,8 @@ export default function AgentReviewPage() {
   const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
   const [submitting, setSubmitting] = createSignal(false);
   const [submitError, setSubmitError] = createSignal<string | null>(null);
+  const [draftCommentFiles, setDraftCommentFiles] = createSignal<Set<string>>(new Set());
+  const [pendingVerdict, setPendingVerdict] = createSignal<boolean | null>(null);
   const [resultVersion, setResultVersion] = createSignal(0);
   const [autoCloseCountdown, setAutoCloseCountdown] = createSignal<number | null>(null);
   const [panelVisibility, setPanelVisibility] =
@@ -481,6 +483,15 @@ export default function AgentReviewPage() {
     return { success: true };
   };
 
+  const updateCommentDraft = (filePath: string, hasDraft: boolean) => {
+    setDraftCommentFiles((current) => {
+      const next = new Set(current);
+      if (hasDraft) next.add(filePath);
+      else next.delete(filePath);
+      return next;
+    });
+  };
+
   const submit = async (approved: boolean) => {
     const activeSession = session();
     if (!activeSession || !canSubmit()) return;
@@ -512,6 +523,21 @@ export default function AgentReviewPage() {
     }
   };
 
+  const requestSubmit = (approved: boolean) => {
+    if (draftCommentFiles().size > 0) {
+      setPendingVerdict(approved);
+      return;
+    }
+    void submit(approved);
+  };
+
+  const confirmSubmit = () => {
+    const approved = pendingVerdict();
+    if (approved === null) return;
+    setPendingVerdict(null);
+    void submit(approved);
+  };
+
   createEffect(() => {
     const countdown = autoCloseCountdown();
     if (countdown === null) return;
@@ -534,6 +560,12 @@ export default function AgentReviewPage() {
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape" && pendingVerdict() !== null) {
+      event.preventDefault();
+      setPendingVerdict(null);
+      return;
+    }
+
     if (
       event.key.toLowerCase() === "f" &&
       !event.ctrlKey &&
@@ -733,6 +765,7 @@ export default function AgentReviewPage() {
                         onReplyToComment={async () => ({ success: true })}
                         onEditComment={editInlineAnnotationComment}
                         onDeleteComment={deleteInlineAnnotationComment}
+                        onCommentDraftChange={updateCommentDraft}
                         sessionId={params.sessionId}
                         variantId={activeVariantId()}
                         prUrl={sessionPrUrl()}
@@ -761,7 +794,7 @@ export default function AgentReviewPage() {
                             submitError={submitError()}
                             canSubmit={canSubmit()}
                             result={result}
-                            onSubmit={submit}
+                            onSubmit={requestSubmit}
                             autoCloseCountdown={autoCloseCountdown()}
                           />
                         </div>
@@ -809,7 +842,7 @@ export default function AgentReviewPage() {
                         submitError={submitError()}
                         canSubmit={canSubmit()}
                         result={result}
-                        onSubmit={submit}
+                        onSubmit={requestSubmit}
                         autoCloseCountdown={autoCloseCountdown()}
                       />
                     </div>
@@ -819,6 +852,46 @@ export default function AgentReviewPage() {
             </Show>
           </div>
         )}
+      </Show>
+
+      <Show when={pendingVerdict() !== null}>
+        <div
+          class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4"
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="unsent-comment-title"
+            class="w-full max-w-md border border-border bg-bg-surface shadow-xl"
+          >
+            <div class="border-b border-border px-4 py-3">
+              <h2 id="unsent-comment-title" class="text-sm font-medium text-text">
+                Discard unsent {draftCommentFiles().size === 1 ? "comment" : "comments"}?
+              </h2>
+            </div>
+            <div class="space-y-4 px-4 py-4">
+              <p class="m-0 text-sm leading-6 text-text-muted">
+                You have {draftCommentFiles().size} unsent inline
+                {draftCommentFiles().size === 1 ? " comment" : " comments"}. Submitting this review
+                will discard {draftCommentFiles().size === 1 ? "it" : "them"}.
+              </p>
+              <div class="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPendingVerdict(null)}
+                >
+                  Keep Editing
+                </Button>
+                <Button type="button" variant="danger" size="sm" onClick={confirmSubmit}>
+                  {pendingVerdict() ? "Approve Anyway" : "Request Changes Anyway"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       </Show>
 
       <Show when={!isDiffSession() && draftQuote() && composerOpen()}>

@@ -34,6 +34,7 @@ interface Props {
   onDeleteComment: (commentId: number) => Promise<unknown>;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<unknown>;
   onDismissAiAnnotation?: (annotationId: string) => void;
+  onCommentDraftChange?: (filePath: string, hasDraft: boolean) => void;
   settings: DiffSettings;
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
   fileOrder?: string[] | null;
@@ -145,6 +146,9 @@ export function DiffViewer(props: Props) {
                   onDeleteComment={props.onDeleteComment}
                   onResolveThread={props.onResolveThread}
                   onDismissAiAnnotation={props.onDismissAiAnnotation}
+                  onCommentDraftChange={(hasDraft) =>
+                    props.onCommentDraftChange?.(file.name, hasDraft)
+                  }
                   settings={props.settings}
                   highlightedLine={highlightLine()}
                   repoOwner={props.repoOwner}

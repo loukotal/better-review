@@ -91,12 +91,7 @@ function makeVerifyRepoAccessTool(session: FlueReviewSession) {
     name: "verify_repo_access",
     description:
       "Verify that the reviewer worktree exposes the full repository: correct git root, tracked file enumeration, sparse checkout disabled, and readable sample files.",
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-    execute: async () => {
+    run: async () => {
       const repoAccess = await verifyWorktreeAccess(
         session.worktreePath,
         sessionToCheckoutInput(session),

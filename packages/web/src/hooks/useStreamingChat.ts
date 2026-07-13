@@ -1,4 +1,4 @@
-import { createFlueClient, type AttachedAgentEvent, type FlueEventStream } from "@flue/sdk";
+import { createFlueClient, type ConversationStreamChunk } from "@flue/sdk";
 import { batch, createEffect, createSignal, onCleanup } from "solid-js";
 
 export interface ToolCall {
@@ -54,26 +54,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function extractAssistantSnapshot(
-  message: unknown,
-): { content: string; reasoning?: string } | null {
-  if (!isRecord(message) || message.role !== "assistant" || !Array.isArray(message.content))
-    return null;
-
-  let content = "";
-  let reasoning = "";
-  for (const part of message.content) {
-    if (!isRecord(part)) continue;
-    if (part.type === "text" && typeof part.text === "string") {
-      content += part.text;
-    } else if (part.type === "thinking" && typeof part.thinking === "string") {
-      reasoning += part.thinking;
-    }
-  }
-
-  return { content, reasoning: reasoning || undefined };
-}
-
 export function useStreamingChat(options: UseStreamingChatOptions) {
   const [messages, setMessages] = createSignal<StreamingMessage[]>([]);
   const [isConnected, setIsConnected] = createSignal(false);
@@ -93,12 +73,10 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   const [activeTools, setActiveTools] = createSignal<ToolCall[]>([]);
   const [currentMessageId, setCurrentMessageId] = createSignal<string | null>(null);
 
-  let activeStream: FlueEventStream<AttachedAgentEvent> | null = null;
   let activePromptAbort: AbortController | null = null;
+  let activeAssistantMessageId: string | null = null;
   let isDisposed = false;
   let isConnecting = false;
-  let socketFailed = false;
-  let awaitingAssistantResponse = false;
   let abortingPrompt = false;
 
   function resetStreamingState() {
@@ -110,7 +88,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setIsStreaming(false);
       setAwaitingFirstToken(false);
     });
-    awaitingAssistantResponse = false;
   }
 
   function markConnected() {
@@ -127,8 +104,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   function cleanupSocket() {
     activePromptAbort?.abort();
     activePromptAbort = null;
-    activeStream?.cancel("client cleanup");
-    activeStream = null;
+    activeAssistantMessageId = null;
     isConnecting = false;
   }
 
@@ -170,8 +146,7 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     cleanupSocket();
   });
 
-  function prepareAssistantMessage(requestId: string) {
-    const messageId = `assistant-${requestId}`;
+  function prepareAssistantMessage(requestId: string, messageId = `assistant-${requestId}`) {
     const existing = currentMessageId();
     if (existing && existing !== messageId) {
       finalizeMessage({ keepStreaming: true });
@@ -179,15 +154,14 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     setCurrentMessageId(messageId);
   }
 
-  function acceptAssistantEvent(requestId: string) {
-    prepareAssistantMessage(requestId);
+  function acceptAssistantEvent(requestId: string, messageId?: string) {
+    prepareAssistantMessage(requestId, messageId);
     if (!isStreaming()) {
       setIsStreaming(true);
     }
     if (awaitingFirstToken()) {
       setAwaitingFirstToken(false);
     }
-    awaitingAssistantResponse = true;
     markConnected();
   }
 
@@ -202,87 +176,70 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     });
   }
 
-  function handleFlueEvent(event: AttachedAgentEvent, requestId: string) {
+  function handleFlueEvent(event: ConversationStreamChunk, requestId: string) {
     switch (event.type) {
-      case "text_delta":
-        acceptAssistantEvent(requestId);
-        setStreamingContent((prev) => prev + event.text);
+      case "message-started":
+        if (event.submissionId !== requestId) break;
+        activeAssistantMessageId = event.messageId;
+        acceptAssistantEvent(requestId, event.messageId);
         break;
 
-      case "thinking_delta":
-        acceptAssistantEvent(requestId);
-        setStreamingReasoning((prev) => prev + event.delta);
-        break;
-
-      case "message_start": {
-        const snapshot = extractAssistantSnapshot(event.message);
-        if (snapshot) {
-          acceptAssistantEvent(requestId);
-          setStreamingContent(snapshot.content);
-          setStreamingReasoning(snapshot.reasoning ?? "");
+      case "message-delta":
+        if (event.messageId !== activeAssistantMessageId) break;
+        acceptAssistantEvent(requestId, event.messageId);
+        if (event.kind === "text") {
+          setStreamingContent((prev) => prev + event.delta);
+        } else {
+          setStreamingReasoning((prev) => prev + event.delta);
         }
         break;
-      }
 
-      case "message_end": {
-        const snapshot = extractAssistantSnapshot(event.message);
-        if (snapshot) {
-          acceptAssistantEvent(requestId);
-          setStreamingContent(snapshot.content);
-          setStreamingReasoning(snapshot.reasoning ?? "");
-        }
-        finalizeMessage();
-        break;
-      }
-
-      case "turn": {
-        const snapshot = extractAssistantSnapshot(event.output);
-        if (snapshot && !event.isError && awaitingAssistantResponse) {
-          acceptAssistantEvent(requestId);
-          setStreamingContent(snapshot.content);
-          setStreamingReasoning(snapshot.reasoning ?? "");
-        }
-        break;
-      }
-
-      case "tool_start":
-        acceptAssistantEvent(requestId);
+      case "tool-input":
+        if (event.messageId !== activeAssistantMessageId) break;
+        acceptAssistantEvent(requestId, event.messageId);
         upsertTool({
           id: event.toolCallId,
           tool: event.toolName,
           callId: event.toolCallId,
-          status: "pending",
-          input: isRecord(event.args) ? event.args : {},
+          status: "running",
+          input: isRecord(event.input) ? event.input : {},
           title: event.toolName,
         });
         break;
 
-      case "tool":
-        acceptAssistantEvent(requestId);
+      case "tool-output": {
+        const tool = activeTools().find((item) => item.callId === event.toolCallId);
+        if (!tool) break;
         upsertTool({
-          id: event.toolCallId,
-          tool: event.toolName,
-          callId: event.toolCallId,
-          status: event.isError ? "error" : "completed",
-          input: {},
-          output: event.isError ? undefined : stringifyValue(event.result),
-          error: event.isError ? stringifyValue(event.result) : undefined,
-          title: `${event.toolName} (${Math.round(event.durationMs)}ms)`,
+          ...tool,
+          status: "completed",
+          output: stringifyValue(event.output),
         });
         break;
+      }
 
-      case "idle":
+      case "tool-output-error": {
+        const tool = activeTools().find((item) => item.callId === event.toolCallId);
+        if (!tool) break;
+        upsertTool({
+          ...tool,
+          status: "error",
+          error: event.errorText,
+        });
+        break;
+      }
+
+      case "message-completed":
+        if (event.messageId !== activeAssistantMessageId) break;
         finalizeMessage();
+        activeAssistantMessageId = null;
         break;
 
-      case "operation":
-        if (event.operationKind === "prompt" && event.isError) {
-          const message = stringifyValue(event.error ?? "Prompt failed");
-          const visibleMessage = `Prompt stopped before the assistant could finish: ${message}`;
-          setError(message);
-          options.onError?.(message);
-          appendAssistantErrorMessage(visibleMessage);
-        }
+      case "submission-settled":
+        if (event.submissionId !== requestId || event.outcome === "completed") break;
+        appendAssistantErrorMessage(
+          `Prompt ${event.outcome}: ${stringifyValue(event.error ?? event.outcome)}`,
+        );
         break;
     }
   }
@@ -296,7 +253,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
     if (!content && !reasoning && tools.length === 0) {
       setIsStreaming(Boolean(options?.keepStreaming));
       setAwaitingFirstToken(false);
-      awaitingAssistantResponse = false;
       return;
     }
 
@@ -320,8 +276,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setIsStreaming(Boolean(options?.keepStreaming));
       setAwaitingFirstToken(false);
     });
-
-    awaitingAssistantResponse = Boolean(options?.keepStreaming);
   }
 
   function appendAssistantErrorMessage(message: string) {
@@ -342,7 +296,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setIsStreaming(false);
       setAwaitingFirstToken(false);
     });
-    awaitingAssistantResponse = false;
   }
 
   async function sendMessage(message: string, _sendOptions?: SendMessageOptions): Promise<boolean> {
@@ -373,7 +326,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setAwaitingFirstToken(true);
       setError(null);
     });
-    awaitingAssistantResponse = true;
     abortingPrompt = false;
 
     try {
@@ -383,20 +335,12 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
         signal: activePromptAbort.signal,
       });
 
-      activeStream = flueClient.agents.stream("pr-reviewer", sessionId, {
-        offset: sent.offset,
-        live: true,
+      await flueClient.agents.wait(sent, {
         signal: activePromptAbort.signal,
+        onEvent: (event) => handleFlueEvent(event, sent.submissionId),
       });
 
-      for await (const event of activeStream) {
-        if (abortingPrompt || isDisposed) break;
-        handleFlueEvent(event, sent.submissionId);
-        if (event.type === "idle" || event.type === "submission_settled") break;
-      }
-
       finalizeMessage();
-      activeStream = null;
       activePromptAbort = null;
       return !abortingPrompt;
     } catch (err) {
@@ -414,7 +358,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setError(details ? `${errorMessage}: ${details}` : errorMessage);
       setIsStreaming(false);
       setAwaitingFirstToken(false);
-      awaitingAssistantResponse = false;
       setConnectionStatus("degraded");
       setUpstreamStatus("Error");
       options.onError?.(errorMessage);
@@ -423,9 +366,19 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   }
 
   async function abort(): Promise<void> {
+    const sessionId = options.getSessionId();
     abortingPrompt = true;
     finalizeMessage();
     cleanupSocket();
+    if (sessionId) {
+      try {
+        await flueClient.agents.abort("pr-reviewer", sessionId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to abort prompt";
+        setError(message);
+        options.onError?.(message);
+      }
+    }
     setIsConnected(false);
     setConnectionStatus("reconnecting");
     await ensureSocket();

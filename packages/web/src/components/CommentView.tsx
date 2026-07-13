@@ -1,4 +1,4 @@
-import { type Component, Show, For, createSignal } from "solid-js";
+import { type Component, Show, For, createSignal, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
 
 import { GitHubIcon } from "../icons/github-icon";
@@ -498,6 +498,7 @@ export interface PendingCommentFormProps {
   initialBody?: string;
   onSubmit: (body: string) => Promise<void>;
   onCancel: () => void;
+  onDraftChange?: (hasDraft: boolean) => void;
 }
 
 /**
@@ -506,6 +507,9 @@ export interface PendingCommentFormProps {
 export const PendingCommentForm: Component<PendingCommentFormProps> = (props) => {
   const [body, setBody] = createSignal(props.initialBody ?? "");
   const [isSubmitting, setIsSubmitting] = createSignal(false);
+
+  onMount(() => props.onDraftChange?.(body().trim().length > 0));
+  onCleanup(() => props.onDraftChange?.(false));
 
   const lineLabel = () =>
     props.startLine === props.endLine
@@ -521,6 +525,7 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
     try {
       await props.onSubmit(text);
       setBody("");
+      props.onDraftChange?.(false);
     } catch (err) {
       console.error("Failed to add comment:", err);
     } finally {
@@ -544,7 +549,11 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
       <textarea
         ref={(el) => setTimeout(() => el.focus(), 0)}
         value={body()}
-        onInput={(e) => setBody(e.currentTarget.value)}
+        onInput={(e) => {
+          const value = e.currentTarget.value;
+          setBody(value);
+          props.onDraftChange?.(value.trim().length > 0);
+        }}
         onKeyDown={handleKeyDown}
         placeholder="Write a comment..."
         class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[60px] text-sm"
