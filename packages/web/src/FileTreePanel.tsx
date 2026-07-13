@@ -268,7 +268,7 @@ export function FileTreePanel(props: FileTreePanelProps) {
   };
 
   return (
-    <div class="w-[220px] border-l border-border flex flex-col bg-bg-surface">
+    <div class="h-full w-[220px] shrink-0 border-l border-border flex flex-col bg-bg-surface">
       {/* Panel Header */}
       <div class="px-2 py-2 border-b border-border">
         <input

@@ -817,7 +817,7 @@ export default function AgentReviewPage() {
                     onKeyUp={captureSelection}
                   >
                     <div
-                      class="markdown-content px-1 text-sm leading-7 text-text [&_blockquote]:bg-accent/5 [&_blockquote]:py-2 [&_blockquote]:pr-4 [&_h1]:text-lg [&_h1]:font-medium [&_h2]:text-base [&_h3]:text-sm [&_pre]:border [&_pre]:border-border [&_pre]:bg-bg-surface [&_pre]:p-3"
+                      class="typeset px-1 text-sm text-text [&_blockquote]:bg-accent/5 [&_blockquote]:py-2 [&_blockquote]:pr-4"
                       innerHTML={renderedContent()}
                     />
                   </div>

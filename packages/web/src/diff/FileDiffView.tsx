@@ -151,7 +151,10 @@ export function FileDiffView(props: FileDiffViewProps) {
     const fontFamily = FONT_FAMILY_MAP[props.settings.fontFamily];
     const selectionColor = THEME_SELECTION_COLORS[props.settings.theme];
     return `
-      :host { --diffs-font-family: ${fontFamily}; }
+      :host {
+        --diffs-font-family: ${fontFamily};
+        --diffs-header-font-family: "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
       .diffs-code { font-family: ${fontFamily} !important; }
       *::selection { background-color: ${selectionColor} !important; }
     `;

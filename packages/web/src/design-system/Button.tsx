@@ -13,9 +13,10 @@ interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: "bg-primary text-primary-text hover:bg-primary-hover active:bg-primary",
-  secondary: "border border-border text-text-faint hover:text-text hover:border-text-faint",
-  ghost: "text-text-faint hover:text-text",
+  primary: "bg-primary text-primary-text hover:bg-primary-hover active:bg-primary font-medium",
+  secondary:
+    "border border-border bg-bg-surface text-text-muted hover:text-text hover:border-text-faint",
+  ghost: "text-text-muted hover:text-text hover:bg-bg-elevated",
   danger: "border border-error/50 text-error hover:bg-error/10",
   success: "bg-green-600 text-white hover:bg-green-500",
   "success-subtle": "bg-green-600/20 text-green-400 border border-green-600/50",
@@ -35,7 +36,7 @@ export const Button: Component<ButtonProps> = (props) => {
   return (
     <button
       class={cn(
-        "inline-flex items-center justify-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap font-mono transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
         variantClasses[local.variant ?? "secondary"],
         sizeClasses[local.size ?? "md"],
         local.fullWidth && "w-full",

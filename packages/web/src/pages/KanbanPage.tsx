@@ -1000,10 +1000,7 @@ const KanbanPage: Component = () => {
                   when={selectedItemBodyHtml().length > 0}
                   fallback={<div class="text-sm text-text-faint">No description provided.</div>}
                 >
-                  <div
-                    class="text-sm text-text leading-relaxed markdown-content"
-                    innerHTML={selectedItemBodyHtml()}
-                  />
+                  <div class="typeset text-sm text-text" innerHTML={selectedItemBodyHtml()} />
                 </Show>
               </Card>
 
