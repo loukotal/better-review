@@ -33,7 +33,7 @@ export interface SendMessageOptions {
 }
 
 const flueBaseUrl =
-  (import.meta.env.VITE_FLUE_BASE_URL as string | undefined) ?? `${window.location.origin}/flue`;
+  (import.meta.env?.VITE_FLUE_BASE_URL as string | undefined) ?? `${window.location.origin}/flue`;
 const flueClient = createFlueClient({
   baseUrl: flueBaseUrl,
   // Chrome/Safari can throw "Illegal invocation" if a bare window.fetch
@@ -54,7 +54,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function useStreamingChat(options: UseStreamingChatOptions) {
+export function useStreamingChat(
+  options: UseStreamingChatOptions,
+  client: ReturnType<typeof createFlueClient> = flueClient,
+) {
   const [messages, setMessages] = createSignal<StreamingMessage[]>([]);
   const [isConnected, setIsConnected] = createSignal(false);
   const [connectionStatus, setConnectionStatus] = createSignal<
@@ -77,7 +80,6 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
   let activeAssistantMessageId: string | null = null;
   let isDisposed = false;
   let isConnecting = false;
-  let abortingPrompt = false;
 
   function resetStreamingState() {
     batch(() => {
@@ -231,7 +233,10 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
       case "message-completed":
         if (event.messageId !== activeAssistantMessageId) break;
-        finalizeMessage();
+        // The assistant message is complete, but the submission is still live until
+        // `submission-settled`. Keep controls disabled so a new prompt cannot abort
+        // the wait between those two events.
+        finalizeMessage({ keepStreaming: true });
         activeAssistantMessageId = null;
         break;
 
@@ -326,28 +331,32 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
       setAwaitingFirstToken(true);
       setError(null);
     });
-    abortingPrompt = false;
-
+    const promptAbort = new AbortController();
+    activePromptAbort = promptAbort;
     try {
-      activePromptAbort = new AbortController();
-      const sent = await flueClient.agents.send("pr-reviewer", sessionId, {
+      const sent = await client.agents.send("pr-reviewer", sessionId, {
         message,
-        signal: activePromptAbort.signal,
+        signal: promptAbort.signal,
       });
 
-      await flueClient.agents.wait(sent, {
-        signal: activePromptAbort.signal,
+      await client.agents.wait(sent, {
+        signal: promptAbort.signal,
         onEvent: (event) => handleFlueEvent(event, sent.submissionId),
       });
 
       finalizeMessage();
-      activePromptAbort = null;
-      return !abortingPrompt;
+      if (activePromptAbort === promptAbort) activePromptAbort = null;
+      return true;
     } catch (err) {
-      if (abortingPrompt) {
-        abortingPrompt = false;
+      // Cleanup, session changes, a replacement prompt, and component disposal all
+      // intentionally abort this request. Check the request's own signal rather
+      // than shared mutable state, which races with the next request.
+      if (promptAbort.signal.aborted || isDisposed) {
+        if (activePromptAbort === promptAbort) activePromptAbort = null;
         return false;
       }
+
+      if (activePromptAbort === promptAbort) activePromptAbort = null;
 
       const errorMessage = err instanceof Error ? err.message : "Failed to send message";
       const details =
@@ -367,12 +376,11 @@ export function useStreamingChat(options: UseStreamingChatOptions) {
 
   async function abort(): Promise<void> {
     const sessionId = options.getSessionId();
-    abortingPrompt = true;
     finalizeMessage();
     cleanupSocket();
     if (sessionId) {
       try {
-        await flueClient.agents.abort("pr-reviewer", sessionId);
+        await client.agents.abort("pr-reviewer", sessionId);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to abort prompt";
         setError(message);

@@ -33,3 +33,14 @@ test("normalizes multiline inline code wrappers", () => {
 
   assert.equal(normalizeMalformedInlineCode(markdown), ".\n\n`en-CA.json`\n\n.\n\n`fr-CA.json`");
 });
+
+test("does not link issue references inside HTML entities", () => {
+  const html = parseMarkdown("why isn't this linked? #39", {
+    owner: "better-review",
+    repo: "better-review",
+  });
+
+  assert.match(html, /why isn&#39;t this linked\?/);
+  assert.doesNotMatch(html, /&<a[^>]+>#39<\/a>;/);
+  assert.match(html, /href="https:\/\/github\.com\/better-review\/better-review\/issues\/39"/);
+});

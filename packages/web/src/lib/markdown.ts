@@ -134,7 +134,9 @@ marked.use({ renderer });
 
 // GitHub reference patterns
 const GITHUB_USER_MENTION = /@([a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)/g;
-const GITHUB_ISSUE_REF = /#(\d+)/g;
+// Marked encodes characters such as apostrophes as numeric HTML entities (&#39;).
+// Do not treat the numeric portion of an entity as a GitHub issue reference.
+const GITHUB_ISSUE_REF = /(?<!&)#(\d+)/g;
 const GITHUB_CROSS_REPO_REF = /([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)#(\d+)/g;
 
 interface GitHubContext {
