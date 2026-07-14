@@ -278,6 +278,7 @@ interface ReplyFormProps {
 const ReplyForm: Component<ReplyFormProps> = (props) => {
   const [body, setBody] = createSignal("");
   const [isSubmitting, setIsSubmitting] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
 
   const submit = async () => {
     if (isSubmitting()) return;
@@ -285,11 +286,13 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
     if (!text) return;
 
     setIsSubmitting(true);
+    setError(null);
     try {
       await props.onSubmit(text);
       setBody("");
     } catch (err) {
       console.error("Failed to reply:", err);
+      setError(err instanceof Error ? err.message : "Failed to reply");
     } finally {
       setIsSubmitting(false);
     }
@@ -316,6 +319,11 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
         class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[50px] text-sm"
         disabled={isSubmitting()}
       />
+      <Show when={error()}>
+        <div class="mt-1 text-xs text-error" role="alert">
+          {error()}
+        </div>
+      </Show>
       <div class="flex gap-2 mt-1.5">
         <button
           type="button"

@@ -642,7 +642,7 @@ const AppContent: Component = () => {
       return data;
     } catch (err) {
       console.error("Failed to reply to comment:", err);
-      return { error: err instanceof Error ? err.message : "Failed to reply" };
+      throw err instanceof Error ? err : new Error("Failed to reply");
     }
   };
 
