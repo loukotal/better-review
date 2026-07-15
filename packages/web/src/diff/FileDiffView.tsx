@@ -581,7 +581,7 @@ export function FileDiffView(props: FileDiffViewProps) {
             annotation: metadata.annotation,
             onDismiss: props.onDismissAiAnnotation,
             onCreateComment: (annotation) => {
-              const body = `[AI]: ${annotation.message}`;
+              const body = `[AI][${annotation.severity}]: ${annotation.message}`;
               setPendingComment({
                 startLine: annotation.line,
                 endLine: annotation.line,
