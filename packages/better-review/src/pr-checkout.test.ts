@@ -162,6 +162,53 @@ test("cleanupExpiredWorktrees removes expired prepared worktrees with git worktr
   }
 });
 
+test("cleanupExpiredWorktrees removes a recent worktree when its PR is merged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-worktree-cleanup-merged-"));
+
+  try {
+    const { gitCacheRoot, worktreesRoot, worktreePath, headSha } =
+      await createManagedWorktree(root);
+    await writeCheckoutReadyManifest(worktreePath, headSha, 2_500);
+
+    const result = await cleanupExpiredWorktrees({
+      worktreesRoot,
+      gitCacheRoot,
+      maxUnusedMs: 1_000,
+      now: 3_000,
+      getPrState: async () => "MERGED",
+    });
+
+    assert.equal(result.removed, 1);
+    assert.equal(await pathExists(worktreePath), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanupExpiredWorktrees retains a recent worktree while its PR is open", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-worktree-cleanup-open-"));
+
+  try {
+    const { gitCacheRoot, worktreesRoot, worktreePath, headSha } =
+      await createManagedWorktree(root);
+    await writeCheckoutReadyManifest(worktreePath, headSha, 2_500);
+
+    const result = await cleanupExpiredWorktrees({
+      worktreesRoot,
+      gitCacheRoot,
+      maxUnusedMs: 1_000,
+      now: 3_000,
+      getPrState: async () => "OPEN",
+    });
+
+    assert.equal(result.removed, 0);
+    assert.equal(result.skipped, 1);
+    assert.equal(await pathExists(worktreePath), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("cleanupExpiredWorktrees skips worktrees with tracked local changes", async () => {
   const root = await mkdtemp(join(tmpdir(), "better-review-worktree-cleanup-dirty-"));
 

@@ -56,7 +56,10 @@ export interface WorktreeCleanupOptions {
   gitCacheRoot?: string;
   maxUnusedMs?: number;
   now?: number;
+  getPrState?: (prUrl: string) => Promise<PullRequestState | null>;
 }
+
+export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
 
 export interface WorktreeCleanupError {
   worktreePath: string;
@@ -757,6 +760,18 @@ async function removePreparedWorktree(repoGitDir: string, worktreePath: string):
   await runGit(repoGitDir, ["worktree", "prune"]);
 }
 
+async function getGitHubPrState(prUrl: string): Promise<PullRequestState | null> {
+  const result = await runCommand(
+    "gh",
+    ["pr", "view", prUrl, "--json", "state", "--jq", ".state"],
+    { timeoutMs: CHECKOUT_TIMEOUT_MS },
+  );
+  if (result.exitCode !== 0 || result.timedOut) return null;
+
+  const state = result.stdout.trim();
+  return state === "OPEN" || state === "CLOSED" || state === "MERGED" ? state : null;
+}
+
 export async function cleanupExpiredWorktrees(
   options: WorktreeCleanupOptions = {},
 ): Promise<WorktreeCleanupResult> {
@@ -764,6 +779,8 @@ export async function cleanupExpiredWorktrees(
   const gitCacheRoot = options.gitCacheRoot ?? join(STORE_BASE_DIR, "git-cache", "github");
   const maxUnusedMs = options.maxUnusedMs ?? WORKTREE_MAX_UNUSED_MS;
   const now = options.now ?? Date.now();
+  const getPrState = options.getPrState ?? getGitHubPrState;
+  const prStates = new Map<string, Promise<PullRequestState | null>>();
   const result: WorktreeCleanupResult = { scanned: 0, removed: 0, skipped: 0, errors: [] };
 
   for (const worktreePath of await listPreparedWorktrees(worktreesRoot)) {
@@ -783,8 +800,15 @@ export async function cleanupExpiredWorktrees(
 
       const unusedMs = now - checkoutLastUsedAt(manifest);
       if (unusedMs < maxUnusedMs) {
-        result.skipped += 1;
-        continue;
+        let statePromise = prStates.get(manifest.prUrl);
+        if (!statePromise) {
+          statePromise = getPrState(manifest.prUrl);
+          prStates.set(manifest.prUrl, statePromise);
+        }
+        if ((await statePromise) !== "MERGED") {
+          result.skipped += 1;
+          continue;
+        }
       }
 
       const repoGitDir = repoGitDirForManifest(gitCacheRoot, manifest);
