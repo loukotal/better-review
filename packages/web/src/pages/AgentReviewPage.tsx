@@ -31,6 +31,7 @@ import {
 import { FileTreePanel } from "../FileTreePanel";
 import { fetchWithApiAuth } from "../lib/apiAuth";
 import { parseMarkdown } from "../lib/markdown";
+import { annotationInlineCommentId, appendAnnotationReply } from "../review-annotations";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetchWithApiAuth(url, init);
@@ -94,15 +95,6 @@ function annotationLabel(annotation: ReviewSessionAnnotation): string {
   return location.detail
     ? `${location.title}:${location.detail.replace("Line ", "")}`
     : location.title;
-}
-
-function annotationInlineCommentId(annotation: ReviewSessionAnnotation): number {
-  let hash = 0;
-  for (let i = 0; i < annotation.id.length; i += 1) {
-    hash = (hash << 5) - hash + annotation.id.charCodeAt(i);
-    hash |= 0;
-  }
-  return -Math.abs(hash || 1);
 }
 
 interface FloatingComposerPosition {
@@ -310,7 +302,7 @@ export default function AgentReviewPage() {
     annotations()
       .filter((annotation) => annotation.filePath && (annotation.line ?? annotation.endLine))
       .map((annotation) => ({
-        id: annotationInlineCommentId(annotation),
+        id: annotationInlineCommentId(annotation.id),
         node_id: annotation.id,
         path: annotation.filePath!,
         line: annotation.line ?? annotation.endLine ?? null,
@@ -325,11 +317,20 @@ export default function AgentReviewPage() {
         },
         created_at: new Date(annotation.createdAt).toISOString(),
         canEdit: !result(),
+        in_reply_to_id: annotation.inReplyToId
+          ? annotationInlineCommentId(annotation.inReplyToId)
+          : undefined,
       })),
   );
 
   const findAnnotationByInlineCommentId = (commentId: number) =>
-    annotations().find((annotation) => annotationInlineCommentId(annotation) === commentId);
+    annotations().find((annotation) => annotationInlineCommentId(annotation.id) === commentId);
+
+  const replyToInlineAnnotation = async (commentId: number, body: string) => {
+    setAnnotations((current) =>
+      appendAnnotationReply(current, commentId, body, createAnnotationId),
+    );
+  };
 
   const editInlineAnnotationComment = async (commentId: number, body: string) => {
     const annotation = findAnnotationByInlineCommentId(commentId);
@@ -441,7 +442,11 @@ export default function AgentReviewPage() {
   };
 
   const removeAnnotation = (annotationId: string) => {
-    setAnnotations((current) => current.filter((annotation) => annotation.id !== annotationId));
+    setAnnotations((current) =>
+      current.filter(
+        (annotation) => annotation.id !== annotationId && annotation.inReplyToId !== annotationId,
+      ),
+    );
   };
 
   const updateAnnotation = (annotationId: string, comment: string) => {
@@ -762,7 +767,7 @@ export default function AgentReviewPage() {
                         settings={DEFAULT_DIFF_SETTINGS}
                         onFilesLoaded={setFiles}
                         onAddComment={addDiffAnnotation}
-                        onReplyToComment={async () => ({ success: true })}
+                        onReplyToComment={replyToInlineAnnotation}
                         onEditComment={editInlineAnnotationComment}
                         onDeleteComment={deleteInlineAnnotationComment}
                         onCommentDraftChange={updateCommentDraft}

@@ -71,6 +71,7 @@ export interface ReviewSession {
 
 export interface ReviewSessionAnnotation {
   id: string;
+  inReplyToId?: string;
   quote: string;
   comment: string;
   createdAt: number;
