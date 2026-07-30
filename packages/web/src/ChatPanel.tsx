@@ -1213,10 +1213,15 @@ export function ChatPanel(props: ChatPanelProps) {
         </Show>
       </div>
 
-      {/* Error display */}
-      <Show when={displayError()}>
-        <div class="px-3 py-2 bg-error/10 border-t border-error/20">
-          <div class="text-error text-sm">{displayError()}</div>
+      {/* Error and retry display */}
+      <Show when={displayError() || chat.retryableMessage()}>
+        <div class="flex items-center justify-between gap-3 border-t border-error/20 bg-error/10 px-3 py-2">
+          <div class="text-error text-sm">{displayError() ?? "The last prompt failed."}</div>
+          <Show when={chat.retryableMessage() && !chat.isStreaming()}>
+            <Button type="button" variant="secondary" size="xs" onClick={() => void chat.retry()}>
+              Retry
+            </Button>
+          </Show>
         </div>
       </Show>
 

@@ -71,6 +71,7 @@ export function useStreamingChat(
   const [awaitingFirstToken, setAwaitingFirstToken] = createSignal(false);
   const [isStreaming, setIsStreaming] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [retryableMessage, setRetryableMessage] = createSignal<string | null>(null);
   const [streamingContent, setStreamingContent] = createSignal("");
   const [streamingReasoning, setStreamingReasoning] = createSignal("");
   const [activeTools, setActiveTools] = createSignal<ToolCall[]>([]);
@@ -130,6 +131,7 @@ export function useStreamingChat(
   createEffect(() => {
     const sessionId = options.getSessionId();
     resetStreamingState();
+    setRetryableMessage(null);
 
     if (!sessionId) {
       cleanupSocket();
@@ -303,7 +305,7 @@ export function useStreamingChat(
     });
   }
 
-  async function sendMessage(message: string, _sendOptions?: SendMessageOptions): Promise<boolean> {
+  async function submitMessage(message: string, appendUserMessage: boolean): Promise<boolean> {
     const sessionId = options.getSessionId();
     if (!sessionId) {
       setError("No session");
@@ -316,20 +318,24 @@ export function useStreamingChat(
     const connected = await ensureSocket();
     if (!connected) return false;
 
-    const userMessage: StreamingMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: message,
-      toolCalls: [],
-      isStreaming: false,
-      timestamp: Date.now(),
-    };
-
     batch(() => {
-      setMessages((prev) => [...prev, userMessage]);
+      if (appendUserMessage) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `user-${Date.now()}`,
+            role: "user",
+            content: message,
+            toolCalls: [],
+            isStreaming: false,
+            timestamp: Date.now(),
+          },
+        ]);
+      }
       setIsStreaming(true);
       setAwaitingFirstToken(true);
       setError(null);
+      setRetryableMessage(null);
     });
     const promptAbort = new AbortController();
     activePromptAbort = promptAbort;
@@ -341,12 +347,21 @@ export function useStreamingChat(
 
       await client.agents.wait(sent, {
         signal: promptAbort.signal,
-        onEvent: (event) => handleFlueEvent(event, sent.submissionId),
+        onEvent: (event) => {
+          handleFlueEvent(event, sent.submissionId);
+          if (
+            event.type === "submission-settled" &&
+            event.submissionId === sent.submissionId &&
+            event.outcome === "failed"
+          ) {
+            setRetryableMessage(message);
+          }
+        },
       });
 
       finalizeMessage();
       if (activePromptAbort === promptAbort) activePromptAbort = null;
-      return true;
+      return retryableMessage() === null;
     } catch (err) {
       // Cleanup, session changes, a replacement prompt, and component disposal all
       // intentionally abort this request. Check the request's own signal rather
@@ -369,9 +384,20 @@ export function useStreamingChat(
       setAwaitingFirstToken(false);
       setConnectionStatus("degraded");
       setUpstreamStatus("Error");
+      setRetryableMessage(message);
       options.onError?.(errorMessage);
       return false;
     }
+  }
+
+  function sendMessage(message: string, _sendOptions?: SendMessageOptions): Promise<boolean> {
+    return submitMessage(message, true);
+  }
+
+  async function retry(): Promise<boolean> {
+    const message = retryableMessage();
+    if (!message || isStreaming()) return false;
+    return submitMessage(message, false);
   }
 
   async function abort(): Promise<void> {
@@ -396,12 +422,14 @@ export function useStreamingChat(
     setMessages([]);
     resetStreamingState();
     setError(null);
+    setRetryableMessage(null);
   }
 
   function loadExistingMessages(msgs: StreamingMessage[]) {
     batch(() => {
       setMessages(msgs);
       setError(null);
+      setRetryableMessage(null);
       resetStreamingState();
     });
   }
@@ -416,10 +444,12 @@ export function useStreamingChat(
     isStreaming,
     awaitingFirstToken,
     error,
+    retryableMessage,
     streamingContent,
     streamingReasoning,
     activeTools,
     sendMessage,
+    retry,
     abort,
     clearMessages,
     loadExistingMessages,
