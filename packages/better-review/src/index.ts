@@ -743,6 +743,15 @@ ${fileStats.join("\n")}`;
   },
 
   "/api/sessions": {
+    GET: async (req: Request) => {
+      try {
+        const scope = new URL(req.url).searchParams.get("scope") ?? undefined;
+        const sessions = await runtime.runPromise(reviewSessions.listSessions(scope));
+        return Response.json({ sessions });
+      } catch (error) {
+        return Response.json({ error: getErrorMessage(error) }, { status: 500 });
+      }
+    },
     POST: async (req: Request) => {
       try {
         const body = (await req.json()) as {

@@ -31,6 +31,7 @@ import {
 import { FileTreePanel } from "../FileTreePanel";
 import { fetchWithApiAuth } from "../lib/apiAuth";
 import { parseMarkdown } from "../lib/markdown";
+import { getReviewedFiles, toggleReviewedFile } from "../lib/query";
 import { annotationInlineCommentId, appendAnnotationReply } from "../review-annotations";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -168,6 +169,7 @@ export default function AgentReviewPage() {
   );
   const [annotations, setAnnotations] = createSignal<ReviewSessionAnnotation[]>([]);
   const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
+  const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
   const [submitting, setSubmitting] = createSignal(false);
   const [submitError, setSubmitError] = createSignal<string | null>(null);
   const [draftCommentFiles, setDraftCommentFiles] = createSignal<Set<string>>(new Set());
@@ -177,6 +179,11 @@ export default function AgentReviewPage() {
   const [panelVisibility, setPanelVisibility] =
     createSignal<AgentReviewPanelVisibility>(loadPanelVisibility());
   const [focusMode, setFocusMode] = createSignal(loadFocusMode());
+  const [highlightedLine, setHighlightedLine] = createSignal<{
+    file: string;
+    line: number;
+    side?: "LEFT" | "RIGHT";
+  } | null>(null);
   let contentRef: HTMLDivElement | undefined;
   let composerRef: HTMLDivElement | undefined;
   let composerTextareaRef: HTMLTextAreaElement | undefined;
@@ -345,6 +352,30 @@ export default function AgentReviewPage() {
   };
 
   const sessionPrUrl = createMemo(() => session()?.prUrl ?? null);
+  const reviewScope = createMemo(
+    () => session()?.repoRoot ?? session()?.cwd ?? sessionPrUrl() ?? "unknown-session",
+  );
+  const [sessionHistory] = createResource(
+    () => (session() ? reviewScope() : null),
+    async (scope) => {
+      const url = new URL("/api/sessions", window.location.origin);
+      url.searchParams.set("scope", scope);
+      const response = await fetchJson<{ sessions: ReviewSession[] }>(url.toString());
+      return response.sessions;
+    },
+  );
+
+  const handleFilesLoaded = (loadedFiles: FileDiffMetadata[]) => {
+    setFiles(loadedFiles);
+    setReadFiles(getReviewedFiles(reviewScope(), loadedFiles));
+  };
+
+  const toggleFileRead = (fileName: string) => {
+    const file = files().find((entry) => entry.name === fileName);
+    if (!file) return;
+    toggleReviewedFile(reviewScope(), file);
+    setReadFiles(getReviewedFiles(reviewScope(), files()));
+  };
 
   createEffect(() => {
     const value = session();
@@ -354,9 +385,12 @@ export default function AgentReviewPage() {
     );
   });
 
-  const scrollToFile = (fileName: string) => {
+  const scrollToFile = (fileName: string, line?: number, side?: "LEFT" | "RIGHT") => {
     const element = document.getElementById(getFileElementId(fileName));
-    element?.scrollIntoView({ behavior: "instant", block: "start" });
+    if (!element) return;
+
+    element.scrollIntoView({ behavior: "instant", block: "start" });
+    if (line) setHighlightedLine({ file: fileName, line, side });
   };
 
   const canSubmit = createMemo(() => !submitting() && !result());
@@ -633,6 +667,30 @@ export default function AgentReviewPage() {
                   </div>
                   <div class="flex flex-wrap items-center justify-end gap-3 text-xs text-text-faint flex-shrink-0">
                     <div class="flex items-center gap-1 border-r border-border pr-3">
+                      <Show when={(sessionHistory()?.length ?? 0) > 1}>
+                        <Select
+                          compact
+                          value={params.sessionId}
+                          title="Review session history"
+                          onInput={(event) => {
+                            const sessionId = event.currentTarget.value;
+                            if (sessionId !== params.sessionId) {
+                              window.location.assign(
+                                `/agent-review/${encodeURIComponent(sessionId)}`,
+                              );
+                            }
+                          }}
+                        >
+                          <For each={sessionHistory() ?? []}>
+                            {(reviewSession) => (
+                              <option value={reviewSession.id}>
+                                {new Date(reviewSession.createdAt).toLocaleString()} -{" "}
+                                {reviewSession.title}
+                              </option>
+                            )}
+                          </For>
+                        </Select>
+                      </Show>
                       <Show when={isDiffSession()}>
                         <Button
                           type="button"
@@ -709,7 +767,12 @@ export default function AgentReviewPage() {
               <div class="flex flex-1 min-h-0">
                 <Show when={showFilesPanel()}>
                   <div class="shrink-0 border-r border-border">
-                    <FileTreePanel files={files()} onFileSelect={scrollToFile} />
+                    <FileTreePanel
+                      files={files()}
+                      onFileSelect={scrollToFile}
+                      readFiles={readFiles()}
+                      onToggleRead={toggleFileRead}
+                    />
                   </div>
                 </Show>
 
@@ -765,7 +828,7 @@ export default function AgentReviewPage() {
                         rawDiff={diffRawPatch()}
                         comments={inlineReviewComments()}
                         settings={DEFAULT_DIFF_SETTINGS}
-                        onFilesLoaded={setFiles}
+                        onFilesLoaded={handleFilesLoaded}
                         onAddComment={addDiffAnnotation}
                         onReplyToComment={replyToInlineAnnotation}
                         onEditComment={editInlineAnnotationComment}
@@ -774,6 +837,11 @@ export default function AgentReviewPage() {
                         sessionId={params.sessionId}
                         variantId={activeVariantId()}
                         prUrl={sessionPrUrl()}
+                        scrollContainer={contentRef}
+                        onSearchNavigate={scrollToFile}
+                        highlightedLine={highlightedLine()}
+                        readFiles={readFiles()}
+                        onToggleRead={toggleFileRead}
                       />
                     </div>
 

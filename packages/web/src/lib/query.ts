@@ -1,3 +1,4 @@
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { persistQueryClient } from "@tanstack/query-persist-client-core";
 import { QueryClient } from "@tanstack/solid-query";
 import { get, set, del, createStore } from "idb-keyval";
@@ -16,6 +17,7 @@ import type {
 
 import type { Annotation } from "../utils/parseReviewTokens";
 import { fetchWithApiAuth } from "./apiAuth";
+import { getFileRevision } from "./file-revision";
 import { trpc } from "./trpc";
 
 // Create a dedicated IndexedDB store for query cache
@@ -96,7 +98,7 @@ export const queryKeys = {
   },
   // Local client-only state (persisted via IndexedDB with rest of query cache)
   local: {
-    readFiles: (prUrl: string) => ["local", "readFiles", prUrl] as const,
+    reviewedFiles: (scope: string) => ["local", "reviewedFiles", scope] as const,
     reviewOrder: (prUrl: string) => ["local", "reviewOrder", prUrl] as const,
     annotations: (prUrl: string) => ["local", "annotations", prUrl] as const,
   },
@@ -392,33 +394,28 @@ export type { CiStatus, SearchedPr, PrStatus, PrCommit, PRComment, ProjectSummar
 // Local State Helpers (persisted via IndexedDB with query cache)
 // ============================================================================
 
-/**
- * Get the set of files marked as read for a PR
- */
-export function getReadFiles(prUrl: string): Set<string> {
-  const data = queryClient.getQueryData<string[]>(queryKeys.local.readFiles(prUrl));
-  return new Set(data ?? []);
+type ReviewedFiles = Record<string, string>;
+
+/** Return only files whose currently displayed patch was previously reviewed. */
+export function getReviewedFiles(scope: string, files: FileDiffMetadata[]): Set<string> {
+  const reviewed =
+    queryClient.getQueryData<ReviewedFiles>(queryKeys.local.reviewedFiles(scope)) ?? {};
+  return new Set(
+    files.filter((file) => reviewed[file.name] === getFileRevision(file)).map((file) => file.name),
+  );
 }
 
-/**
- * Set the read files for a PR
- */
-export function setReadFiles(prUrl: string, files: Set<string>): void {
-  queryClient.setQueryData(queryKeys.local.readFiles(prUrl), Array.from(files));
-}
-
-/**
- * Toggle a file's read status and return the new set
- */
-export function toggleFileRead(prUrl: string, fileName: string): Set<string> {
-  const current = getReadFiles(prUrl);
-  if (current.has(fileName)) {
-    current.delete(fileName);
+export function toggleReviewedFile(scope: string, file: FileDiffMetadata): void {
+  const reviewed = {
+    ...queryClient.getQueryData<ReviewedFiles>(queryKeys.local.reviewedFiles(scope)),
+  };
+  const revision = getFileRevision(file);
+  if (reviewed[file.name] === revision) {
+    delete reviewed[file.name];
   } else {
-    current.add(fileName);
+    reviewed[file.name] = revision;
   }
-  setReadFiles(prUrl, current);
-  return current;
+  queryClient.setQueryData(queryKeys.local.reviewedFiles(scope), reviewed);
 }
 
 /**

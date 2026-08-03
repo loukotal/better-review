@@ -23,10 +23,15 @@ import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { SessionSelector } from "./components/SessionSelector";
 import { Button } from "./design-system";
 import type { DiffTheme } from "./diff/types";
-import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
+import {
+  loadConversationMessages,
+  useStreamingChat,
+  type ToolCall,
+} from "./hooks/useStreamingChat";
 import { CheckIcon } from "./icons/check-icon";
 import { CopyIcon } from "./icons/copy-icon";
 import { SpinnerIcon } from "./icons/spinner-icon";
+import { resolveFileReference } from "./lib/file-reference";
 import {
   applySafeMarkdownRenderer,
   escapeHtmlText,
@@ -305,8 +310,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function loadMessages(sid: string) {
     try {
-      const data = await trpc.flueReview.messages.query({ sessionId: sid });
-      chat.loadExistingMessages(data.messages);
+      chat.loadExistingMessages(await loadConversationMessages(sid));
     } catch (err) {
       console.error("Failed to load messages:", err);
       chat.loadExistingMessages([]);
@@ -337,8 +341,11 @@ export function ChatPanel(props: ChatPanelProps) {
     void submitMessage(STRUCTURED_REVIEW_PROMPT);
   }
 
-  function startAdversarialReview() {
-    void submitMessage(ADVERSARIAL_REVIEW_PROMPT);
+  async function startAdversarialReview() {
+    const created = await handleNewSession();
+    if (created) {
+      await submitMessage(ADVERSARIAL_REVIEW_PROMPT);
+    }
   }
 
   function handleAbort() {
@@ -386,15 +393,15 @@ export function ChatPanel(props: ChatPanelProps) {
         commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
       });
 
-      if (data.session?.id) {
-        batch(() => {
-          setSessionId(data.session.id);
-          chat.loadExistingMessages([]); // New session has no messages
-          setScopeSessionKey(
-            props.reviewMode === "commit" && props.commitSha ? `commit:${props.commitSha}` : "full",
-          );
-        });
-      }
+      if (!data.session?.id) return false;
+
+      batch(() => {
+        setSessionId(data.session.id);
+        chat.loadExistingMessages([]); // New session has no messages
+        setScopeSessionKey(
+          props.reviewMode === "commit" && props.commitSha ? `commit:${props.commitSha}` : "full",
+        );
+      });
       if (data.sessions) {
         setSessions(data.sessions.filter((s: StoredSession) => !s.hidden));
       }
@@ -453,7 +460,8 @@ export function ChatPanel(props: ChatPanelProps) {
 
   // Handle file reference clicks
   const handleFileClick = (file: string, line?: number) => {
-    props.onScrollToFile?.(file, line);
+    const resolved = resolveFileReference(file, props.files);
+    if (resolved) props.onScrollToFile?.(resolved, line);
   };
 
   // Handle apply review order
@@ -487,14 +495,15 @@ export function ChatPanel(props: ChatPanelProps) {
 
       // Replace annotation blocks - keep non-dismissed, remove dismissed
       text = text.replace(
-        /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g,
+        /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|note|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g,
         (_match, file, lineStr, severity, message) => {
           const lineMatch = lineStr.match(/^(\d+)/);
           const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
           const trimmedMessage = message.trim();
 
           // Compute the same hash-based ID used elsewhere
-          const content = `${file}:${line}:${severity}:${trimmedMessage}`;
+          const normalizedSeverity = severity === "note" ? "info" : severity;
+          const content = `${file}:${line}:${normalizedSeverity}:${trimmedMessage}`;
           let hash = 0;
           for (let i = 0; i < content.length; i++) {
             hash = (hash << 5) - hash + content.charCodeAt(i);
@@ -967,7 +976,7 @@ export function ChatPanel(props: ChatPanelProps) {
             <Show when={sessionId() && !chat.isStreaming()}>
               <Button
                 type="button"
-                onClick={startAdversarialReview}
+                onClick={() => void startAdversarialReview()}
                 disabled={creatingNewSession()}
                 variant="ghost"
                 size="xs"

@@ -14,3 +14,13 @@ test("parses error severity annotations", () => {
   assert.equal(parsed.annotations[0].line, 1);
   assert.equal(parsed.segments[0].type, "annotation");
 });
+
+test("renders note annotations as informational annotations", () => {
+  const parsed = parseReviewTokens(
+    '<<ANNOTATION file="src/example.ts" line="12" severity="note">>Useful context<</ANNOTATION>>',
+  );
+
+  assert.equal(parsed.annotations.length, 1);
+  assert.equal(parsed.annotations[0].severity, "info");
+  assert.equal(parsed.segments[0].type, "annotation");
+});

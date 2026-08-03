@@ -32,7 +32,7 @@ export interface ParsedMessage {
 // Regex patterns
 const REVIEW_ORDER_PATTERN = /<<REVIEW_ORDER>>([\s\S]*?)<<\/REVIEW_ORDER>>/g;
 const ANNOTATION_PATTERN =
-  /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g;
+  /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|note|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g;
 // Match file refs, optionally wrapped in ** (bold markdown)
 const FILE_REF_PATTERN = /\*{0,2}\[\[file:([^\]:\s]+)(?::(\d+))?\]\]\*{0,2}/g;
 
@@ -59,6 +59,10 @@ function generateAnnotationId(
     hash = hash & hash;
   }
   return `annotation-${Math.abs(hash).toString(36)}`;
+}
+
+function normalizeSeverity(severity: string): AnnotationSeverity {
+  return severity === "note" ? "info" : (severity as AnnotationSeverity);
 }
 
 export function parseReviewTokens(content: string): ParsedMessage {
@@ -94,11 +98,12 @@ export function parseReviewTokens(content: string): ParsedMessage {
       const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
 
       const trimmedMessage = message.trim();
+      const normalizedSeverity = normalizeSeverity(severity);
       const annotation: Annotation = {
-        id: generateAnnotationId(file, line, severity, trimmedMessage),
+        id: generateAnnotationId(file, line, normalizedSeverity, trimmedMessage),
         file,
         line,
-        severity: severity as AnnotationSeverity,
+        severity: normalizedSeverity,
         message: trimmedMessage,
       };
       annotations.push(annotation);
@@ -193,14 +198,14 @@ export function extractReviewOrder(content: string): string[] | null {
 export function extractAnnotations(content: string): Annotation[] {
   const annotations: Annotation[] = [];
   const pattern =
-    /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g;
+    /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|note|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g;
   let match: RegExpExecArray | null;
 
   while ((match = pattern.exec(content)) !== null) {
     const lineMatch = match[2].match(/^(\d+)/);
     const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
     const file = match[1];
-    const severity = match[3] as AnnotationSeverity;
+    const severity = normalizeSeverity(match[3]);
     const message = match[4].trim();
 
     annotations.push({

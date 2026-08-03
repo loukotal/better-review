@@ -1,8 +1,9 @@
-import { parsePatchFiles, SVGSpriteSheet, type FileDiffMetadata } from "@pierre/diffs";
-import { For, Show, createMemo } from "solid-js";
+import { parsePatchFiles, SVGSpriteSheet, Virtualizer, type FileDiffMetadata } from "@pierre/diffs";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import { FileDiffView } from "./diff/FileDiffView";
 import type { DiffSettings, PRComment } from "./diff/types";
+import { searchDiffFiles } from "./lib/diff-search";
 import type { Annotation } from "./utils/parseReviewTokens";
 
 // Re-export types for convenience
@@ -38,7 +39,7 @@ interface Props {
   settings: DiffSettings;
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
   fileOrder?: string[] | null;
-  highlightedLine?: { file: string; line: number } | null;
+  highlightedLine?: { file: string; line: number; side?: "LEFT" | "RIGHT" } | null;
   repoOwner?: string | null;
   repoName?: string | null;
   readFiles?: Set<string>;
@@ -49,9 +50,24 @@ interface Props {
   variantId?: string | null;
   /** PR URL fallback for fetching full file contents (expand unchanged lines) */
   prUrl?: string | null;
+  /** Scroll container used by the line virtualizer. */
+  scrollContainer?: HTMLElement;
+  onSearchNavigate?: (fileName: string, line?: number, side?: "LEFT" | "RIGHT") => void;
 }
 
 export function DiffViewer(props: Props) {
+  let viewerRef: HTMLDivElement | undefined;
+  let searchInputRef: HTMLInputElement | undefined;
+  const virtualizer = new Virtualizer();
+  const [searchQuery, setSearchQuery] = createSignal("");
+  const [selectedMatch, setSelectedMatch] = createSignal(-1);
+
+  onMount(() => {
+    virtualizer.setup(props.scrollContainer ?? document, viewerRef);
+  });
+
+  onCleanup(() => virtualizer.cleanUp());
+
   // Parse files from diff
   const parsedFiles = createMemo(() => {
     const patches = parsePatchFiles(props.rawDiff);
@@ -100,9 +116,133 @@ export function DiffViewer(props: Props) {
     return map;
   });
 
+  const searchMatches = createMemo(() => searchDiffFiles(files(), searchQuery()));
+
+  createEffect(() => {
+    searchQuery();
+    setSelectedMatch(-1);
+  });
+
+  const firstVisibleSearchMatch = (matches: ReturnType<typeof searchMatches>) => {
+    const scrollContainer = props.scrollContainer;
+    if (!scrollContainer) return 0;
+
+    const scrollBounds = scrollContainer.getBoundingClientRect();
+    for (const file of files()) {
+      const fileElement = document.getElementById(getFileElementId(file.name));
+      if (!fileElement || fileElement.getBoundingClientRect().bottom <= scrollBounds.top) continue;
+
+      const fileMatches = matches
+        .map((match, index) => ({ match, index }))
+        .filter(({ match }) => match.fileName === file.name);
+      if (fileMatches.length === 0) continue;
+
+      const diffContainer = fileElement.querySelector("diffs-container");
+      const visibleLine = Array.from(
+        diffContainer?.shadowRoot?.querySelectorAll<HTMLElement>("[data-line]") ?? [],
+      ).find((line) => line.getBoundingClientRect().bottom > scrollBounds.top);
+      const lineNumber = Number.parseInt(visibleLine?.dataset.line ?? "", 10);
+      return (
+        fileMatches.find(
+          ({ match }) =>
+            match.line === undefined || Number.isNaN(lineNumber) || match.line >= lineNumber,
+        )?.index ?? fileMatches[0].index
+      );
+    }
+
+    return 0;
+  };
+
+  const selectSearchMatch = (index: number) => {
+    const matches = searchMatches();
+    if (matches.length === 0) return;
+
+    const nextIndex =
+      selectedMatch() === -1
+        ? firstVisibleSearchMatch(matches)
+        : (index + matches.length) % matches.length;
+    setSelectedMatch(nextIndex);
+    const match = matches[nextIndex];
+    props.onSearchNavigate?.(match.fileName, match.line, match.side);
+  };
+
+  const activeSearchResult = createMemo(() => searchMatches()[selectedMatch()]);
+
+  const activeSearchMatch = createMemo(() => {
+    const match = activeSearchResult();
+    return match?.line === undefined
+      ? undefined
+      : { line: match.line, side: match.side!, query: searchQuery() };
+  });
+
+  onMount(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        searchInputRef?.focus();
+        searchInputRef?.select();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+  });
+
   return (
-    <div class="pt-3">
+    <div
+      ref={(element) => {
+        viewerRef = element;
+      }}
+      class="pt-3"
+    >
       <div innerHTML={SVGSpriteSheet} style="display:none" />
+
+      <div class="sticky top-0 z-20 -mt-3 mb-3 flex items-center gap-2 border-b border-border bg-bg-surface py-2">
+        <input
+          ref={(element) => {
+            searchInputRef = element;
+          }}
+          type="search"
+          value={searchQuery()}
+          onInput={(event) => setSearchQuery(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              selectSearchMatch(selectedMatch() + (event.shiftKey ? -1 : 1));
+            }
+          }}
+          placeholder="Search diff..."
+          aria-label="Search diff"
+          class="w-52 px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint focus:border-accent font-mono"
+        />
+        <Show when={searchQuery().trim()}>
+          <span class="text-xs text-text-faint">
+            {searchMatches().length === 0
+              ? "No matches"
+              : selectedMatch() === -1
+                ? `${searchMatches().length} matches`
+                : `${selectedMatch() + 1} of ${searchMatches().length}`}
+          </span>
+          <Show when={searchMatches().length > 0}>
+            <button
+              type="button"
+              onClick={() => selectSearchMatch(selectedMatch() - 1)}
+              class="px-1.5 py-0.5 border border-border text-xs text-text-muted hover:text-text hover:bg-bg-elevated"
+              aria-label="Previous search result"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => selectSearchMatch(selectedMatch() + 1)}
+              class="px-1.5 py-0.5 border border-border text-xs text-text-muted hover:text-text hover:bg-bg-elevated"
+              aria-label="Next search result"
+            >
+              Next
+            </button>
+          </Show>
+        </Show>
+      </div>
 
       <Show when={props.loadingComments}>
         <div class="mb-3 px-2.5 py-1.5 border border-accent/35 bg-accent/10">
@@ -124,13 +264,21 @@ export function DiffViewer(props: Props) {
             const highlightLine = () => {
               const hl = props.highlightedLine;
               if (hl && hl.file === file.name) {
-                return hl.line;
+                return { line: hl.line, side: hl.side };
               }
               return undefined;
             };
 
             return (
-              <div id={getFileElementId(file.name)}>
+              <div
+                id={getFileElementId(file.name)}
+                class="scroll-mt-12 transition-[outline,box-shadow]"
+                classList={{
+                  "outline-2 outline-offset-2 outline-yellow-400 shadow-[0_0_0_3px_rgb(250_204_21_/_20%)]":
+                    activeSearchResult()?.fileName === file.name &&
+                    activeSearchResult()?.line === undefined,
+                }}
+              >
                 <FileDiffView
                   file={file}
                   comments={commentsByFile().get(file.name) ?? []}
@@ -160,6 +308,11 @@ export function DiffViewer(props: Props) {
                   sessionId={props.sessionId}
                   variantId={props.variantId}
                   prUrl={props.prUrl}
+                  virtualizer={virtualizer}
+                  scrollContainer={props.scrollContainer}
+                  activeSearchMatch={
+                    activeSearchMatch()?.line === undefined ? undefined : activeSearchMatch()
+                  }
                 />
               </div>
             );

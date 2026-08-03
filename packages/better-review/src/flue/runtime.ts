@@ -14,12 +14,14 @@ import {
 import { sqlite } from "@flue/runtime/node";
 import type { MiddlewareHandler } from "hono";
 
+import { STORE_BASE_DIR } from "../store";
 import { configureFlueOAuthProvidersFromPiAuth } from "./oauth-auth";
 import { prReviewerAgent } from "./pr-reviewer";
 
 configureFlueOAuthProvidersFromPiAuth();
 
-const persistence = sqlite(":memory:");
+await mkdir(STORE_BASE_DIR, { recursive: true });
+const persistence = sqlite(join(STORE_BASE_DIR, "flue.sqlite"));
 await persistence.migrate?.();
 const stores = await persistence.connect();
 
@@ -117,3 +119,5 @@ export function createFlueReviewApp() {
 
   return createDefaultFlueApp();
 }
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";

@@ -40,6 +40,21 @@ const makeReviewSessionService = Effect.gen(function* () {
     getSession: (sessionId: string) =>
       store.get<ReviewSession>(REVIEW_SESSIONS_NAMESPACE, sessionId),
 
+    listSessions: (scope?: string) =>
+      Effect.gen(function* () {
+        const sessionIds = yield* store.list(REVIEW_SESSIONS_NAMESPACE);
+        const sessions = yield* Effect.forEach(sessionIds, (sessionId) =>
+          store.get<ReviewSession>(REVIEW_SESSIONS_NAMESPACE, sessionId),
+        );
+
+        return sessions
+          .filter(
+            (session): session is ReviewSession =>
+              session !== null && (!scope || (session.repoRoot ?? session.cwd) === scope),
+          )
+          .toSorted((a, b) => b.createdAt - a.createdAt);
+      }),
+
     submitResult: (
       sessionId: string,
       input: Omit<ReviewSessionResult, "sessionId" | "submittedAt"> & { submittedAt?: number },

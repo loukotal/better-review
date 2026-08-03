@@ -40,8 +40,8 @@ import {
   api,
   queryClient,
   type IssueComment,
-  getReadFiles,
-  toggleFileRead as queryToggleFileRead,
+  getReviewedFiles,
+  toggleReviewedFile,
   getReviewOrder,
   setReviewOrder as querySetReviewOrder,
   getAnnotations,
@@ -151,8 +151,10 @@ const AppContent: Component = () => {
   const [highlightedLine, setHighlightedLine] = createSignal<{
     file: string;
     line: number;
+    side?: "LEFT" | "RIGHT";
   } | null>(null);
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
+  let diffScrollRef: HTMLDivElement | undefined;
 
   // Panel visibility
   const [compactLayout, setCompactLayout] = createSignal(false);
@@ -241,7 +243,7 @@ const AppContent: Component = () => {
   });
 
   // Scroll to file (and optionally line)
-  const scrollToFile = (fileName: string, line?: number) => {
+  const scrollToFile = (fileName: string, line?: number, side?: "LEFT" | "RIGHT") => {
     const elementId = getFileElementId(fileName);
     const element = document.getElementById(elementId);
     if (element) {
@@ -249,7 +251,7 @@ const AppContent: Component = () => {
 
       // If line is specified, highlight it
       if (line) {
-        setHighlightedLine({ file: fileName, line });
+        setHighlightedLine({ file: fileName, line, side });
         // Clear highlight after 3 seconds
         setTimeout(() => setHighlightedLine(null), 3000);
       }
@@ -268,9 +270,16 @@ const AppContent: Component = () => {
   // Toggle file read status
   const toggleFileRead = (fileName: string) => {
     const url = loadedPrUrl();
-    if (!url) return;
-    const newReadFiles = queryToggleFileRead(url, fileName);
-    setReadFiles(newReadFiles);
+    const file = files().find((entry) => entry.name === fileName);
+    if (!url || !file) return;
+    toggleReviewedFile(url, file);
+    setReadFiles(getReviewedFiles(url, files()));
+  };
+
+  const handleFilesLoaded = (loadedFiles: FileDiffMetadata[]) => {
+    setFiles(loadedFiles);
+    const url = loadedPrUrl();
+    if (url) setReadFiles(getReviewedFiles(url, loadedFiles));
   };
 
   // Dismiss an AI annotation
@@ -438,8 +447,7 @@ const AppContent: Component = () => {
       const savedAnnotations = getAnnotations(url);
       setAiAnnotations(savedAnnotations);
 
-      const savedReadFiles = getReadFiles(url);
-      setReadFiles(savedReadFiles);
+      setReadFiles(new Set<string>());
     } else {
       setReviewOrder(null);
       setAiAnnotations([]);
@@ -1027,7 +1035,12 @@ const AppContent: Component = () => {
             </Show>
 
             {/* Diff content */}
-            <div class={`flex-1 overflow-y-auto pb-3 ${focusMode() ? "px-1" : "px-4"}`}>
+            <div
+              ref={(element) => {
+                diffScrollRef = element;
+              }}
+              class={`flex-1 overflow-y-auto pb-3 ${focusMode() ? "px-1" : "px-4"}`}
+            >
               <Show
                 when={activeDiff()}
                 fallback={
@@ -1048,7 +1061,7 @@ const AppContent: Component = () => {
                   onResolveThread={resolveThread}
                   onDismissAiAnnotation={dismissAiAnnotation}
                   settings={settings()}
-                  onFilesLoaded={setFiles}
+                  onFilesLoaded={handleFilesLoaded}
                   repoOwner={prInfo()?.owner}
                   repoName={prInfo()?.repo}
                   fileOrder={reviewOrder()}
@@ -1056,6 +1069,8 @@ const AppContent: Component = () => {
                   readFiles={readFiles()}
                   onToggleRead={toggleFileRead}
                   prUrl={loadedPrUrl()}
+                  scrollContainer={diffScrollRef}
+                  onSearchNavigate={scrollToFile}
                 />
               </Show>
             </div>

@@ -1,5 +1,7 @@
 import {
   FileDiff,
+  VirtualizedFileDiff,
+  type Virtualizer,
   parseDiffFromFile,
   type FileDiffMetadata,
   type AnnotationSide,
@@ -51,7 +53,7 @@ interface FileDiffViewProps {
   onDismissAiAnnotation?: (annotationId: string) => void;
   onCommentDraftChange?: (hasDraft: boolean) => void;
   settings: DiffSettings;
-  highlightedLine?: number;
+  highlightedLine?: { line: number; side?: "LEFT" | "RIGHT" };
   repoOwner?: string | null;
   repoName?: string | null;
   isRead?: boolean;
@@ -62,6 +64,9 @@ interface FileDiffViewProps {
   variantId?: string | null;
   /** PR URL fallback for fetching full file contents (for expanding unchanged lines) */
   prUrl?: string | null;
+  virtualizer: Virtualizer;
+  scrollContainer?: HTMLElement;
+  activeSearchMatch?: { line: number; side: "LEFT" | "RIGHT"; query: string };
 }
 
 // Group comments into threads by their root comment
@@ -266,54 +271,140 @@ export function FileDiffView(props: FileDiffViewProps) {
     ),
   );
 
+  const focusLine = (target: NonNullable<FileDiffViewProps["highlightedLine"]>) => {
+    if (collapsed()) {
+      setCollapsed(false);
+      requestAnimationFrame(() => focusLine(target));
+      return;
+    }
+    if (!instance || !_containerRef) return;
+
+    const side = target.side === "LEFT" ? "deletions" : "additions";
+    const lineIndex = instance.getLineIndex?.(target.line, side)?.[
+      props.settings.diffStyle === "split" ? 1 : 0
+    ];
+    const scrollContainer = props.scrollContainer;
+    if (lineIndex !== undefined && scrollContainer) {
+      const containerRect = _containerRef.getBoundingClientRect();
+      const scrollRect = scrollContainer.getBoundingClientRect();
+      const top =
+        scrollContainer.scrollTop +
+        containerRect.top -
+        scrollRect.top +
+        lineIndex * 20 -
+        scrollContainer.clientHeight / 2;
+      scrollContainer.scrollTo({ top: Math.max(0, top), behavior: "instant" });
+    }
+
+    instance.setSelectedLines({
+      start: target.line,
+      end: target.line,
+      side,
+    });
+
+    // The virtualizer renders the target row after the scroll event.
+    setTimeout(() => {
+      const container = instance.getFileContainer?.() as HTMLElement | undefined;
+      const shadowRoot = container?.shadowRoot;
+      if (!shadowRoot) return;
+
+      const selectors = [
+        `[data-line="${target.line}"]`,
+        `[data-alt-line="${target.line}"]`,
+        `[data-new-line="${target.line}"]`,
+        `.line-new-${target.line}`,
+        `tr[data-line="${target.line}"]`,
+      ];
+
+      let lineEl: Element | null = null;
+      for (const selector of selectors) {
+        lineEl = shadowRoot.querySelector(selector);
+        if (lineEl) break;
+      }
+
+      if (lineEl) {
+        lineEl.scrollIntoView({ behavior: "instant", block: "center" });
+      } else if (side === "additions") {
+        instance.setSelectedLines({
+          start: target.line,
+          end: target.line,
+          side: "deletions",
+        });
+      }
+    }, 100);
+  };
+
+  const highlightSearchMatch = () => {
+    const match = props.activeSearchMatch;
+    const query = match?.query.trim();
+    const container = instance?.getFileContainer?.() as HTMLElement | undefined;
+    const shadowRoot = container?.shadowRoot;
+    if (!shadowRoot) return;
+
+    for (const mark of shadowRoot.querySelectorAll("mark[data-diff-search-match]")) {
+      mark.replaceWith(document.createTextNode(mark.textContent ?? ""));
+    }
+    for (const line of shadowRoot.querySelectorAll<HTMLElement>("[data-diff-search-line]")) {
+      line.removeAttribute("data-diff-search-line");
+      line.style.removeProperty("outline");
+      line.style.removeProperty("outline-offset");
+      line.style.removeProperty("box-shadow");
+    }
+    if (!query || !match) return;
+
+    const lowerQuery = query.toLocaleLowerCase();
+    const codes = shadowRoot.querySelectorAll<HTMLElement>(
+      `[data-line="${match.line}"], [data-alt-line="${match.line}"]`,
+    );
+    for (const code of codes) {
+      if (!code.textContent?.toLocaleLowerCase().includes(lowerQuery)) continue;
+      code.dataset.diffSearchLine = "";
+      code.style.setProperty("outline", "2px solid #facc15");
+      code.style.setProperty("outline-offset", "-2px");
+      code.style.setProperty("box-shadow", "inset 0 0 0 9999px rgb(250 204 21 / 45%)");
+
+      const textNodes: Text[] = [];
+      const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) textNodes.push(node as Text);
+
+      for (const textNode of textNodes) {
+        const text = textNode.data;
+        const lowerText = text.toLocaleLowerCase();
+        let start = lowerText.indexOf(lowerQuery);
+        if (start === -1) continue;
+
+        const fragment = document.createDocumentFragment();
+        let offset = 0;
+        while (start !== -1) {
+          fragment.append(text.slice(offset, start));
+          const mark = document.createElement("mark");
+          mark.dataset.diffSearchMatch = "";
+          mark.textContent = text.slice(start, start + query.length);
+          mark.style.cssText = "background:#facc15;color:#111;border-radius:1px;padding:0";
+          fragment.append(mark);
+          offset = start + query.length;
+          start = lowerText.indexOf(lowerQuery, offset);
+        }
+        fragment.append(text.slice(offset));
+        textNode.replaceWith(fragment);
+      }
+    }
+  };
+
+  createEffect(
+    on(
+      () => props.activeSearchMatch,
+      () => highlightSearchMatch(),
+      { defer: true },
+    ),
+  );
+
   // Highlight line when highlightedLine prop changes
   createEffect(
     on(
       () => props.highlightedLine,
-      (line) => {
-        if (!instance || !line) return;
-
-        // Try to highlight on additions side first (most common for annotations)
-        instance.setSelectedLines({
-          start: line,
-          end: line,
-          side: "additions" as const,
-        });
-
-        // Try to scroll the line into view within the shadow DOM
-        setTimeout(() => {
-          const container = instance.getFileContainer?.() as HTMLElement | undefined;
-          const shadowRoot = container?.shadowRoot;
-          if (shadowRoot) {
-            // Try multiple selectors to find the line element
-            // The diff component may use different attributes depending on view mode
-            const selectors = [
-              `[data-line="${line}"]`,
-              `[data-alt-line="${line}"]`,
-              `[data-new-line="${line}"]`,
-              `.line-new-${line}`,
-              `tr[data-line="${line}"]`,
-            ];
-
-            let lineEl: Element | null = null;
-            for (const selector of selectors) {
-              lineEl = shadowRoot.querySelector(selector);
-              if (lineEl) break;
-            }
-
-            if (lineEl) {
-              lineEl.scrollIntoView({ behavior: "smooth", block: "center" });
-            } else {
-              // Fallback: try to highlight on deletions side if additions didn't work
-              instance.setSelectedLines({
-                start: line,
-                end: line,
-                side: "deletions" as const,
-              });
-            }
-          }
-        }, 100);
-      },
+      (target) => target && focusLine(target),
       { defer: true },
     ),
   );
@@ -399,6 +490,7 @@ export function FileDiffView(props: FileDiffViewProps) {
     direction: ExpansionDirections,
     separatorEl?: HTMLElement,
   ) => {
+    const needsInstanceRefresh = !fileContentLoaded;
     // Show loading state on the separator
     if (separatorEl) {
       loadingHunkSeparators.add(separatorEl);
@@ -433,15 +525,19 @@ export function FileDiffView(props: FileDiffViewProps) {
       if (!loaded || !instance) return;
     }
 
-    // Step 1: Re-render with the enriched file diff (which has oldLines/newLines).
-    // The enriched file is a new object reference, so the renderer's internal cache
-    // is invalidated, forcing it to re-highlight in "full file" mode. This also
-    // updates instance.fileDiff to the enriched reference.
-    instance.render({
-      fileDiff: currentFile(),
-      lineAnnotations: lineAnnotations(),
-      forceRender: true,
-    });
+    // VirtualizedFileDiff keeps its initial file reference for size calculations,
+    // so recreate it once the patch has been replaced with complete file contents.
+    if (needsInstanceRefresh && _containerRef) {
+      instance.cleanUp();
+      _containerRef.innerHTML = "";
+      createInstance(_containerRef);
+    } else {
+      instance.render({
+        fileDiff: currentFile(),
+        lineAnnotations: lineAnnotations(),
+        forceRender: true,
+      });
+    }
 
     // Step 2: Expand the requested hunk. This updates the expandedHunks map in the
     // renderer, then calls rerender() which uses the now-stored enriched fileDiff.
@@ -522,107 +618,111 @@ export function FileDiffView(props: FileDiffViewProps) {
   };
 
   const createInstance = (el: HTMLDivElement) => {
-    instance = new FileDiff({
-      diffStyle: props.settings.diffStyle,
-      theme: props.settings.theme,
-      lineDiffType: props.settings.lineDiffType,
-      hunkSeparators: renderHunkSeparator,
-      disableFileHeader: true,
-      enableLineSelection: true,
-      unsafeCSS: getCustomCSS(),
-      onLineSelectionEnd: (range: SelectedLineRange | null) => {
-        if (range && range.start && range.end) {
-          // Clear any existing text selection so it doesn't block future interactions
-          window.getSelection()?.removeAllRanges();
+    instance = new VirtualizedFileDiff(
+      {
+        diffStyle: props.settings.diffStyle,
+        theme: props.settings.theme,
+        lineDiffType: props.settings.lineDiffType,
+        hunkSeparators: renderHunkSeparator,
+        disableFileHeader: true,
+        enableLineSelection: true,
+        unsafeCSS: getCustomCSS(),
+        onLineSelectionEnd: (range: SelectedLineRange | null) => {
+          if (range && range.start && range.end) {
+            // Clear any existing text selection so it doesn't block future interactions
+            window.getSelection()?.removeAllRanges();
 
-          const side = range.side === "deletions" ? "LEFT" : "RIGHT";
-          const startLine = Math.min(range.start, range.end);
-          const endLine = Math.max(range.start, range.end);
-          setPendingComment({ startLine, endLine, side });
-          // Re-render to show the pending comment form
-          setTimeout(rerender, 0);
-        }
+            const side = range.side === "deletions" ? "LEFT" : "RIGHT";
+            const startLine = Math.min(range.start, range.end);
+            const endLine = Math.max(range.start, range.end);
+            setPendingComment({ startLine, endLine, side });
+            // Re-render to show the pending comment form
+            setTimeout(rerender, 0);
+          }
+        },
+        renderAnnotation: (annotation: { metadata: AnnotationMetadata }) => {
+          const { metadata } = annotation;
+          const div = document.createElement("div");
+
+          if (metadata.type === "thread") {
+            const { rootComment, replies } = metadata;
+            div.className = "p-2.5 my-1 mx-2 bg-bg-elevated border border-border";
+
+            // Render the CommentThread component into the div
+            const dispose = renderCommentThread(div, {
+              rootComment,
+              replies,
+              githubContext: githubContext(),
+              onEdit: async (commentId, body) => {
+                await props.onEditComment(commentId, body);
+              },
+              onDelete: async (commentId) => {
+                await props.onDeleteComment(commentId);
+              },
+              onReply: async (body) => {
+                await props.onReplyToComment(rootComment.id, body);
+              },
+              isResolved: rootComment.isResolved,
+              onResolve: rootComment.threadId
+                ? async (resolved) => {
+                    await props.onResolveThread?.(rootComment.threadId!, resolved);
+                  }
+                : undefined,
+            });
+            disposeList.push(dispose);
+          } else if (metadata.type === "ai-annotation") {
+            div.className = "my-1 mx-2";
+
+            // Render the AI annotation component into the div
+            const dispose = renderAiAnnotation(div, {
+              annotation: metadata.annotation,
+              onDismiss: props.onDismissAiAnnotation,
+              onCreateComment: (annotation) => {
+                const body = `[AI][${annotation.severity}]: ${annotation.message}`;
+                setPendingComment({
+                  startLine: annotation.line,
+                  endLine: annotation.line,
+                  side: "RIGHT",
+                  initialBody: body,
+                });
+                setTimeout(rerender, 0);
+              },
+            });
+            disposeList.push(dispose);
+          } else if (metadata.type === "pending") {
+            div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
+
+            // Render the PendingCommentForm component into the div
+            const dispose = renderPendingCommentForm(div, {
+              startLine: metadata.startLine,
+              endLine: metadata.endLine,
+              initialBody: metadata.initialBody,
+              onSubmit: async (body) => {
+                await props.onAddComment({
+                  line: metadata.endLine,
+                  side: metadata.side,
+                  body,
+                  startLine: metadata.startLine,
+                  endLine: metadata.endLine,
+                });
+                setPendingComment(null);
+                window.getSelection()?.removeAllRanges();
+              },
+              onCancel: () => {
+                setPendingComment(null);
+                setTimeout(rerender, 0);
+              },
+              onDraftChange: props.onCommentDraftChange,
+            });
+            disposeList.push(dispose);
+          }
+
+          return div;
+        },
+        onPostRender: () => highlightSearchMatch(),
       },
-      renderAnnotation: (annotation: { metadata: AnnotationMetadata }) => {
-        const { metadata } = annotation;
-        const div = document.createElement("div");
-
-        if (metadata.type === "thread") {
-          const { rootComment, replies } = metadata;
-          div.className = "p-2.5 my-1 mx-2 bg-bg-elevated border border-border";
-
-          // Render the CommentThread component into the div
-          const dispose = renderCommentThread(div, {
-            rootComment,
-            replies,
-            githubContext: githubContext(),
-            onEdit: async (commentId, body) => {
-              await props.onEditComment(commentId, body);
-            },
-            onDelete: async (commentId) => {
-              await props.onDeleteComment(commentId);
-            },
-            onReply: async (body) => {
-              await props.onReplyToComment(rootComment.id, body);
-            },
-            isResolved: rootComment.isResolved,
-            onResolve: rootComment.threadId
-              ? async (resolved) => {
-                  await props.onResolveThread?.(rootComment.threadId!, resolved);
-                }
-              : undefined,
-          });
-          disposeList.push(dispose);
-        } else if (metadata.type === "ai-annotation") {
-          div.className = "my-1 mx-2";
-
-          // Render the AI annotation component into the div
-          const dispose = renderAiAnnotation(div, {
-            annotation: metadata.annotation,
-            onDismiss: props.onDismissAiAnnotation,
-            onCreateComment: (annotation) => {
-              const body = `[AI][${annotation.severity}]: ${annotation.message}`;
-              setPendingComment({
-                startLine: annotation.line,
-                endLine: annotation.line,
-                side: "RIGHT",
-                initialBody: body,
-              });
-              setTimeout(rerender, 0);
-            },
-          });
-          disposeList.push(dispose);
-        } else if (metadata.type === "pending") {
-          div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
-
-          // Render the PendingCommentForm component into the div
-          const dispose = renderPendingCommentForm(div, {
-            startLine: metadata.startLine,
-            endLine: metadata.endLine,
-            initialBody: metadata.initialBody,
-            onSubmit: async (body) => {
-              await props.onAddComment({
-                line: metadata.endLine,
-                side: metadata.side,
-                body,
-                startLine: metadata.startLine,
-                endLine: metadata.endLine,
-              });
-              setPendingComment(null);
-              window.getSelection()?.removeAllRanges();
-            },
-            onCancel: () => {
-              setPendingComment(null);
-              setTimeout(rerender, 0);
-            },
-            onDraftChange: props.onCommentDraftChange,
-          });
-          disposeList.push(dispose);
-        }
-
-        return div;
-      },
-    });
+      props.virtualizer,
+    );
 
     instance.render({
       fileDiff: currentFile(),

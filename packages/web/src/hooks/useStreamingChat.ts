@@ -1,4 +1,8 @@
-import { createFlueClient, type ConversationStreamChunk } from "@flue/sdk";
+import {
+  createFlueClient,
+  type ConversationStreamChunk,
+  type FlueConversationSnapshot,
+} from "@flue/sdk";
 import { batch, createEffect, createSignal, onCleanup } from "solid-js";
 
 export interface ToolCall {
@@ -40,6 +44,52 @@ const flueClient = createFlueClient({
   // reference is called without Window as `this` through SDK indirection.
   fetch: globalThis.fetch.bind(globalThis),
 });
+
+export function conversationSnapshotMessages(
+  snapshot: FlueConversationSnapshot,
+): StreamingMessage[] {
+  return snapshot.messages.map((message) => {
+    const text: string[] = [];
+    const reasoning: string[] = [];
+    const toolCalls: ToolCall[] = [];
+
+    for (const part of message.parts) {
+      if (part.type === "text") text.push(part.text);
+      if (part.type === "reasoning") reasoning.push(part.text);
+      if (part.type === "dynamic-tool") {
+        toolCalls.push({
+          id: part.toolCallId,
+          callId: part.toolCallId,
+          tool: part.toolName,
+          title: part.toolName,
+          status:
+            part.state === "output-error"
+              ? "error"
+              : part.state === "output-available"
+                ? "completed"
+                : "running",
+          input: isRecord(part.input) ? part.input : {},
+          output: part.state === "output-available" ? stringifyValue(part.output) : undefined,
+          error: part.state === "output-error" ? part.errorText : undefined,
+        });
+      }
+    }
+
+    return {
+      id: message.id,
+      role: message.role,
+      content: text.join(""),
+      reasoning: reasoning.join("") || undefined,
+      toolCalls,
+      isStreaming: false,
+      timestamp: Date.parse(message.metadata?.timestamp ?? "") || Date.now(),
+    };
+  });
+}
+
+export async function loadConversationMessages(sessionId: string): Promise<StreamingMessage[]> {
+  return conversationSnapshotMessages(await flueClient.agents.history("pr-reviewer", sessionId));
+}
 
 function stringifyValue(value: unknown): string {
   if (typeof value === "string") return value;
