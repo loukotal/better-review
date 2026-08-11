@@ -1,136 +1,162 @@
 <p align="center">
-  <img src="./logo.svg" alt="better-review" width="200" />
+  <img src="./logo.svg" alt="Better Review" width="200" />
 </p>
 
-Better code review experience for GitHub PRs. Runs locally with your github login using the gh cli - easily access your PRs, data stays local. Integrates with OpenCode for ai-assisted code review.
+Better Review is a local-first GitHub pull-request review app. It combines a focused diff viewer,
+GitHub review actions, AI-assisted review, and browser-based approval flows for coding agents.
 
-![Showcase](./packages/web/public/showcase.png)
+![Better Review interface](./packages/web/public/showcase.png)
 
 ## Features
 
-- Review code from a GitHub link you have access to
-- Post comments to GitHub
-- View and filter PRs assigned to you
-- All data stays local except for ai conversations through OpenCode
-- change diff theme and font (uses local fonts)
+- Open any GitHub pull request available to your authenticated `gh` account.
+- Browse assigned pull requests and review a full PR or an individual commit.
+- Read, write, and manage GitHub comments and submit reviews.
+- Switch between the exact **Original** diff and an on-demand, read-only **Reading** view with
+  program-design, blast-radius, review-focus, and unknowns analysis.
+- Chat with the PR review agent using a selectable model and reasoning level.
+- Run review-agent repository tools inside a network-disabled Microsandbox microVM with read-only
+  access to the prepared checkout.
+- Create browser review sessions from the `better-review` CLI for plans, messages, and local diffs.
+- Keep application state, prepared worktrees, caches, and review-session metadata on the host
+  machine.
 
-### AI Assisted Code Review
-
-- Agent proposes order in which to review files
-- Special rendered blocks with info/warning/critical hints
-- Custom personality/instructions via `personality.md` file
-- [future] there could be some "knowledge-base" the agent could use for the review
-
-### Custom Reviewer Personality
-
-You can customize how the AI reviewer behaves by creating a `personality.md` file in the project root. This file can contain custom instructions, tone preferences, or specific things to look for during review.
-
-Example `personality.md`:
-
-```markdown
-You are a strict code reviewer. Focus on:
-
-- Security vulnerabilities and edge cases
-- Performance implications
-- API contract consistency
-
-Be concise and direct. Use examples when explaining issues.
-```
-
-The custom instructions are loaded automatically when starting a review session and take priority over the default instructions.
+GitHub requests still go to GitHub, and AI prompts go to the model provider you select. The review
+sandbox itself has no network access and receives no GitHub or model credentials.
 
 ## Prerequisites
 
-- Node.js 24+
-- pnpm
-- [gh cli](https://cli.github.com/) & be logged in
-- [OpenCode](https://opencode.ai/)
+- Node.js 24 or newer
+- pnpm 11 or newer
+- [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login`
+- Credentials for at least one supported AI provider
 
-## How to run
+Better Review can use standard provider environment variables. For supported OAuth providers, it
+can also reuse credentials from Pi or OpenCode's local credential store.
 
-Currently you need to pull the repo and run it locally.
+## Install and run
 
-1. `pnpm install`
-2. `pnpm dev` or `pnpm start`
+Install the JavaScript dependencies, then install the machine-local Microsandbox runtime once:
 
-In dev, `pnpm dev` creates a local `.better-review-api-token` file before starting the API and
-Vite. Both servers read that same token automatically. Set `BETTER_REVIEW_API_TOKEN` only if you
-want to override the generated dev token. For production builds, set `VITE_BETTER_REVIEW_API_TOKEN`
-explicitly if you want the token baked into the built client; otherwise the browser prompts once and
-stores the token in localStorage for `localhost`.
+```sh
+pnpm install
+pnpm setup:microsandbox
+```
 
-You can update ports with `API_PORT`, `WEB_PORT` (for dev), `OPENCODE_PORT` environment variables. Defaults are `3000` and `3001`; OpenCode uses a random local port unless you explicitly set `OPENCODE_PORT`.
+`pnpm setup:microsandbox` is idempotent and only needs to succeed once per host machine. It installs
+the sandbox runtime under `~/.microsandbox`. Better Review intentionally refuses to start without
+it instead of falling back to running review-agent commands directly on the host.
+
+Start the development app:
+
+```sh
+pnpm dev
+```
+
+Then open [http://localhost:3000](http://localhost:3000). The API listens on port `3001` by
+default.
+
+For a production-style local build and server:
+
+```sh
+pnpm start
+```
+
+### Local API authentication
+
+`pnpm dev` creates a gitignored `.better-review-api-token` and shares it with the API and Vite
+client automatically.
+
+For other setups, set `BETTER_REVIEW_API_TOKEN` on the API. Set
+`VITE_BETTER_REVIEW_API_TOKEN` while building the web client to embed the same token, or enter it
+when the browser prompts. `BETTER_REVIEW_DISABLE_API_AUTH=1` is intended only for temporary local
+development.
+
+### Ports and URLs
+
+| Variable                | Default                 | Purpose                                                              |
+| ----------------------- | ----------------------- | -------------------------------------------------------------------- |
+| `WEB_PORT`              | `3000`                  | Vite development server                                              |
+| `API_PORT`              | `3001`                  | Better Review API                                                    |
+| `BETTER_REVIEW_API_URL` | `http://127.0.0.1:3001` | API URL used by the CLI or web proxy                                 |
+| `BETTER_REVIEW_WEB_URL` | `http://127.0.0.1:3000` | Browser URL emitted by the CLI                                       |
+| `OPENCODE_PORT`         | random free port        | Embedded compatibility runtime; set only when a fixed port is needed |
+
+## Review sandbox
+
+Each prepared PR worktree gets an isolated Microsandbox VM that can be reused across its review
+conversations. The checkout and linked Git repository are mounted read-only. Each agent submission
+gets fresh temporary scratch space.
+
+The sandbox has:
+
+- no network access;
+- no host home-directory mount;
+- no GitHub or model credentials;
+- read-only access to the prepared PR checkout;
+- bounded CPU, memory, command duration, VM lifetime, and idle time.
+
+Better Review cleans up its orphaned VMs on startup and removes a worktree's VM when that worktree
+is deleted.
 
 ## Agent Review CLI
 
-The repo now exposes a local `better-review` CLI entrypoint for agent review sessions.
+Keep Better Review running, then invoke the workspace CLI directly:
 
-Examples:
+```sh
+pnpm exec tsx index.ts plan < plan.md
+pnpm exec tsx index.ts last --file message.md
+pnpm exec tsx index.ts review
+pnpm exec tsx index.ts open-session <session-id>
+```
 
-1. `pnpm exec tsx index.ts plan < AGENT_REVIEW_PLAN.md`
-2. `pnpm exec tsx index.ts last --file message.md`
-3. `pnpm exec tsx index.ts review`
-4. `pnpm exec tsx index.ts open-session <session-id>`
+The CLI creates or opens a browser session at `/agent-review/:sessionId`, waits for approval or a
+request for changes, and writes structured JSON to stdout. The result includes
+`feedbackMarkdown` and an `agentMessage` ready to return to the calling agent.
 
-Current flow:
+### Install the local command
 
-- create a local review session through the API
-- open or print a browser URL for `/agent-review/:sessionId`
-- wait for approve / request changes
-- emit structured JSON to stdout with raw result fields plus:
-  - `feedbackMarkdown` for mode-specific exported feedback
-  - `agentMessage` for a ready-to-send runtime-facing message
+To expose `better-review` on this machine for other repositories and plugins:
 
-For now, keep the app running with `pnpm dev` or `pnpm start` before using the CLI.
-
-### Local Command Install
-
-To expose `better-review` as a machine-local command for other repos and plugins:
-
-```bash
+```sh
 ./scripts/install-local-command.sh
 ```
 
-This installs a launcher at `~/.local/bin/better-review` that runs this repo's `index.ts` via `pnpm exec tsx`.
+The script installs a launcher at `~/.local/bin/better-review`. Ensure that directory is on your
+`PATH`, then use the shorter commands:
 
-### OpenCode Plugin Example
+```sh
+better-review review
+better-review plan < plan.md
+```
 
-See [examples/opencode-better-review-plugin.ts](/Users/louky/Work/better-review/examples/opencode-better-review-plugin.ts) for a minimal plugin pattern that:
+### OpenCode integration examples
 
-- shells out to the local `better-review` command
-- waits for JSON output
-- returns tool results or injects feedback back into the current OpenCode session
+- [Plugin example](./examples/opencode-better-review-plugin.ts)
+- [Plan review command](./examples/opencode-better-review-plan-command.md)
+- [Last-message review command](./examples/opencode-better-review-last-command.md)
+- [Local-diff review command](./examples/opencode-better-review-diff-command.md)
 
-### OpenCode Command Examples
+Copy the command files into `.opencode/commands/` in the repository where you want to use them and
+rename them as desired.
 
-Ready-to-copy custom command examples are also available:
+## Development
 
-- [opencode-better-review-plan-command.md](/Users/louky/Work/better-review/examples/opencode-better-review-plan-command.md)
-- [opencode-better-review-last-command.md](/Users/louky/Work/better-review/examples/opencode-better-review-last-command.md)
-- [opencode-better-review-diff-command.md](/Users/louky/Work/better-review/examples/opencode-better-review-diff-command.md)
+```sh
+pnpm test
+pnpm lint
+pnpm format:check
+```
 
-Copy them into `.opencode/commands/` in the target repo and rename them as desired.
-
-## TODOs (& limitations & ideas)
-
-- [ ] render images
-- [ ] fix file refs from the review agent
-- [ ] virtualization for large files - ~7k line file takes long time to load
-- [ ] better handle SSE connection
-- [ ] handle "project knowledge base"
-- [ ] simpler marks for warning/info UI elements & files (just use filenames instead of \[\[\]\])
-- [ ] better responsive ui
-- [ ] make the CLI install flow more ergonomic
-- [ ] start web server on ".local" domain(?)
-- ~[ ] integrate with other coding agents(?)~
-- [x] load opencode sessions based on PR link - allow switching between sessions if multiple exist
-- [x] sometimes first message from OpenCode does not get sent
+Persistent application data lives under `~/.local/share/better-review` by default. This includes
+the Flue 2 database, prepared worktrees, repository caches, and generated Reading-view reports.
 
 ## License
 
-Licensed under [MIT](LICENSE).
+Licensed under the [MIT License](./LICENSE).
 
 ## Acknowledgements
 
-Claude Opus 4.5 carried this.
-Thanks to [OpenCode](https://opencode.ai/), [Effect](effect.website), [diffs](https://diffs.com/), [Solid](https://www.solidjs.com/) and to everyone contributing.
+Built with [Flue](https://flueframework.com/),
+[OpenCode](https://opencode.ai/), [Effect](https://effect.website/),
+[Diffs](https://diffs.com/), and [Solid](https://www.solidjs.com/).
