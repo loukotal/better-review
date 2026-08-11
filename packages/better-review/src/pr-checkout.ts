@@ -13,6 +13,7 @@ import { join, resolve, sep } from "node:path";
 import { Data, Effect, Schedule } from "effect";
 
 import { runCommand } from "./command";
+import { removeMicrosandboxForWorktree } from "./flue/microsandbox";
 import { STORE_BASE_DIR } from "./store";
 
 class CheckoutError extends Data.TaggedError("CheckoutError")<{
@@ -283,7 +284,11 @@ async function ensureBareRepo(owner: string, repo: string, repoGitDir: string): 
 }
 
 function baseRemoteRef(input: PreparePrCheckoutInput): string {
-  return `refs/remotes/origin/${input.baseRef}`;
+  return reviewBaseRef(input);
+}
+
+export function reviewBaseRef(input: Pick<PreparePrCheckoutInput, "number" | "headSha">): string {
+  return `refs/better-review/pr-${input.number}-${input.headSha.slice(0, 12)}/base`;
 }
 
 function pullHeadRef(input: PreparePrCheckoutInput): string {
@@ -301,7 +306,7 @@ async function fetchBaseRef(
     "--filter=blob:none",
     ...historyArgs,
     "origin",
-    `+refs/heads/${input.baseRef}:${baseRemoteRef(input)}`,
+    `+${input.baseSha}:${baseRemoteRef(input)}`,
   ]);
 }
 
@@ -371,11 +376,6 @@ async function ensureBaseRef(repoGitDir: string, input: PreparePrCheckoutInput):
   if (!(await refMatchesCommit(repoGitDir, baseRemoteRef(input), input.baseSha))) {
     await fetchBaseRef(repoGitDir, input);
   }
-
-  // Also materialize a local branch name (e.g. `develop`) so common commands like
-  // `git merge-base develop HEAD` work inside the worktree. Force it to the fetched
-  // remote base to avoid stale local base refs in the bare cache.
-  await runGit(repoGitDir, ["update-ref", `refs/heads/${input.baseRef}`, baseRemoteRef(input)]);
 }
 
 async function fetchPullHeadBranch(
@@ -495,6 +495,26 @@ export async function ensureReviewHistory(
   }
 
   await ensureFullPrHistory(repoGitDir, input);
+}
+
+function reviewDiffRange(input: PreparePrCheckoutInput, headRef = input.headSha): string {
+  if (input.reviewMode === "commit" && input.commitSha) {
+    return `${input.commitSha}^..${input.commitSha}`;
+  }
+  return `${reviewBaseRef(input)}...${headRef}`;
+}
+
+export async function ensureOfflineReviewDiff(
+  repoGitDir: string,
+  input: PreparePrCheckoutInput,
+): Promise<void> {
+  const range = reviewDiffRange(input);
+
+  // A blobless partial clone can resolve commits and file names while still lacking
+  // the historical blobs needed by `git diff`. Hydrate those blobs while the host
+  // has network access, then prove the same command works with lazy fetching off.
+  await runGit(repoGitDir, ["diff", "--no-ext-diff", "--stat", range]);
+  await runGit(repoGitDir, ["--no-lazy-fetch", "diff", "--no-ext-diff", "--stat", range]);
 }
 
 function resolveWorktreePath(worktreePath: string, file: string): string {
@@ -756,6 +776,7 @@ async function getWorktreeRemovalBlocker(worktreePath: string): Promise<string |
 }
 
 async function removePreparedWorktree(repoGitDir: string, worktreePath: string): Promise<void> {
+  await removeMicrosandboxForWorktree(worktreePath);
   await runGit(repoGitDir, ["worktree", "remove", "--force", worktreePath]);
   await runGit(repoGitDir, ["worktree", "prune"]);
 }
@@ -856,6 +877,7 @@ async function writePrContext(
 
   const fileList =
     input.files.length > 0 ? input.files.map((file) => `- ${file}`).join("\n") : "- (unknown)";
+  const canonicalDiff = reviewDiffRange(input, "HEAD");
 
   await writeFile(
     join(contextDir, "PR_CONTEXT.md"),
@@ -871,15 +893,9 @@ async function writePrContext(
       `Review scope: ${scope}`,
       "",
       "Canonical PR diff commands:",
-      input.reviewMode === "commit" && input.commitSha
-        ? `- git diff --stat ${input.commitSha}^..${input.commitSha}`
-        : `- git diff --stat origin/${input.baseRef}...HEAD`,
-      input.reviewMode === "commit" && input.commitSha
-        ? `- git diff --name-only ${input.commitSha}^..${input.commitSha}`
-        : `- git diff --name-only origin/${input.baseRef}...HEAD`,
-      input.reviewMode === "commit" && input.commitSha
-        ? `- git diff ${input.commitSha}^..${input.commitSha}`
-        : `- git diff origin/${input.baseRef}...HEAD`,
+      `- git diff --stat ${canonicalDiff}`,
+      `- git diff --name-only ${canonicalDiff}`,
+      `- git diff ${canonicalDiff}`,
       "",
       "Changed files from the app:",
       fileList,
@@ -892,7 +908,7 @@ async function writePrContext(
       "",
       "Use this checkout as the source of truth. Prefer code navigation, tests, and git commands over judging only a patch.",
       `Do not review files outside the canonical PR diff unless the user explicitly asks for broader context.`,
-      `Do not fall back to raw SHA ranges like ${input.baseSha}..HEAD. If the canonical diff fails, report that the prepared checkout is invalid and reload the PR session.`,
+      `Do not substitute a mutable branch ref for ${reviewBaseRef(input)}. If the canonical diff fails, report that the prepared checkout is invalid and reload the PR session.`,
     ].join("\n"),
   );
 
@@ -991,6 +1007,16 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
             );
             const localBranch = localPrBranchName(input);
 
+            await traceCheckoutPhase(trace, startedAt, "ensureBaseRef", () =>
+              ensureBaseRef(repoGitDir, input),
+            );
+            await traceCheckoutPhase(trace, startedAt, "ensureReviewHistory", () =>
+              ensureReviewHistory(repoGitDir, input),
+            );
+            await traceCheckoutPhase(trace, startedAt, "ensureOfflineReviewDiff", () =>
+              ensureOfflineReviewDiff(repoGitDir, input),
+            );
+
             const currentHead = await traceCheckoutPhase(trace, startedAt, "getWorktreeHead", () =>
               getWorktreeHead(worktreePath),
             );
@@ -1002,6 +1028,9 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
                 () => readPreparedCheckout(worktreePath, input),
               );
               if (prepared) {
+                await traceCheckoutPhase(trace, startedAt, "writePrContext", () =>
+                  writePrContext(input, worktreePath, prepared.repoAccess),
+                );
                 trace.push({
                   name: "preparedWorktreeCache.hit",
                   elapsedMs: 0,
@@ -1016,13 +1045,7 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
               });
             }
 
-            await traceCheckoutPhase(trace, startedAt, "ensureBaseRef", () =>
-              ensureBaseRef(repoGitDir, input),
-            );
             if (currentHead === input.headSha) {
-              await traceCheckoutPhase(trace, startedAt, "ensureReviewHistory", () =>
-                ensureReviewHistory(repoGitDir, input),
-              );
               const repoAccess = await traceCheckoutPhase(
                 trace,
                 startedAt,
@@ -1040,9 +1063,6 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
             );
             await traceCheckoutPhase(trace, startedAt, "verifyHeadCommit", () =>
               runGit(repoGitDir, ["rev-parse", "--verify", `${input.headSha}^{commit}`]),
-            );
-            await traceCheckoutPhase(trace, startedAt, "ensureReviewHistory", () =>
-              ensureReviewHistory(repoGitDir, input),
             );
             await traceCheckoutPhase(trace, startedAt, "createWorktreeParent", () =>
               mkdir(join(worktreePath, ".."), { recursive: true }),

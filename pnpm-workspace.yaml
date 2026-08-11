@@ -14,11 +14,15 @@ minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
   - "@earendil-works/pi-agent-core"
   - "@earendil-works/pi-ai"
+  - "@flue/cli@2.0.3"
+  - "@flue/runtime@2.0.3"
+  - "@flue/sdk@2.0.3"
+  - "@flue/vite@2.0.3"
 trustPolicy: no-downgrade
 blockExoticSubdeps: true
 allowBuilds:
-  '@google/genai': true
-  '@mongodb-js/zstd': true
+  "@google/genai": true
+  "@mongodb-js/zstd": true
   esbuild: true
   lefthook: true
   node-liblzma: true

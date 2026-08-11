@@ -14,9 +14,9 @@ import { isGitHubAssetId } from "@better-review/shared/github-asset";
 
 import { ReviewSessionService } from "./agent-sessions";
 import { runCommand } from "./command";
-import { corsMiddleware, withCors } from "./cors";
+import { corsMiddleware, getCorsHeaders, withCors } from "./cors";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
-import { createFlueReviewApp } from "./flue/runtime";
+import { createFlueReviewApp, startFlueReviewRuntime, stopFlueReviewRuntime } from "./flue/runtime";
 import { GhService, type PrStatus } from "./gh/gh";
 import { PrCheckoutService } from "./pr-checkout";
 import { getErrorMessage } from "./response";
@@ -343,6 +343,11 @@ function createApp(routes: Record<string, unknown>): Hono {
   // Flue is mounted as a Hono sub-app rather than through createRoutes, so CORS
   // must run at the parent-app boundary to cover its streaming endpoints too.
   app.use("*", corsMiddleware);
+  app.use("/flue/*", async (context, next) => {
+    const authError = requireApiAuth(context.req.raw);
+    if (authError) return authError;
+    await next();
+  });
   registerRoutes(app, routes);
   app.route("/flue", createFlueReviewApp());
 
@@ -1077,6 +1082,8 @@ const main = Effect.gen(function* () {
   const reviewSessions = yield* ReviewSessionService;
   const checkout = yield* PrCheckoutService;
 
+  yield* Effect.tryPromise(() => startFlueReviewRuntime());
+
   // Start the PR list background refresh loop (fetches every 15 min)
   yield* prListCache.backgroundLoop.pipe(
     Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
@@ -1100,10 +1107,11 @@ const main = Effect.gen(function* () {
   yield* Effect.log(`API server running at http://${host}:${actualPort}`);
 
   yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
+    Effect.promise(async () => {
       console.log("[Shutdown] Stopping server...");
       clearInterval(stallChecker);
       server.close();
+      await stopFlueReviewRuntime();
     }),
   );
 

@@ -3,8 +3,13 @@ import { randomUUID } from "node:crypto";
 import { Effect } from "effect";
 import { z } from "zod";
 
-import { FlueReviewSessionService, type FlueReviewSession } from "../../flue-review-sessions";
-import { flueInternalSessionId, readFlueAgentSession } from "../../flue/session-store";
+import {
+  FlueReviewSessionService,
+  isFlueV2ReviewSession,
+  readFlueReviewSession,
+  type FlueReviewSession,
+} from "../../flue-review-sessions";
+import { readFlueConversationHistory } from "../../flue/runtime";
 import { GhService } from "../../gh/gh";
 import { PrCheckoutService } from "../../pr-checkout";
 import { PrContextService, parsePrUrl, type SessionReviewScope } from "../../state";
@@ -57,6 +62,13 @@ const sessionPayload = (
   agentName: "pr-reviewer" as const,
 });
 
+type SessionListItem = { id: string; headSha: string; createdAt: number; hidden: boolean };
+
+const visibleV2Sessions = (sessions: SessionListItem[], flueSessions: FlueReviewSessionService) =>
+  Effect.filter(sessions, (session) =>
+    flueSessions.get(session.id).pipe(Effect.map(isFlueV2ReviewSession)),
+  );
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -80,107 +92,69 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function stringifyContent(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value
-      .map((part) => {
-        if (!isRecord(part)) return "";
-        if (part.type === "text" && typeof part.text === "string") return part.text;
-        if (part.type === "thinking" && typeof part.thinking === "string") return "";
-        return "";
-      })
-      .filter(Boolean)
+export function conversationHistoryToChatMessages(data: unknown): ChatMessage[] {
+  if (!isRecord(data) || !Array.isArray(data.messages)) return [];
+
+  return data.messages.flatMap((value): ChatMessage[] => {
+    if (!isRecord(value) || (value.role !== "user" && value.role !== "assistant")) return [];
+
+    const parts = Array.isArray(value.parts) ? value.parts.filter(isRecord) : [];
+    const content = parts
+      .map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : ""))
       .join("");
-  }
-  return "";
-}
-
-function stringifyReasoning(value: unknown): string | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const reasoning = value
-    .map((part) =>
-      isRecord(part) && part.type === "thinking" && typeof part.thinking === "string"
-        ? part.thinking
-        : "",
-    )
-    .filter(Boolean)
-    .join("");
-  return reasoning || undefined;
-}
-
-function sessionDataToChatMessages(
-  data: Awaited<ReturnType<typeof readFlueAgentSession>>,
-): ChatMessage[] {
-  if (!data) return [];
-
-  const messages: ChatMessage[] = [];
-  const toolCalls = new Map<string, ChatMessage["toolCalls"][number]>();
-
-  for (const entry of data.entries) {
-    if (entry.type !== "message" || !isRecord(entry.message)) continue;
-
-    const role = entry.message.role;
-    const timestamp = Date.parse(entry.timestamp) || Date.now();
-
-    if (role === "user") {
-      messages.push({
-        id: entry.id,
-        role: "user",
-        content: stringifyContent(entry.message.content),
-        toolCalls: [],
-        isStreaming: false,
-        timestamp,
-      });
-      continue;
-    }
-
-    if (role === "assistant") {
-      const content = entry.message.content;
-      const assistantToolCalls: ChatMessage["toolCalls"] = [];
-      if (Array.isArray(content)) {
-        for (const part of content) {
-          if (!isRecord(part) || part.type !== "toolCall" || typeof part.id !== "string") continue;
-          const tool = {
-            id: part.id,
-            callId: part.id,
-            tool: typeof part.name === "string" ? part.name : "tool",
-            status: "completed" as const,
-            input: isRecord(part.arguments) ? part.arguments : {},
-            title: typeof part.name === "string" ? part.name : "tool",
-          };
-          toolCalls.set(part.id, tool);
-          assistantToolCalls.push(tool);
-        }
+    const reasoning = parts
+      .map((part) => (part.type === "reasoning" && typeof part.text === "string" ? part.text : ""))
+      .join("");
+    const toolCalls: ChatMessage["toolCalls"] = parts.flatMap((part) => {
+      if (
+        part.type !== "dynamic-tool" ||
+        typeof part.toolCallId !== "string" ||
+        typeof part.toolName !== "string"
+      ) {
+        return [];
       }
 
-      messages.push({
-        id: entry.id,
-        role: "assistant",
-        content: stringifyContent(content),
-        reasoning: stringifyReasoning(content),
-        toolCalls: assistantToolCalls,
+      const isError = part.state === "output-error";
+      return [
+        {
+          id: part.toolCallId,
+          callId: part.toolCallId,
+          tool: part.toolName,
+          status: isError ? ("error" as const) : ("completed" as const),
+          input: isRecord(part.input) ? part.input : {},
+          title: part.toolName,
+          ...(part.state === "output-available" ? { output: stringifyUnknown(part.output) } : {}),
+          ...(isError && typeof part.errorText === "string" ? { error: part.errorText } : {}),
+        },
+      ];
+    });
+    const metadata = isRecord(value.metadata) ? value.metadata : null;
+    const timestampValue =
+      metadata && typeof metadata.timestamp === "string"
+        ? Date.parse(metadata.timestamp)
+        : Number.NaN;
+
+    return [
+      {
+        id: typeof value.id === "string" ? value.id : randomUUID(),
+        role: value.role,
+        content,
+        reasoning: reasoning || undefined,
+        toolCalls,
         isStreaming: false,
-        timestamp,
-      });
-      continue;
-    }
+        timestamp: Number.isNaN(timestampValue) ? Date.now() : timestampValue,
+      },
+    ];
+  });
+}
 
-    if (role === "toolResult" && typeof entry.message.toolCallId === "string") {
-      const tool = toolCalls.get(entry.message.toolCallId);
-      if (tool) {
-        const content = stringifyContent(entry.message.content);
-        if (entry.message.isError === true) {
-          tool.status = "error";
-          tool.error = content;
-        } else {
-          tool.output = content;
-        }
-      }
-    }
+function stringifyUnknown(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
   }
-
-  return messages;
 }
 
 export const flueReviewRouter = router({
@@ -218,7 +192,7 @@ export const flueReviewRouter = router({
         if (current.activeSessionId) {
           const active = current.sessions.find((session) => session.id === current.activeSessionId);
           const flueSession = yield* flueSessions.get(current.activeSessionId);
-          if (active && active.headSha === headSha && flueSession) {
+          if (active && active.headSha === headSha && isFlueV2ReviewSession(flueSession)) {
             const prepared = yield* checkout.prepare({
               owner: pr.owner,
               repo: pr.repo,
@@ -247,7 +221,8 @@ export const flueReviewRouter = router({
             yield* flueSessions.save(updatedSession);
             yield* prContext.registerSession(flueSession.id, input.prUrl);
             yield* prContext.setSessionScope(flueSession.id, reviewScope);
-            return sessionPayload(updatedSession, current.sessions, current.activeSessionId, true);
+            const sessions = yield* visibleV2Sessions(current.sessions, flueSessions);
+            return sessionPayload(updatedSession, sessions, current.activeSessionId, true);
           }
         }
 
@@ -266,6 +241,7 @@ export const flueReviewRouter = router({
         });
 
         const session = yield* flueSessions.create({
+          runtimeVersion: 2,
           id: randomUUID(),
           prUrl: input.prUrl,
           owner: pr.owner,
@@ -285,7 +261,8 @@ export const flueReviewRouter = router({
         const prData = yield* prContext.addSession(input.prUrl, session.id, headSha);
         yield* prContext.setSessionScope(session.id, reviewScope);
 
-        return sessionPayload(session, prData.sessions, prData.activeSessionId, false);
+        const sessions = yield* visibleV2Sessions(prData.sessions, flueSessions);
+        return sessionPayload(session, sessions, prData.activeSessionId, false);
       }),
     ),
   ),
@@ -343,6 +320,7 @@ export const flueReviewRouter = router({
 
         const storeStartedAt = Date.now();
         const session = yield* flueSessions.create({
+          runtimeVersion: 2,
           id: randomUUID(),
           prUrl: input.prUrl,
           owner: pr.owner,
@@ -372,7 +350,8 @@ export const flueReviewRouter = router({
           `[flueReview.create] DONE ${input.repoOwner}/${input.repoName}#${input.prNumber} session=${session.id} total=${Date.now() - startedAt}ms`,
         );
 
-        return sessionPayload(session, prData.sessions, prData.activeSessionId, false);
+        const sessions = yield* visibleV2Sessions(prData.sessions, flueSessions);
+        return sessionPayload(session, sessions, prData.activeSessionId, false);
       }).pipe(
         Effect.withSpan("flueReview.create", {
           attributes: {
@@ -393,6 +372,13 @@ export const flueReviewRouter = router({
       runEffect(
         Effect.gen(function* () {
           const prContext = yield* PrContextService;
+          const flueSessions = yield* FlueReviewSessionService;
+          const session = yield* flueSessions.get(input.sessionId);
+          if (!isFlueV2ReviewSession(session)) {
+            return yield* Effect.fail(
+              new Error("This review belongs to the retired Flue beta runtime"),
+            );
+          }
           yield* prContext.setActiveSession(input.prUrl, input.sessionId);
           yield* prContext.registerSession(input.sessionId, input.prUrl);
           return { success: true, activeSessionId: input.sessionId };
@@ -406,19 +392,28 @@ export const flueReviewRouter = router({
       runEffect(
         Effect.gen(function* () {
           const prContext = yield* PrContextService;
+          const flueSessions = yield* FlueReviewSessionService;
           const prData = yield* prContext.hideSession(input.prUrl, input.sessionId);
+          const sessions = yield* visibleV2Sessions(prData.sessions, flueSessions);
+          const visibleSessions = sessions.filter((session) => !session.hidden);
           return {
             success: true,
-            sessions: prData.sessions.filter((session) => !session.hidden),
-            activeSessionId: prData.activeSessionId,
+            sessions: visibleSessions,
+            activeSessionId: visibleSessions.some(
+              (session) => session.id === prData.activeSessionId,
+            )
+              ? prData.activeSessionId
+              : null,
           };
         }),
       ),
     ),
 
-  messages: publicProcedure.input(z.object({ sessionId: z.string() })).query(async ({ input }) => ({
-    messages: sessionDataToChatMessages(
-      await readFlueAgentSession(flueInternalSessionId(input.sessionId)),
-    ),
-  })),
+  messages: publicProcedure.input(z.object({ sessionId: z.string() })).query(async ({ input }) => {
+    if (!isFlueV2ReviewSession(await readFlueReviewSession(input.sessionId))) {
+      return { messages: [] };
+    }
+    const history = await readFlueConversationHistory(input.sessionId);
+    return { messages: history ? conversationHistoryToChatMessages(history) : [] };
+  }),
 });

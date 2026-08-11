@@ -3,7 +3,7 @@ const COOKIE_NAME = "better_review_api_token";
 const CLIENT_ID_STORAGE_KEY = "better-review.clientId";
 
 function envToken(): string {
-  return (import.meta.env.VITE_BETTER_REVIEW_API_TOKEN ?? "").trim();
+  return (import.meta.env?.VITE_BETTER_REVIEW_API_TOKEN ?? "").trim();
 }
 
 function setApiAuthCookie(token: string): void {

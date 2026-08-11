@@ -5,6 +5,8 @@ import {
 } from "@flue/sdk";
 import { batch, createEffect, createSignal, onCleanup } from "solid-js";
 
+import { fetchWithApiAuth } from "../lib/apiAuth";
+
 export interface ToolCall {
   id: string;
   tool: string;
@@ -38,12 +40,15 @@ export interface SendMessageOptions {
 
 const flueBaseUrl =
   (import.meta.env?.VITE_FLUE_BASE_URL as string | undefined) ?? `${window.location.origin}/flue`;
-const flueClient = createFlueClient({
-  baseUrl: flueBaseUrl,
-  // Chrome/Safari can throw "Illegal invocation" if a bare window.fetch
-  // reference is called without Window as `this` through SDK indirection.
-  fetch: globalThis.fetch.bind(globalThis),
-});
+
+export type FlueConversationClient = ReturnType<typeof createFlueClient>;
+export type FlueConversationClientFactory = (sessionId: string) => FlueConversationClient;
+
+export const createConversationClient: FlueConversationClientFactory = (sessionId) =>
+  createFlueClient({
+    url: `${flueBaseUrl}/agents/pr-reviewer/${encodeURIComponent(sessionId)}`,
+    fetch: fetchWithApiAuth,
+  });
 
 export function conversationSnapshotMessages(
   snapshot: FlueConversationSnapshot,
@@ -88,7 +93,7 @@ export function conversationSnapshotMessages(
 }
 
 export async function loadConversationMessages(sessionId: string): Promise<StreamingMessage[]> {
-  return conversationSnapshotMessages(await flueClient.agents.history("pr-reviewer", sessionId));
+  return conversationSnapshotMessages(await createConversationClient(sessionId).history());
 }
 
 function stringifyValue(value: unknown): string {
@@ -106,7 +111,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function useStreamingChat(
   options: UseStreamingChatOptions,
-  client: ReturnType<typeof createFlueClient> = flueClient,
+  clientFactory: FlueConversationClientFactory = createConversationClient,
 ) {
   const [messages, setMessages] = createSignal<StreamingMessage[]>([]);
   const [isConnected, setIsConnected] = createSignal(false);
@@ -128,6 +133,7 @@ export function useStreamingChat(
   const [currentMessageId, setCurrentMessageId] = createSignal<string | null>(null);
 
   let activePromptAbort: AbortController | null = null;
+  let activeClient: FlueConversationClient | null = null;
   let activeAssistantMessageId: string | null = null;
   let isDisposed = false;
   let isConnecting = false;
@@ -154,17 +160,25 @@ export function useStreamingChat(
     });
   }
 
-  function cleanupSocket() {
+  function cleanupSocket(): FlueConversationClient | null {
+    const client = activeClient;
     activePromptAbort?.abort();
     activePromptAbort = null;
+    activeClient = null;
     activeAssistantMessageId = null;
     isConnecting = false;
+    return client;
+  }
+
+  function abortDetachedClient(client: FlueConversationClient | null) {
+    if (!client) return;
+    void client.abort().catch(() => undefined);
   }
 
   async function ensureSocket(): Promise<boolean> {
     const sessionId = options.getSessionId();
     if (!sessionId || isDisposed) {
-      cleanupSocket();
+      abortDetachedClient(cleanupSocket());
       setIsConnected(false);
       setConnectionStatus("offline");
       return false;
@@ -180,11 +194,11 @@ export function useStreamingChat(
 
   createEffect(() => {
     const sessionId = options.getSessionId();
+    abortDetachedClient(cleanupSocket());
     resetStreamingState();
     setRetryableMessage(null);
 
     if (!sessionId) {
-      cleanupSocket();
       setIsConnected(false);
       setConnectionStatus("offline");
       return;
@@ -197,7 +211,7 @@ export function useStreamingChat(
 
   onCleanup(() => {
     isDisposed = true;
-    cleanupSocket();
+    abortDetachedClient(cleanupSocket());
   });
 
   function prepareAssistantMessage(requestId: string, messageId = `assistant-${requestId}`) {
@@ -364,7 +378,10 @@ export function useStreamingChat(
 
     // Open a fresh socket for each prompt. This avoids stale dev/HMR sockets and
     // Flue sockets left in a bad protocol state after an interrupted request.
-    cleanupSocket();
+    const previousClient = cleanupSocket();
+    if (previousClient) {
+      await previousClient.abort().catch(() => undefined);
+    }
     const connected = await ensureSocket();
     if (!connected) return false;
 
@@ -388,14 +405,16 @@ export function useStreamingChat(
       setRetryableMessage(null);
     });
     const promptAbort = new AbortController();
+    const client = clientFactory(sessionId);
+    activeClient = client;
     activePromptAbort = promptAbort;
     try {
-      const sent = await client.agents.send("pr-reviewer", sessionId, {
-        message,
+      const sent = await client.send({
+        message: { kind: "user", body: message },
         signal: promptAbort.signal,
       });
 
-      await client.agents.wait(sent, {
+      await client.wait(sent, {
         signal: promptAbort.signal,
         onEvent: (event) => {
           handleFlueEvent(event, sent.submissionId);
@@ -411,6 +430,7 @@ export function useStreamingChat(
 
       finalizeMessage();
       if (activePromptAbort === promptAbort) activePromptAbort = null;
+      if (activeClient === client) activeClient = null;
       return retryableMessage() === null;
     } catch (err) {
       // Cleanup, session changes, a replacement prompt, and component disposal all
@@ -418,10 +438,12 @@ export function useStreamingChat(
       // than shared mutable state, which races with the next request.
       if (promptAbort.signal.aborted || isDisposed) {
         if (activePromptAbort === promptAbort) activePromptAbort = null;
+        if (activeClient === client) activeClient = null;
         return false;
       }
 
       if (activePromptAbort === promptAbort) activePromptAbort = null;
+      if (activeClient === client) activeClient = null;
 
       const errorMessage = err instanceof Error ? err.message : "Failed to send message";
       const details =
@@ -453,10 +475,10 @@ export function useStreamingChat(
   async function abort(): Promise<void> {
     const sessionId = options.getSessionId();
     finalizeMessage();
-    cleanupSocket();
-    if (sessionId) {
+    const client = cleanupSocket() ?? (sessionId ? clientFactory(sessionId) : null);
+    if (client) {
       try {
-        await client.agents.abort("pr-reviewer", sessionId);
+        await client.abort();
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to abort prompt";
         setError(message);

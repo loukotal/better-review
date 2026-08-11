@@ -9,8 +9,10 @@ import { promisify } from "node:util";
 
 import {
   cleanupExpiredWorktrees,
+  ensureOfflineReviewDiff,
   ensureReviewHistory,
   githubRepoRemoteUrl,
+  reviewBaseRef,
   type RepoGitQueueInfo,
   verifyWorktreeAccess,
   withRepoGitQueue,
@@ -349,15 +351,144 @@ test("ensureReviewHistory force-refreshes a non-fast-forward base ref", async ()
 
     await ensureReviewHistory(cache, input);
 
-    const refreshedBase = await git(cache, ["rev-parse", "refs/remotes/origin/develop"]);
-    const resolvedMergeBase = await git(cache, [
-      "merge-base",
-      "refs/remotes/origin/develop",
-      headSha,
-    ]);
+    const immutableBaseRef = reviewBaseRef(input);
+    const refreshedBase = await git(cache, ["rev-parse", immutableBaseRef]);
+    const resolvedMergeBase = await git(cache, ["merge-base", immutableBaseRef, headSha]);
 
     assert.equal(refreshedBase, rewrittenBaseSha);
     assert.equal(resolvedMergeBase, rewrittenBaseSha);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("review base refs stay pinned when another review uses the same base branch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-pinned-base-"));
+
+  try {
+    const source = join(root, "source");
+    const cache = join(root, "cache.git");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+
+    const firstBaseSha = await commitFile(source, "src/app.ts", "first base\n", "first base");
+    await git(source, ["checkout", "-b", "develop"]);
+    await git(source, ["checkout", "-b", "first-feature"]);
+    const firstHeadSha = await commitFile(source, "src/app.ts", "first feature\n", "first feature");
+    await git(source, ["update-ref", "refs/pull/1/head", firstHeadSha]);
+
+    await git(source, ["checkout", "develop"]);
+    const secondBaseSha = await commitFile(source, "src/app.ts", "second base\n", "second base");
+    await git(source, ["checkout", "-b", "second-feature"]);
+    const secondHeadSha = await commitFile(
+      source,
+      "src/app.ts",
+      "second feature\n",
+      "second feature",
+    );
+    await git(source, ["update-ref", "refs/pull/2/head", secondHeadSha]);
+    await git(source, ["checkout", "develop"]);
+
+    await git(root, ["init", "--bare", cache]);
+    await git(cache, ["remote", "add", "origin", source]);
+    await git(cache, ["fetch", "origin", "+refs/pull/1/head:refs/heads/pr-1"]);
+    await git(cache, ["fetch", "origin", "+refs/pull/2/head:refs/heads/pr-2"]);
+
+    const firstInput: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha: firstBaseSha,
+      headSha: firstHeadSha,
+      baseRef: "develop",
+      headRef: "first-feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/app.ts"],
+    };
+    const secondInput: PreparePrCheckoutInput = {
+      ...firstInput,
+      number: 2,
+      prUrl: "https://github.com/owner/repo/pull/2",
+      baseSha: secondBaseSha,
+      headSha: secondHeadSha,
+      headRef: "second-feature",
+    };
+
+    await ensureReviewHistory(cache, firstInput);
+    await ensureReviewHistory(cache, secondInput);
+
+    assert.equal(await git(cache, ["rev-parse", reviewBaseRef(firstInput)]), firstBaseSha);
+    assert.equal(await git(cache, ["rev-parse", reviewBaseRef(secondInput)]), secondBaseSha);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureOfflineReviewDiff hydrates partial-clone blobs before sandboxing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-offline-diff-"));
+
+  try {
+    const source = join(root, "source");
+    const cache = join(root, "cache.git");
+    const worktree = join(root, "worktree");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+    await git(source, ["config", "uploadpack.allowFilter", "true"]);
+
+    const baseSha = await commitFile(source, "src/app.ts", "base content\n", "base");
+    await git(source, ["checkout", "-b", "develop"]);
+    await git(source, ["checkout", "-b", "feature"]);
+    const headSha = await commitFile(source, "src/app.ts", "feature content\n", "feature");
+    await git(source, ["update-ref", "refs/pull/1/head", headSha]);
+    await git(source, ["checkout", "develop"]);
+
+    await git(root, ["clone", "--bare", "--filter=blob:none", `file://${source}`, cache]);
+    await git(cache, ["fetch", "origin", "+refs/pull/1/head:refs/heads/pr-1"]);
+    await git(cache, ["worktree", "add", worktree, "pr-1"]);
+
+    const input: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha,
+      headSha,
+      baseRef: "develop",
+      headRef: "feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/app.ts"],
+    };
+
+    await ensureReviewHistory(cache, input);
+    await assert.rejects(
+      execFileAsync("git", [
+        "--no-lazy-fetch",
+        "-C",
+        worktree,
+        "diff",
+        "--stat",
+        `${reviewBaseRef(input)}...HEAD`,
+      ]),
+    );
+
+    await ensureOfflineReviewDiff(cache, input);
+
+    const offlineDiff = await git(root, [
+      "--no-lazy-fetch",
+      "-C",
+      worktree,
+      "diff",
+      "--stat",
+      `${reviewBaseRef(input)}...HEAD`,
+    ]);
+    assert.match(offlineDiff, /src\/app\.ts/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

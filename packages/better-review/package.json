@@ -5,20 +5,22 @@
   "type": "module",
   "module": "src/index.ts",
   "scripts": {
+    "setup:microsandbox": "node scripts/setup-microsandbox.mjs",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "dev": "tsx watch src/index.ts",
     "start": "NODE_ENV=production tsx src/index.ts"
   },
   "dependencies": {
     "@better-review/shared": "workspace:*",
-    "@earendil-works/pi-ai": "0.80.6",
-    "@flue/runtime": "1.0.0-beta.9",
+    "@earendil-works/pi-ai": "0.83.0",
+    "@flue/runtime": "2.0.3",
     "@hono/node-server": "2.0.4",
     "@opencode-ai/sdk": "1.17.13",
     "@pierre/diffs": "1.1.22",
     "@trpc/server": "11.17.0",
     "effect": "3.21.2",
     "hono": "4.12.18",
+    "microsandbox": "0.6.7",
     "superjson": "2.2.6",
     "valibot": "^1.4.1",
     "zod": "4.4.3"

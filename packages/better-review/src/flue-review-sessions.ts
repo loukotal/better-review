@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -9,6 +10,7 @@ import { STORE_BASE_DIR, StoreService, StoreServiceLive } from "./store";
 export const FLUE_REVIEW_SESSIONS_NAMESPACE = "flue-review-sessions";
 
 export interface FlueReviewSession {
+  runtimeVersion: 2;
   id: string;
   prUrl: string;
   owner: string;
@@ -46,6 +48,27 @@ export async function readFlueReviewSession(id: string): Promise<FlueReviewSessi
     }
     throw error;
   }
+}
+
+export function readFlueReviewSessionSync(id: string): FlueReviewSession | null {
+  const safeId = validateSessionId(id);
+  const filePath = join(STORE_BASE_DIR, FLUE_REVIEW_SESSIONS_NAMESPACE, `${safeId}.json`);
+
+  try {
+    const session = JSON.parse(readFileSync(filePath, "utf8")) as Partial<FlueReviewSession>;
+    return session.runtimeVersion === 2 ? (session as FlueReviewSession) : null;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function isFlueV2ReviewSession(
+  session: FlueReviewSession | null | undefined,
+): session is FlueReviewSession {
+  return session?.runtimeVersion === 2;
 }
 
 export class FlueReviewSessionService extends Effect.Service<FlueReviewSessionService>()(

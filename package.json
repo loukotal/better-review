@@ -9,6 +9,7 @@
   "module": "index.ts",
   "scripts": {
     "ensure:dev-token": "node scripts/ensure-dev-token.mjs",
+    "setup:microsandbox": "pnpm --filter better-review setup:microsandbox",
     "wait:api": "node scripts/wait-for-api.mjs",
     "dev:api": "pnpm --filter ./packages/better-review dev",
     "dev:web": "pnpm --filter ./packages/web dev",
@@ -26,7 +27,7 @@
     "@better-review/shared": "workspace:*"
   },
   "devDependencies": {
-    "@flue/cli": "1.0.0-beta.9",
+    "@flue/cli": "2.0.3",
     "@types/node": "25.6.2",
     "concurrently": "9.2.1",
     "lefthook": "2.1.6",

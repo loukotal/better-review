@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import type { Provider } from "@earendil-works/pi-ai";
 import { findEnvKeys } from "@earendil-works/pi-ai/compat";
-import { registerProvider } from "@flue/runtime";
+import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 const PI_AUTH_PATH =
   process.env.BETTER_REVIEW_PI_AUTH_PATH ?? path.join(homedir(), ".pi", "agent", "auth.json");
@@ -72,17 +73,34 @@ function getOpenCodeAuthApiKey(provider: string): string | undefined {
   );
 }
 
-function getAuthApiKey(provider: string): string | undefined {
+export function getAuthApiKey(provider: string): string | undefined {
   return getPiAuthApiKey(provider) ?? getOpenCodeAuthApiKey(provider);
 }
 
-export function configureFlueOAuthProvidersFromPiAuth() {
-  for (const provider of PI_OAUTH_PROVIDER_IDS) {
-    const token = getAuthApiKey(provider);
-    if (token && !findEnvKeys(provider)?.length) {
-      registerProvider(provider, { apiKey: token });
-    }
-  }
+function withStoredCredential(provider: Provider, token: string): Provider {
+  return {
+    ...provider,
+    auth: {
+      apiKey: {
+        name: `${provider.name} stored credential`,
+        resolve: async () => ({
+          auth: { apiKey: token },
+          source: "Better Review credential store",
+        }),
+      },
+    },
+  };
+}
+
+export function getFlueProviders(): Provider[] {
+  return builtinProviders().map((provider) => {
+    const token = PI_OAUTH_PROVIDER_IDS.includes(provider.id)
+      ? getAuthApiKey(provider.id)
+      : undefined;
+    return token && !findEnvKeys(provider.id)?.length
+      ? withStoredCredential(provider, token)
+      : provider;
+  });
 }
 
 export function hasPiOAuthProvider(provider: string): boolean {

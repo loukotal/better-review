@@ -1,123 +1,66 @@
-import {
-  Bash,
-  createDefaultFlueApp,
-  InMemoryFs,
-  bashFactoryToSessionEnv,
-  configureFlueRuntime,
-  createFlueContext,
-  createNodeAgentCoordinator,
-  createNodeDispatchQueue,
-  resolveModel,
-  type CreateAgentContextOptions,
-  type CreateWorkflowContextOptions,
-} from "@flue/runtime/internal";
-import { sqlite } from "@flue/runtime/node";
-import type { MiddlewareHandler } from "hono";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
+
+import { sqlite, start, type Flue } from "@flue/runtime/node";
+import { createAgentRouter } from "@flue/runtime/routing";
+import { Hono } from "hono";
 
 import { STORE_BASE_DIR } from "../store";
-import { configureFlueOAuthProvidersFromPiAuth } from "./oauth-auth";
-import { prReviewerAgent } from "./pr-reviewer";
+import { cleanupOrphanedMicrosandboxes, shutdownMicrosandboxes } from "./microsandbox";
+import { getFlueProviders } from "./oauth-auth";
+import { PrReviewer } from "./pr-reviewer";
 
-configureFlueOAuthProvidersFromPiAuth();
+export const FLUE_V2_DATABASE_PATH =
+  process.env.BETTER_REVIEW_FLUE_V2_DB_PATH ?? path.join(STORE_BASE_DIR, "flue-v2.sqlite");
 
-await mkdir(STORE_BASE_DIR, { recursive: true });
-const persistence = sqlite(join(STORE_BASE_DIR, "flue.sqlite"));
-await persistence.migrate?.();
-const stores = await persistence.connect();
+let runtime: Flue | null = null;
+let starting: Promise<Flue> | null = null;
 
-const exposeOverHttp: MiddlewareHandler = async (_context, next) => next();
-const agents = [
-  {
-    name: "pr-reviewer",
-    definition: prReviewerAgent,
-    route: exposeOverHttp,
-  },
-];
-
-const createDefaultEnv = async () => {
-  const fs = new InMemoryFs();
-  return bashFactoryToSessionEnv(
-    () =>
-      new Bash({
-        fs,
-        network: { dangerouslyAllowFullInternetAccess: true },
-      }),
-  );
-};
-
-const createContext = ({
-  id,
-  agentName,
-  request,
-  initialEventIndex,
-  dispatchId,
-}: CreateAgentContextOptions) =>
-  createFlueContext({
-    id,
-    agentName,
-    dispatchId,
-    env: process.env,
-    agentConfig: {
-      resolveModel,
-    },
-    createDefaultEnv,
-    req: request,
-    initialEventIndex,
-    attachmentStore: stores.attachmentStore,
-  });
-
-const createWorkflowContext = ({
-  runId,
-  request,
-  initialEventIndex,
-}: CreateWorkflowContextOptions) =>
-  createFlueContext({
-    id: runId,
-    runId,
-    env: process.env,
-    agentConfig: { resolveModel },
-    createDefaultEnv,
-    req: request,
-    initialEventIndex,
-    attachmentStore: stores.attachmentStore,
-  });
-
-const coordinator = createNodeAgentCoordinator({
-  submissions: stores.executionStore.submissions,
-  agents,
-  createContext,
-  conversationStreamStore: stores.conversationStreamStore,
-  attachmentStore: stores.attachmentStore,
-});
-
-await coordinator.reconcileSubmissions();
-
-let configured = false;
-
-export function createFlueReviewApp() {
-  if (!configured) {
-    configureFlueRuntime({
-      target: "node",
-      agents,
-      workflows: [],
-      createWorkflowContext,
-      createAgentAdmission: (agentName, instanceId) =>
-        coordinator.createAdmission(agentName, instanceId),
-      abortAgentInstance: (agentName, instanceId) =>
-        coordinator.abortInstance(agentName, instanceId),
-      admitWorkflow: async ({ workflowName }) => {
-        throw new Error(`Unknown workflow: ${workflowName}`);
-      },
-      runStore: stores.runStore,
-      eventStreamStore: stores.eventStreamStore,
-      conversationStreamStore: stores.conversationStreamStore,
-      attachmentStore: stores.attachmentStore,
-      dispatchQueue: createNodeDispatchQueue(coordinator),
-    });
-    configured = true;
+export async function startFlueReviewRuntime(): Promise<void> {
+  if (runtime) return;
+  if (!starting) {
+    starting = (async () => {
+      mkdirSync(path.dirname(FLUE_V2_DATABASE_PATH), { recursive: true });
+      await cleanupOrphanedMicrosandboxes();
+      return start({
+        agents: [{ agent: PrReviewer, name: "pr-reviewer" }],
+        db: sqlite(FLUE_V2_DATABASE_PATH),
+        env: process.env,
+        providers: getFlueProviders(),
+      });
+    })();
   }
 
-  return createDefaultFlueApp();
+  try {
+    runtime = await starting;
+  } finally {
+    starting = null;
+  }
+}
+
+export async function stopFlueReviewRuntime(): Promise<void> {
+  const active = runtime;
+  runtime = null;
+  await Promise.allSettled([active?.stop(), shutdownMicrosandboxes()]);
+}
+
+export function createFlueReviewApp(): Hono {
+  const app = new Hono();
+  app.route("/agents/pr-reviewer", createAgentRouter(PrReviewer));
+  return app;
+}
+
+export async function readFlueConversationHistory(instanceId: string): Promise<unknown | null> {
+  const response = await createFlueReviewApp().request(
+    `http://localhost/agents/pr-reviewer/${encodeURIComponent(instanceId)}`,
+  );
+
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Failed to read Flue conversation history: HTTP ${response.status}`);
+  }
+
+  return response.json();
 }
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
