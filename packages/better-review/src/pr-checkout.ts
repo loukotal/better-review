@@ -378,23 +378,37 @@ async function ensureBaseRef(repoGitDir: string, input: PreparePrCheckoutInput):
   }
 }
 
-async function fetchPullHeadBranch(
+export async function fetchPullHeadBranch(
   repoGitDir: string,
   input: PreparePrCheckoutInput,
   localBranch: string,
 ): Promise<void> {
-  if (await refMatchesCommit(repoGitDir, `refs/heads/${localBranch}`, input.headSha)) {
+  const localBranchRef = `refs/heads/${localBranch}`;
+  if (await refMatchesCommit(repoGitDir, localBranchRef, input.headSha)) {
     return;
   }
 
-  await runGit(repoGitDir, [
-    "fetch",
-    "--no-tags",
-    "--filter=blob:none",
-    "--depth=1",
-    "origin",
-    `+${pullHeadRef(input)}:refs/heads/${localBranch}`,
-  ]);
+  if (await refMatchesCommit(repoGitDir, input.headSha, input.headSha)) {
+    // History preparation may already have hydrated this exact head. Point the
+    // worktree branch at the recorded commit without a depth-limited fetch,
+    // which would mark the commit as shallow again and hide its merge base.
+    await runGit(repoGitDir, ["update-ref", localBranchRef, input.headSha]);
+  } else {
+    await runGit(repoGitDir, [
+      "fetch",
+      "--no-tags",
+      "--filter=blob:none",
+      "--depth=1",
+      "origin",
+      `+${pullHeadRef(input)}:${localBranchRef}`,
+    ]);
+  }
+
+  if (!(await refMatchesCommit(repoGitDir, localBranchRef, input.headSha))) {
+    throw new Error(
+      `Fetched PR head ${localBranchRef} does not match recorded head ${input.headSha}. Reload the PR before preparing its checkout.`,
+    );
+  }
 }
 
 async function hasMergeBase(repoGitDir: string, input: PreparePrCheckoutInput): Promise<boolean> {
@@ -1010,6 +1024,9 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
             await traceCheckoutPhase(trace, startedAt, "ensureBaseRef", () =>
               ensureBaseRef(repoGitDir, input),
             );
+            await traceCheckoutPhase(trace, startedAt, "fetchPullHeadBranch", () =>
+              fetchPullHeadBranch(repoGitDir, input, localBranch),
+            );
             await traceCheckoutPhase(trace, startedAt, "ensureReviewHistory", () =>
               ensureReviewHistory(repoGitDir, input),
             );
@@ -1058,12 +1075,6 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
               return { worktreePath, repoAccess };
             }
 
-            await traceCheckoutPhase(trace, startedAt, "fetchPullHeadBranch", () =>
-              fetchPullHeadBranch(repoGitDir, input, localBranch),
-            );
-            await traceCheckoutPhase(trace, startedAt, "verifyHeadCommit", () =>
-              runGit(repoGitDir, ["rev-parse", "--verify", `${input.headSha}^{commit}`]),
-            );
             await traceCheckoutPhase(trace, startedAt, "createWorktreeParent", () =>
               mkdir(join(worktreePath, ".."), { recursive: true }),
             );

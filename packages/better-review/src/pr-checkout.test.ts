@@ -11,6 +11,7 @@ import {
   cleanupExpiredWorktrees,
   ensureOfflineReviewDiff,
   ensureReviewHistory,
+  fetchPullHeadBranch,
   githubRepoRemoteUrl,
   reviewBaseRef,
   type RepoGitQueueInfo,
@@ -357,6 +358,53 @@ test("ensureReviewHistory force-refreshes a non-fast-forward base ref", async ()
 
     assert.equal(refreshedBase, rewrittenBaseSha);
     assert.equal(resolvedMergeBase, rewrittenBaseSha);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("fetchPullHeadBranch preserves review history hydrated before worktree creation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-pr-branch-history-"));
+
+  try {
+    const source = join(root, "source");
+    const cache = join(root, "cache.git");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+
+    const baseSha = await commitFile(source, "src/app.ts", "base\n", "base");
+    await git(source, ["checkout", "-b", "feature"]);
+    const headSha = await commitFile(source, "src/app.ts", "feature\n", "feature");
+    await git(source, ["update-ref", "refs/pull/1/head", headSha]);
+
+    await git(root, ["init", "--bare", cache]);
+    await git(cache, ["remote", "add", "origin", source]);
+    await git(cache, ["fetch", "--depth=1", "origin", "refs/pull/1/head"]);
+
+    const input: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha,
+      headSha,
+      baseRef: "main",
+      headRef: "feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/app.ts"],
+    };
+
+    await ensureReviewHistory(cache, input);
+    assert.equal(await git(cache, ["merge-base", reviewBaseRef(input), headSha]), baseSha);
+
+    const localBranch = `pr-1-feature-${headSha.slice(0, 12)}`;
+    await fetchPullHeadBranch(cache, input, localBranch);
+
+    assert.equal(await git(cache, ["rev-parse", `refs/heads/${localBranch}`]), headSha);
+    assert.equal(await git(cache, ["merge-base", reviewBaseRef(input), headSha]), baseSha);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

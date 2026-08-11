@@ -37,6 +37,11 @@ import {
   escapeHtmlText,
   normalizeMalformedInlineCode,
 } from "./lib/markdown";
+import {
+  ADVERSARIAL_REVIEW_PROMPT,
+  buildReviewPrompt,
+  STRUCTURED_REVIEW_PROMPT,
+} from "./lib/review-prompts";
 import { highlightCode, clearHighlightCache } from "./lib/shiki";
 import { trpc } from "./lib/trpc";
 import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
@@ -66,62 +71,7 @@ const CHAT_WIDTH_KEY = "chat-panel-width";
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 600;
-const STRUCTURED_REVIEW_PROMPT =
-  "Please analyze this PR and provide a structured review with file order and annotations.";
-const ADVERSARIAL_REVIEW_PROMPT = `Please run an adversarial code review of this PR.
-
-Use the Adversarial Code Reviewer workflow:
-
-1. Gather the PR changes using the app-provided changed-file list and the canonical PR diff from your system instructions.
-2. Read full context for every changed file, not just changed lines.
-3. Identify the purpose of the change: bug fix, new feature, refactor, config change, or test.
-4. Note project conventions from CLAUDE.md, .editorconfig, linting configs, tests, and nearby code patterns.
-5. Run all three reviewer personas sequentially. Each persona must produce at least one substantive finding or the most fragile assumption it relies on.
-
-Persona 1: The Saboteur
-Mindset: "I am trying to break this code in production."
-Focus on unvalidated input, inconsistent state, concurrency issues, swallowed errors, bad assumptions about data format or availability, null/undefined dereferences, off-by-one errors, and resource leaks.
-
-Persona 2: The New Hire
-Mindset: "I just joined this team. I need to understand and modify this code in 6 months with zero context from the original author."
-Focus on unclear names, logic that requires too much file-hopping, magic strings or numbers, functions doing too much, missing type information, inconsistency with local patterns, weak tests, and comments that explain what instead of why.
-
-Persona 3: The Security Auditor
-Mindset: "This code will be attacked. My job is to find the vulnerability before an attacker does."
-Focus on injection, broken auth, data exposure, insecure defaults, missing access control, dependency risk, and secrets in code, config, logs, or comments.
-
-Severity classification:
-- CRITICAL: Will cause data loss, security breach, or production outage. Blocks merge.
-- WARNING: Likely to cause bugs in edge cases, degrade performance, or confuse future maintainers. Should fix before merge.
-- NOTE: Style issue, minor improvement opportunity, or documentation gap.
-- Promote any finding caught by 2+ personas by one severity level.
-
-Anti-patterns to avoid:
-- Do not say "LGTM, no issues found."
-- Do not report only cosmetic issues while missing substantive risk.
-- Do not restate the diff as a finding.
-- Do not review only changed lines.
-- New code without meaningful tests is a finding unless the surrounding project clearly does not test comparable behavior.
-
-Output format:
-## Adversarial Review: [brief description of what was reviewed]
-
-**Scope:** [files reviewed, lines changed, type of change]
-**Verdict:** BLOCK / CONCERNS / CLEAN
-
-### Critical Findings
-[If any; these block merge.]
-
-### Warnings
-[Should-fix items.]
-
-### Notes
-[Nice-to-fix items.]
-
-### Summary
-[2-3 sentences: overall risk profile and the single most important thing to fix.]
-
-Use concrete file and line references. Use the app's annotation tokens for actionable findings when appropriate.`;
+const STE100_STORAGE_KEY = "better-review:use-ste100";
 
 function loadSavedWidth(): number {
   try {
@@ -138,6 +88,14 @@ function loadSavedWidth(): number {
   return DEFAULT_WIDTH;
 }
 
+function loadSte100Preference(): boolean {
+  try {
+    return localStorage.getItem(STE100_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 export function ChatPanel(props: ChatPanelProps) {
   const [input, setInput] = createSignal("");
   const [sessionId, setSessionId] = createSignal<string | null>(null);
@@ -146,6 +104,7 @@ export function ChatPanel(props: ChatPanelProps) {
   const [scopeSessionKey, setScopeSessionKey] = createSignal<string | null>(null);
   const [switchingCommitSession, setSwitchingCommitSession] = createSignal(false);
   const [creatingNewSession, setCreatingNewSession] = createSignal(false);
+  const [useSte100, setUseSte100] = createSignal(loadSte100Preference());
 
   // Session management state
   const [sessions, setSessions] = createSignal<StoredSession[]>([]);
@@ -338,13 +297,23 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   function startReview() {
-    void submitMessage(STRUCTURED_REVIEW_PROMPT);
+    void submitMessage(buildReviewPrompt(STRUCTURED_REVIEW_PROMPT, useSte100()));
   }
 
   async function startAdversarialReview() {
     const created = await handleNewSession();
     if (created) {
-      await submitMessage(ADVERSARIAL_REVIEW_PROMPT);
+      await submitMessage(buildReviewPrompt(ADVERSARIAL_REVIEW_PROMPT, useSte100()));
+    }
+  }
+
+  function toggleSte100() {
+    const enabled = !useSte100();
+    setUseSte100(enabled);
+    try {
+      localStorage.setItem(STE100_STORAGE_KEY, String(enabled));
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
     }
   }
 
@@ -1030,11 +999,36 @@ export function ChatPanel(props: ChatPanelProps) {
                 </Show>
               </button>
             </div>
-            <ModelSelector
-              align="right"
-              disabled={chat.isStreaming() || initializing() || creatingNewSession()}
-              class="shrink-0"
-            />
+            <div class="flex items-center gap-1.5 self-end shrink-0">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={useSte100()}
+                onClick={toggleSte100}
+                disabled={chat.isStreaming() || initializing() || creatingNewSession()}
+                class="inline-flex items-center gap-1.5 px-1.5 py-0.5 font-mono text-xs text-text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+                title="Use ASD-STE100 Simplified Technical English for reviews"
+              >
+                <span
+                  aria-hidden="true"
+                  class={`flex h-3.5 w-6 items-center border px-0.5 transition-colors ${
+                    useSte100() ? "border-accent bg-accent/20" : "border-border bg-bg"
+                  }`}
+                >
+                  <span
+                    class={`size-2.5 bg-text-faint transition-transform ${
+                      useSte100() ? "translate-x-2.5 bg-accent" : "translate-x-0"
+                    }`}
+                  />
+                </span>
+                <span>STE100</span>
+              </button>
+              <ModelSelector
+                align="right"
+                disabled={chat.isStreaming() || initializing() || creatingNewSession()}
+                class="shrink-0"
+              />
+            </div>
           </div>
         </Show>
       </div>
