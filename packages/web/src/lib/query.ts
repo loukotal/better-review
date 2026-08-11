@@ -71,6 +71,7 @@ export const queryKeys = {
     info: (url: string) => ["pr", "info", url] as const,
     commits: (url: string) => ["pr", "commits", url] as const,
     commitDiff: (url: string, sha: string) => ["pr", "commitDiff", url, sha] as const,
+    readingDiff: (url: string, sha?: string) => ["pr", "readingDiff", url, sha ?? "full"] as const,
     commitDiffsBatch: (url: string) => ["pr", "commitDiffsBatch", url] as const,
     comments: (url: string) => ["pr", "comments", url] as const,
     issueComments: (url: string) => ["pr", "issueComments", url] as const,
@@ -130,6 +131,10 @@ export const api = {
   async fetchCommitDiff(url: string, sha: string, _signal?: AbortSignal): Promise<string> {
     const result = await trpc.pr.commitDiff.query({ url, sha });
     return result.diff;
+  },
+
+  async generateReadingDiff(url: string, sha?: string, force = false) {
+    return await trpc.pr.readingDiff.mutate({ url, sha, force });
   },
 
   async fetchComments(url: string, _signal?: AbortSignal): Promise<PRComment[]> {
@@ -290,6 +295,8 @@ export const api = {
     };
   },
 };
+
+export type ReadingDiffResult = Awaited<ReturnType<typeof api.generateReadingDiff>>;
 
 // Prefetch a full PR using batch endpoint (single request)
 export async function prefetchPr(url: string): Promise<void> {

@@ -1,8 +1,11 @@
+import { parsePatchFiles } from "@pierre/diffs";
 import { Effect } from "effect";
 import { z } from "zod";
 
 import { filterDiffByLineRange, isDiffCommentTargetInPatch } from "../../diff";
 import { GhService } from "../../gh/gh";
+import { PrCheckoutService } from "../../pr-checkout";
+import { getOrGenerateReadingDiff } from "../../reading-diff";
 import { DiffCacheService, PrContextService } from "../../state";
 import { router, publicProcedure, runEffect } from "../index";
 
@@ -56,6 +59,69 @@ export const prRouter = router({
           const { owner, repo } = yield* gh.getPrInfo(input.url);
           const diff = yield* gh.getCommitDiff({ owner, repo, sha: input.sha });
           return { diff, sha: input.sha };
+        }),
+      ),
+    ),
+
+  readingDiff: publicProcedure
+    .input(
+      z.object({
+        url: z.string(),
+        sha: z.string().min(7).max(64).optional(),
+        force: z.boolean().optional(),
+      }),
+    )
+    .mutation(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const gh = yield* GhService;
+          const checkout = yield* PrCheckoutService;
+          const pr = yield* gh.getPrInfo(input.url);
+          const [headSha, baseSha, headRef, baseRef] = yield* Effect.all(
+            [
+              gh.getHeadSha(input.url),
+              gh.getBaseSha(input.url),
+              gh.getHeadRef(input.url),
+              gh.getBaseRef(input.url),
+            ],
+            { concurrency: "unbounded" },
+          );
+          let diff: string;
+          if (input.sha) {
+            diff = yield* gh.getCommitDiff({ owner: pr.owner, repo: pr.repo, sha: input.sha });
+          } else {
+            diff = yield* gh.getDiff(input.url);
+          }
+          const files = parsePatchFiles(diff)
+            .flatMap((patch) => patch.files)
+            .map((file) => file.name);
+
+          return yield* Effect.tryPromise({
+            try: () =>
+              getOrGenerateReadingDiff(diff, {
+                force: input.force,
+                sourceHeadSha: input.sha ?? headSha,
+                prepareRepository: async () => {
+                  const prepared = await Effect.runPromise(
+                    checkout.prepare({
+                      owner: pr.owner,
+                      repo: pr.repo,
+                      number: Number(pr.number),
+                      prUrl: input.url,
+                      baseSha,
+                      headSha,
+                      baseRef,
+                      headRef,
+                      reviewMode: input.sha ? "commit" : "full",
+                      commitSha: input.sha ?? null,
+                      files,
+                    }),
+                  );
+                  return prepared.worktreePath;
+                },
+              }),
+            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          });
         }),
       ),
     ),

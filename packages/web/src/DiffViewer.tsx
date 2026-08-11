@@ -53,6 +53,8 @@ interface Props {
   /** Scroll container used by the line virtualizer. */
   scrollContainer?: HTMLElement;
   onSearchNavigate?: (fileName: string, line?: number, side?: "LEFT" | "RIGHT") => void;
+  /** Reading diffs are source-derived navigation aids, not commentable patches. */
+  readOnly?: boolean;
 }
 
 export function DiffViewer(props: Props) {
@@ -313,6 +315,7 @@ export function DiffViewer(props: Props) {
                   activeSearchMatch={
                     activeSearchMatch()?.line === undefined ? undefined : activeSearchMatch()
                   }
+                  readOnly={props.readOnly}
                 />
               </div>
             );

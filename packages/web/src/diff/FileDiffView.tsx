@@ -67,6 +67,7 @@ interface FileDiffViewProps {
   virtualizer: Virtualizer;
   scrollContainer?: HTMLElement;
   activeSearchMatch?: { line: number; side: "LEFT" | "RIGHT"; query: string };
+  readOnly?: boolean;
 }
 
 // Group comments into threads by their root comment
@@ -257,7 +258,7 @@ export function FileDiffView(props: FileDiffViewProps) {
   // Re-render when settings change
   createEffect(
     on(
-      () => ({ ...props.settings }),
+      () => ({ ...props.settings, readOnly: props.readOnly }),
       () => {
         if (instance && _containerRef) {
           // Clean up and recreate with new settings
@@ -623,11 +624,12 @@ export function FileDiffView(props: FileDiffViewProps) {
         diffStyle: props.settings.diffStyle,
         theme: props.settings.theme,
         lineDiffType: props.settings.lineDiffType,
-        hunkSeparators: renderHunkSeparator,
+        hunkSeparators: props.readOnly ? undefined : renderHunkSeparator,
         disableFileHeader: true,
-        enableLineSelection: true,
+        enableLineSelection: !props.readOnly,
         unsafeCSS: getCustomCSS(),
         onLineSelectionEnd: (range: SelectedLineRange | null) => {
+          if (props.readOnly) return;
           if (range && range.start && range.end) {
             // Clear any existing text selection so it doesn't block future interactions
             window.getSelection()?.removeAllRanges();

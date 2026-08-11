@@ -16,8 +16,10 @@ import type { PrStatus, PrInfo } from "@better-review/shared";
 import { ChatPanel } from "./ChatPanel";
 import { ApproveButton } from "./components/ApproveButton";
 import { CommitNavigator } from "./components/CommitNavigator";
+import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
+import { ReadingDiffEmpty, ReadingDiffSummary } from "./components/ReadingDiffState";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { PrProvider, usePrContext } from "./context/PrContext";
@@ -47,6 +49,7 @@ import {
   getAnnotations,
   addAnnotations as queryAddAnnotations,
   removeAnnotation as queryRemoveAnnotation,
+  type ReadingDiffResult,
 } from "./lib/query";
 import { uiTheme } from "./lib/theme";
 import { trpc } from "./lib/trpc";
@@ -138,6 +141,10 @@ const AppContent: Component = () => {
   const [loading, setLoading] = createSignal(false);
   const [loadingComments, setLoadingComments] = createSignal(false);
   const [diff, setDiff] = createSignal<string | null>(null);
+  const [diffViewMode, setDiffViewMode] = createSignal<DiffViewMode>("original");
+  const [readingDiffs, setReadingDiffs] = createSignal(new Map<string, ReadingDiffResult>());
+  const [readingDiffLoadingKeys, setReadingDiffLoadingKeys] = createSignal(new Set<string>());
+  const [readingDiffErrors, setReadingDiffErrors] = createSignal(new Map<string, string>());
   const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
   const [comments, setComments] = createSignal<PRComment[]>([]);
   const [issueComments, setIssueComments] = createSignal<IssueComment[]>([]);
@@ -206,6 +213,36 @@ const AppContent: Component = () => {
   const activeDiff = createMemo(() => {
     return reviewMode() === "full" ? diff() : commitDiff();
   });
+
+  const currentCommitSha = createMemo(() =>
+    reviewMode() === "commit" ? (commits()[currentCommitIndex()]?.sha ?? null) : null,
+  );
+
+  const readingDiffScopeKey = createMemo(() => {
+    const url = loadedPrUrl();
+    if (!url) return null;
+    const sha = currentCommitSha();
+    return sha ? `${url}#${sha}` : `${url}#full`;
+  });
+
+  const currentReadingDiff = createMemo(() => {
+    const key = readingDiffScopeKey();
+    return key ? (readingDiffs().get(key) ?? null) : null;
+  });
+
+  const readingDiffLoading = createMemo(() => {
+    const key = readingDiffScopeKey();
+    return key ? readingDiffLoadingKeys().has(key) : false;
+  });
+
+  const readingDiffError = createMemo(() => {
+    const key = readingDiffScopeKey();
+    return key ? (readingDiffErrors().get(key) ?? null) : null;
+  });
+
+  const readingDiffScopeLabel = createMemo(() =>
+    reviewMode() === "commit" ? "selected commit" : "full pull request",
+  );
 
   // File names for the chat panel
   const fileNames = createMemo(() => files().map((f) => f.name));
@@ -371,6 +408,33 @@ const AppContent: Component = () => {
     }
   };
 
+  const generateReadingDiff = async (force = false) => {
+    const url = loadedPrUrl();
+    const key = readingDiffScopeKey();
+    if (!url || !key || !activeDiff() || readingDiffLoadingKeys().has(key)) return;
+
+    setReadingDiffLoadingKeys((current) => new Set(current).add(key));
+    setReadingDiffErrors((current) => {
+      const next = new Map(current);
+      next.delete(key);
+      return next;
+    });
+
+    try {
+      const result = await api.generateReadingDiff(url, currentCommitSha() ?? undefined, force);
+      setReadingDiffs((current) => new Map(current).set(key, result));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to generate reading diff";
+      setReadingDiffErrors((current) => new Map(current).set(key, message));
+    } finally {
+      setReadingDiffLoadingKeys((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
   // Keyboard shortcut for focus mode
   onMount(() => {
     const handler = (e: KeyboardEvent) => {
@@ -516,6 +580,10 @@ const AppContent: Component = () => {
     setError(null);
     // Reset commit mode state
     setReviewMode("full");
+    setDiffViewMode("original");
+    setReadingDiffs(new Map());
+    setReadingDiffLoadingKeys(new Set<string>());
+    setReadingDiffErrors(new Map());
     setCurrentCommitIndex(0);
     setCommitDiff(null);
 
@@ -931,6 +999,11 @@ const AppContent: Component = () => {
                   commitCount={commits().length}
                   disabled={loading()}
                 />
+                <DiffViewToggle
+                  mode={diffViewMode()}
+                  onModeChange={setDiffViewMode}
+                  disabled={loading() || loadingCommits()}
+                />
                 <ApproveButton />
               </div>
             </div>
@@ -1049,6 +1122,23 @@ const AppContent: Component = () => {
                   </Show>
                 }
               >
+                <Show when={diffViewMode() === "reading" && !currentReadingDiff()}>
+                  <ReadingDiffEmpty
+                    loading={readingDiffLoading()}
+                    error={readingDiffError()}
+                    scopeLabel={readingDiffScopeLabel()}
+                    onGenerate={() => generateReadingDiff(false)}
+                  />
+                </Show>
+                <Show when={diffViewMode() === "reading" && currentReadingDiff()}>
+                  <ReadingDiffSummary
+                    result={currentReadingDiff()!}
+                    regenerating={readingDiffLoading()}
+                    error={readingDiffError()}
+                    onRegenerate={() => generateReadingDiff(true)}
+                    onNavigateEvidence={scrollToFile}
+                  />
+                </Show>
                 <DiffViewer
                   rawDiff={activeDiff()!}
                   comments={reviewCommentsHidden() ? [] : comments()}
