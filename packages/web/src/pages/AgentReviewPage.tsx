@@ -50,6 +50,193 @@ function normalizeSelectedText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+interface TextOffsetRange {
+  startOffset: number;
+  endOffset: number;
+}
+
+interface IndexedTextNode {
+  node: Text;
+  start: number;
+  end: number;
+}
+
+function collectAnnotationTextNodes(root: HTMLElement): IndexedTextNode[] {
+  const nodes: IndexedTextNode[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    if (node.parentElement?.closest("[data-review-annotation-comment]")) continue;
+    const end = offset + node.data.length;
+    nodes.push({ node, start: offset, end });
+    offset = end;
+  }
+
+  return nodes;
+}
+
+function getSelectionOffsets(root: HTMLElement, range: Range): TextOffsetRange | null {
+  if (range.startContainer.nodeType !== Node.TEXT_NODE) return null;
+  if (range.endContainer.nodeType !== Node.TEXT_NODE) return null;
+
+  let startOffset: number | null = null;
+  let endOffset: number | null = null;
+
+  for (const entry of collectAnnotationTextNodes(root)) {
+    if (entry.node === range.startContainer) {
+      startOffset = entry.start + range.startOffset;
+    }
+    if (entry.node === range.endContainer) {
+      endOffset = entry.start + range.endOffset;
+    }
+  }
+
+  if (startOffset === null || endOffset === null || endOffset <= startOffset) return null;
+  return { startOffset, endOffset };
+}
+
+function findQuoteOffsets(text: string, quote: string): TextOffsetRange | null {
+  const normalizedQuote = normalizeSelectedText(quote);
+  if (!normalizedQuote) return null;
+
+  let normalizedText = "";
+  const starts: number[] = [];
+  const ends: number[] = [];
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index] ?? "";
+    if (/\s/.test(character)) {
+      if (normalizedText.length === 0) continue;
+      if (normalizedText.endsWith(" ")) {
+        ends[ends.length - 1] = index + 1;
+      } else {
+        normalizedText += " ";
+        starts.push(index);
+        ends.push(index + 1);
+      }
+      continue;
+    }
+
+    normalizedText += character;
+    starts.push(index);
+    ends.push(index + 1);
+  }
+
+  if (normalizedText.endsWith(" ")) {
+    normalizedText = normalizedText.slice(0, -1);
+    starts.pop();
+    ends.pop();
+  }
+
+  const normalizedStart = normalizedText.indexOf(normalizedQuote);
+  if (normalizedStart < 0) return null;
+  const normalizedEnd = normalizedStart + normalizedQuote.length - 1;
+
+  return {
+    startOffset: starts[normalizedStart] ?? 0,
+    endOffset: ends[normalizedEnd] ?? text.length,
+  };
+}
+
+function renderInlineAnnotations(
+  root: HTMLElement,
+  html: string,
+  annotations: ReviewSessionAnnotation[],
+): void {
+  root.innerHTML = html;
+  const rootText = root.textContent ?? "";
+
+  const resolved = annotations
+    .filter((annotation) => !annotation.filePath && annotation.kind !== "file")
+    .map((annotation) => {
+      const storedOffsets =
+        annotation.startOffset !== undefined &&
+        annotation.endOffset !== undefined &&
+        annotation.startOffset >= 0 &&
+        annotation.endOffset > annotation.startOffset &&
+        annotation.endOffset <= rootText.length
+          ? { startOffset: annotation.startOffset, endOffset: annotation.endOffset }
+          : null;
+
+      return {
+        annotation,
+        offsets: storedOffsets ?? findQuoteOffsets(rootText, annotation.quote),
+      };
+    })
+    .filter(
+      (item): item is { annotation: ReviewSessionAnnotation; offsets: TextOffsetRange } =>
+        item.offsets !== null,
+    )
+    .sort((a, b) => b.offsets.startOffset - a.offsets.startOffset);
+
+  for (const { annotation, offsets } of resolved) {
+    const textNodes = collectAnnotationTextNodes(root);
+    const overlaps = textNodes.filter(
+      (entry) => entry.end > offsets.startOffset && entry.start < offsets.endOffset,
+    );
+    const endEntry = overlaps.at(-1);
+    const anchor = endEntry?.node.parentElement?.closest<HTMLElement>(
+      "p, li, pre, blockquote, h1, h2, h3, h4, h5, h6",
+    );
+
+    for (const entry of overlaps.reverse()) {
+      const localStart = Math.max(0, offsets.startOffset - entry.start);
+      const localEnd = Math.min(entry.node.data.length, offsets.endOffset - entry.start);
+      if (localEnd <= localStart) continue;
+
+      const highlightRange = document.createRange();
+      highlightRange.setStart(entry.node, localStart);
+      highlightRange.setEnd(entry.node, localEnd);
+      const mark = document.createElement("mark");
+      mark.className = "review-annotation-highlight";
+      mark.dataset.reviewAnnotationId = annotation.id;
+      highlightRange.surroundContents(mark);
+    }
+
+    if (!anchor) continue;
+
+    let thread: HTMLElement | null = null;
+    if (anchor.tagName === "LI") {
+      thread =
+        (Array.from(anchor.children).find((child) =>
+          child.classList.contains("review-annotation-thread"),
+        ) as HTMLElement | undefined) ?? null;
+      if (!thread) {
+        thread = document.createElement("div");
+        thread.className = "review-annotation-thread";
+        anchor.append(thread);
+      }
+    } else {
+      const sibling = anchor.nextElementSibling;
+      if (sibling?.classList.contains("review-annotation-thread")) {
+        thread = sibling as HTMLElement;
+      } else {
+        thread = document.createElement("div");
+        thread.className = "review-annotation-thread";
+        anchor.after(thread);
+      }
+    }
+
+    const note = document.createElement("button");
+    note.type = "button";
+    note.className = "review-annotation-note";
+    note.dataset.reviewAnnotationComment = "";
+    note.dataset.reviewAnnotationId = annotation.id;
+    note.title = "Show annotation in review panel";
+
+    const label = document.createElement("span");
+    label.className = "review-annotation-label";
+    label.textContent = "Review note";
+    const comment = document.createElement("span");
+    comment.className = "review-annotation-comment";
+    comment.textContent = annotation.comment;
+    note.append(label, comment);
+    thread.append(note);
+  }
+}
+
 function statusVariant(
   status: ReviewSession["status"],
 ): "accent" | "success" | "warning" | "neutral" {
@@ -167,7 +354,11 @@ export default function AgentReviewPage() {
   const [composerPosition, setComposerPosition] = createSignal<FloatingComposerPosition | null>(
     null,
   );
+  const [selectionActionPosition, setSelectionActionPosition] =
+    createSignal<FloatingComposerPosition | null>(null);
+  const [draftOffsets, setDraftOffsets] = createSignal<TextOffsetRange | null>(null);
   const [annotations, setAnnotations] = createSignal<ReviewSessionAnnotation[]>([]);
+  const [annotationsHidden, setAnnotationsHidden] = createSignal(false);
   const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
   const [submitting, setSubmitting] = createSignal(false);
@@ -185,7 +376,8 @@ export default function AgentReviewPage() {
     side?: "LEFT" | "RIGHT";
   } | null>(null);
   let contentRef: HTMLDivElement | undefined;
-  let composerRef: HTMLDivElement | undefined;
+  let markdownRef: HTMLDivElement | undefined;
+  let composerRef: HTMLElement | undefined;
   let composerTextareaRef: HTMLTextAreaElement | undefined;
 
   const [session, { refetch: refetchSession }] = createResource(async () =>
@@ -232,6 +424,14 @@ export default function AgentReviewPage() {
     const value = session();
     if (!value || value.payload.kind === "diff") return "";
     return parseMarkdown(value.payload.content ?? "");
+  });
+
+  createEffect(() => {
+    const html = renderedContent();
+    const visibleAnnotations = annotationsHidden() ? [] : (result()?.annotations ?? annotations());
+    const root = markdownRef;
+    if (!root) return;
+    renderInlineAnnotations(root, html, visibleAnnotations);
   });
 
   const isDiffSession = createMemo(() => session()?.payload.kind === "diff");
@@ -400,13 +600,15 @@ export default function AgentReviewPage() {
     setAnnotationComment("");
     setComposerOpen(false);
     setComposerPosition(null);
+    setSelectionActionPosition(null);
+    setDraftOffsets(null);
     if (clearSelection) {
       window.getSelection()?.removeAllRanges();
     }
   };
 
   const updateComposerFromSelection = () => {
-    const root = contentRef;
+    const root = markdownRef;
     if (!root) return;
 
     const selection = window.getSelection();
@@ -439,15 +641,23 @@ export default function AgentReviewPage() {
     );
 
     setDraftQuote(selected);
-    setComposerOpen(true);
+    setDraftOffsets(getSelectionOffsets(root, range));
+    setComposerOpen(false);
     setComposerPosition({
       top: nextTop,
       left: nextLeft,
     });
-
-    queueMicrotask(() => {
-      composerTextareaRef?.focus();
+    setSelectionActionPosition({
+      top: Math.max(12, rect.bottom + 8),
+      left: Math.min(Math.max(12, rect.left + rect.width / 2 - 45), window.innerWidth - 102),
     });
+  };
+
+  const openComposer = () => {
+    if (!draftQuote() || !composerPosition()) return;
+    setComposerOpen(true);
+    setSelectionActionPosition(null);
+    queueMicrotask(() => composerTextareaRef?.focus());
   };
 
   const addAnnotation = () => {
@@ -461,6 +671,7 @@ export default function AgentReviewPage() {
       comment,
       createdAt: Date.now(),
       kind: "selection",
+      ...draftOffsets(),
     };
 
     setAnnotations((current) => [...current, annotation]);
@@ -489,6 +700,15 @@ export default function AgentReviewPage() {
         annotation.id === annotationId ? { ...annotation, comment } : annotation,
       ),
     );
+  };
+
+  const navigateToInlineAnnotation = (event: MouseEvent) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const annotationTarget = target.closest<HTMLElement>("[data-review-annotation-id]");
+    const annotationId = annotationTarget?.dataset.reviewAnnotationId;
+    if (!annotationId) return;
+    document.getElementById(annotationId)?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   const addDiffAnnotation = async ({
@@ -826,7 +1046,7 @@ export default function AgentReviewPage() {
                     >
                       <DiffViewer
                         rawDiff={diffRawPatch()}
-                        comments={inlineReviewComments()}
+                        comments={annotationsHidden() ? [] : inlineReviewComments()}
                         settings={DEFAULT_DIFF_SETTINGS}
                         onFilesLoaded={handleFilesLoaded}
                         onAddComment={addDiffAnnotation}
@@ -854,6 +1074,8 @@ export default function AgentReviewPage() {
                             isDiffSession={true}
                             onRemove={removeAnnotation}
                             onUpdate={updateAnnotation}
+                            annotationsHidden={annotationsHidden()}
+                            onAnnotationsHiddenChange={setAnnotationsHidden}
                             onNavigate={(annotation) => {
                               if (annotation.filePath) scrollToFile(annotation.filePath);
                             }}
@@ -888,10 +1110,13 @@ export default function AgentReviewPage() {
                     class="mx-auto max-w-4xl px-6 py-6"
                     onMouseUp={captureSelection}
                     onKeyUp={captureSelection}
+                    onClick={navigateToInlineAnnotation}
                   >
                     <div
-                      class="typeset px-1 text-sm text-text [&_blockquote]:bg-accent/5 [&_blockquote]:py-2 [&_blockquote]:pr-4"
-                      innerHTML={renderedContent()}
+                      ref={(element) => {
+                        markdownRef = element;
+                      }}
+                      class="agent-review-markdown typeset px-1 text-sm text-text [&_blockquote]:bg-accent/5 [&_blockquote]:py-2 [&_blockquote]:pr-4"
                     />
                   </div>
                 </div>
@@ -905,6 +1130,8 @@ export default function AgentReviewPage() {
                         isDiffSession={false}
                         onRemove={removeAnnotation}
                         onUpdate={updateAnnotation}
+                        annotationsHidden={annotationsHidden()}
+                        onAnnotationsHiddenChange={setAnnotationsHidden}
                       />
                     </div>
                     <div class="border-t border-border flex-shrink-0">
@@ -965,6 +1192,28 @@ export default function AgentReviewPage() {
             </div>
           </div>
         </div>
+      </Show>
+
+      <Show when={!isDiffSession() && draftQuote() && !composerOpen()}>
+        <Show when={selectionActionPosition()}>
+          {(position) => (
+            <button
+              ref={(element) => {
+                composerRef = element;
+              }}
+              type="button"
+              class="fixed z-50 border border-border bg-bg-surface px-2.5 py-1.5 text-xs font-medium text-text shadow-md hover:border-accent/50 hover:bg-bg-elevated"
+              style={{
+                top: `${position().top}px`,
+                left: `${position().left}px`,
+              }}
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={openComposer}
+            >
+              Add note
+            </button>
+          )}
+        </Show>
       </Show>
 
       <Show when={!isDiffSession() && draftQuote() && composerOpen()}>
@@ -1044,10 +1293,11 @@ function AnnotationsPanel(props: {
   isDiffSession: boolean;
   onRemove: (id: string) => void;
   onUpdate: (id: string, comment: string) => void;
+  annotationsHidden: boolean;
+  onAnnotationsHiddenChange: (hidden: boolean) => void;
   onNavigate?: (annotation: ReviewSessionAnnotation) => void;
 }) {
   const items = () => props.result()?.annotations ?? props.annotations;
-  const [annotationsHidden, setAnnotationsHidden] = createSignal(false);
   const [editingAnnotationId, setEditingAnnotationId] = createSignal<string | null>(null);
   const [editingComment, setEditingComment] = createSignal("");
 
@@ -1080,19 +1330,19 @@ function AnnotationsPanel(props: {
           variant="ghost"
           size="xs"
           disabled={items().length === 0}
-          onClick={() => setAnnotationsHidden((hidden) => !hidden)}
+          onClick={() => props.onAnnotationsHiddenChange(!props.annotationsHidden)}
           title={
-            annotationsHidden()
+            props.annotationsHidden
               ? "Show all comments and annotations"
               : "Hide all comments and annotations"
           }
         >
-          {annotationsHidden() ? "Show all" : "Hide all"}
+          {props.annotationsHidden ? "Show all" : "Hide all"}
         </Button>
       </div>
 
       <Show
-        when={!annotationsHidden()}
+        when={!props.annotationsHidden}
         fallback={
           <div class="border border-border border-dashed px-3 py-4 text-center text-xs text-text-faint">
             All comments and annotations are hidden.

@@ -44,3 +44,24 @@ test("does not link issue references inside HTML entities", () => {
   assert.doesNotMatch(html, /&<a[^>]+>#39<\/a>;/);
   assert.match(html, /href="https:\/\/github\.com\/better-review\/better-review\/issues\/39"/);
 });
+
+test("adds restrained semantic highlighting to text call stacks", () => {
+  const html = parseMarkdown(`\`\`\`text
+Admin UI: Copy to clipboard
+  -> admin.onBehalfReporting.getTsv({ reportId })
+    -> onBehalfReportingTsvService.generate()
+      -> list run records
+\`\`\``);
+
+  assert.match(html, /<pre class="markdown-flow">/);
+  assert.match(html, /class="markdown-flow-arrow">-&gt;<\/span>/);
+  assert.match(html, /class="markdown-flow-call">admin\.onBehalfReporting\.getTsv<\/span>/);
+  assert.match(html, /class="markdown-flow-call">onBehalfReportingTsvService\.generate<\/span>/);
+});
+
+test("leaves ordinary text code blocks unaccented", () => {
+  const html = parseMarkdown("```text\nfirst line\nsecond line\n```");
+
+  assert.doesNotMatch(html, /markdown-flow/);
+  assert.match(html, /<pre><code class="markdown-code-block language-text">/);
+});

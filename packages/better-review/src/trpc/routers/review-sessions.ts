@@ -37,6 +37,8 @@ const reviewSessionAnnotationSchema = z.object({
   comment: z.string(),
   createdAt: z.number(),
   kind: z.enum(["selection", "file", "line-range"]).optional(),
+  startOffset: z.number().int().nonnegative().optional(),
+  endOffset: z.number().int().nonnegative().optional(),
   filePath: z.string().optional(),
   line: z.number().optional(),
   startLine: z.number().optional(),

@@ -74,6 +74,40 @@ function getLanguageClass(lang: string | undefined): string {
   return normalized.length > 0 ? ` language-${normalized}` : "";
 }
 
+function isTextFlowBlock(text: string, lang: string | undefined): boolean {
+  const normalizedLang = (lang ?? "text").toLowerCase().trim();
+  if (!["", "text", "txt", "plaintext"].includes(normalizedLang)) return false;
+
+  const arrowCount = text.match(/(?:->|→)/g)?.length ?? 0;
+  const arrowLedLines = text.split("\n").filter((line) => /^\s*(?:->|→)/.test(line)).length;
+  return arrowCount >= 3 && arrowLedLines >= 2;
+}
+
+function renderTextFlow(text: string): string {
+  const tokenPattern = /(?:->|→)|(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*(?=\()/g;
+
+  return text
+    .split("\n")
+    .map((line) => {
+      let cursor = 0;
+      let html = "";
+
+      for (const match of line.matchAll(tokenPattern)) {
+        const index = match.index ?? 0;
+        const token = match[0];
+        html += escapeHtmlText(line.slice(cursor, index));
+        html +=
+          token === "->" || token === "→"
+            ? `<span class="markdown-flow-arrow">${escapeHtmlText(token)}</span>`
+            : `<span class="markdown-flow-call">${escapeHtmlText(token)}</span>`;
+        cursor = index + token.length;
+      }
+
+      return `<span class="markdown-flow-line">${html}${escapeHtmlText(line.slice(cursor))}</span>`;
+    })
+    .join("\n");
+}
+
 function renderSafeImage({ href, title, text }: Tokens.Image): string {
   const safeHref = getSafeUrl(href);
   if (!safeHref) {
@@ -127,6 +161,10 @@ export function applySafeMarkdownRenderer(renderer: Renderer): Renderer {
 const renderer = applySafeMarkdownRenderer(new marked.Renderer());
 
 renderer.code = ({ text, lang }) => {
+  if (isTextFlowBlock(text, lang)) {
+    return `<pre class="markdown-flow"><code class="markdown-code-block${getLanguageClass(lang)}">${renderTextFlow(text)}</code></pre>`;
+  }
+
   return `<pre><code class="markdown-code-block${getLanguageClass(lang)}">${escapeHtmlText(text)}</code></pre>`;
 };
 

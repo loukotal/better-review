@@ -76,6 +76,8 @@ export interface ReviewSessionAnnotation {
   comment: string;
   createdAt: number;
   kind?: "selection" | "file" | "line-range";
+  startOffset?: number;
+  endOffset?: number;
   filePath?: string;
   line?: number;
   startLine?: number;

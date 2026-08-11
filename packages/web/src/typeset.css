@@ -108,6 +108,54 @@
       padding: 0.05em 0.15em;
     }
 
+    &:where(mark.review-annotation-highlight) {
+      background: color-mix(in oklab, var(--color-accent) 22%, transparent);
+      border-block-end: 1px solid color-mix(in oklab, var(--color-accent) 70%, transparent);
+      box-decoration-break: clone;
+      color: inherit;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    &:where(.review-annotation-thread) {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5em;
+      margin-block: 0.65em 0;
+    }
+
+    &:where(.review-annotation-note) {
+      align-items: baseline;
+      background: color-mix(in oklab, var(--color-accent) 7%, var(--color-bg-surface));
+      border: 1px solid color-mix(in oklab, var(--color-accent) 28%, var(--color-border));
+      color: var(--color-text);
+      display: flex;
+      font-family: var(--typeset-font-body);
+      font-size: 0.875em;
+      gap: 0.75em;
+      line-height: 1.5;
+      padding: 0.55em 0.7em;
+      text-align: start;
+      width: 100%;
+    }
+
+    &:where(.review-annotation-note:hover) {
+      background: color-mix(in oklab, var(--color-accent) 10%, var(--color-bg-surface));
+      border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+    }
+
+    &:where(.review-annotation-label) {
+      color: var(--color-accent-bright);
+      flex: none;
+      font-size: 0.82em;
+      font-weight: 600;
+    }
+
+    &:where(.review-annotation-comment) {
+      color: var(--color-text);
+      white-space: pre-wrap;
+    }
+
     &:where(del, s) {
       color: var(--typeset-muted);
     }
@@ -193,6 +241,24 @@
 
     &:where(pre.shiki) {
       background-color: var(--shiki-color-background, var(--color-bg-elevated));
+    }
+
+    &:where(pre.markdown-flow) {
+      background: color-mix(in oklab, var(--color-bg-elevated) 94%, var(--color-info));
+    }
+
+    &:where(pre.markdown-flow .markdown-flow-line) {
+      display: inline;
+    }
+
+    &:where(pre.markdown-flow .markdown-flow-arrow) {
+      color: var(--color-accent-bright);
+      font-weight: 600;
+    }
+
+    &:where(pre.markdown-flow .markdown-flow-call) {
+      color: color-mix(in oklab, var(--color-info) 72%, var(--color-text));
+      font-weight: 500;
     }
 
     &:where(pre code) {

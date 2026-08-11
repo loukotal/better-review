@@ -145,6 +145,11 @@ body {
   color: var(--color-accent-text);
 }
 
+.agent-review-markdown ::selection {
+  background: color-mix(in oklab, var(--color-accent) 32%, transparent);
+  color: var(--color-text);
+}
+
 /* Scrollbar styling - minimal */
 ::-webkit-scrollbar {
   width: 6px;
