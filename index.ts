@@ -302,7 +302,7 @@ async function ensureApiAvailable(apiUrl: string): Promise<void> {
   }
 
   throw new Error(
-    `Could not reach better-review API at ${apiUrl}. Start the app with 'pnpm dev' or 'pnpm start', or pass --api-url.`,
+    `Could not reach better-review API at ${apiUrl}. Start the app with 'pnpm start', or pass --api-url.`,
   );
 }
 

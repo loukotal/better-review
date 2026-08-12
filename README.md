@@ -47,25 +47,25 @@ pnpm setup:microsandbox
 the sandbox runtime under `~/.microsandbox`. Better Review intentionally refuses to start without
 it instead of falling back to running review-agent commands directly on the host.
 
-Start the development app:
-
-```sh
-pnpm dev
-```
-
-Then open [http://localhost:3000](http://localhost:3000). The API listens on port `3001` by
-default.
-
-For a production-style local build and server:
+Start the app:
 
 ```sh
 pnpm start
 ```
 
+Then open [http://localhost:3000](http://localhost:3000). The API listens on port `3001` by
+default. `pnpm dev` is an equivalent alias.
+
+For a production-style local build and server:
+
+```sh
+pnpm start:production
+```
+
 ### Local API authentication
 
-`pnpm dev` creates a gitignored `.better-review-api-token` and shares it with the API and Vite
-client automatically.
+`pnpm start` (or `pnpm dev`) creates a gitignored `.better-review-api-token` and shares it with the
+API and Vite client automatically.
 
 For other setups, set `BETTER_REVIEW_API_TOKEN` on the API. Set
 `VITE_BETTER_REVIEW_API_TOKEN` while building the web client to embed the same token, or enter it
