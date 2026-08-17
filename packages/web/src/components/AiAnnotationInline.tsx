@@ -1,6 +1,7 @@
 import { type Component, For, createMemo, createSignal, Show } from "solid-js";
 import { render } from "solid-js/web";
 
+import { formatAnnotationForClipboard } from "../utils/formatAnnotationForClipboard";
 import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens";
 import { FileLink } from "./FileLink";
 
@@ -142,8 +143,7 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
   });
 
   const handleCopy = async () => {
-    const text = props.annotation.message;
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(formatAnnotationForClipboard(props.annotation));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

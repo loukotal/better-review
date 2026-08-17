@@ -5,6 +5,7 @@ import { CopyIcon } from "../icons/copy-icon";
 import { CriticalIcon } from "../icons/critical-icon";
 import { InfoIcon } from "../icons/info-icon";
 import { WarningIcon } from "../icons/warning-icon";
+import { formatAnnotationForClipboard } from "../utils/formatAnnotationForClipboard";
 import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens";
 import { FileLink } from "./FileLink";
 
@@ -98,7 +99,7 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
   };
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(props.annotation.message);
+    await navigator.clipboard.writeText(formatAnnotationForClipboard(props.annotation));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
