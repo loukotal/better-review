@@ -37,6 +37,7 @@ import {
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
+import { describePrLoadError, type PrLoadError } from "./lib/errors";
 import {
   queryKeys,
   api,
@@ -148,7 +149,7 @@ const AppContent: Component = () => {
   const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
   const [comments, setComments] = createSignal<PRComment[]>([]);
   const [issueComments, setIssueComments] = createSignal<IssueComment[]>([]);
-  const [error, setError] = createSignal<string | null>(null);
+  const [error, setError] = createSignal<PrLoadError | null>(null);
   const [settings, setSettings] = createSignal<DiffSettings>(loadSettings());
 
   // Review state
@@ -669,7 +670,7 @@ const AppContent: Component = () => {
       setPrStatus(data.status);
       setLoadingStatus(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load PR");
+      setError(describePrLoadError(err));
     } finally {
       setLoading(false);
       setLoadingComments(false);
@@ -944,7 +945,7 @@ const AppContent: Component = () => {
                   variant="primary"
                   size="sm"
                 >
-                  {loading() ? "Opening…" : "Open"}
+                  {loading() ? "Opening…" : error() ? "Try again" : "Open"}
                 </Button>
               </Show>
               <Show when={nextPr()}>
@@ -960,11 +961,26 @@ const AppContent: Component = () => {
               </Show>
             </form>
 
-            {error() && (
-              <div class="mt-3 px-3 py-2 border border-error/50 bg-diff-remove-bg text-error text-base">
-                {error()}
-              </div>
-            )}
+            <Show when={error()}>
+              {(loadError) => (
+                <div
+                  role="alert"
+                  aria-live="polite"
+                  class="mt-3 flex max-w-3xl items-start gap-2.5 border border-error/50 bg-diff-remove-bg px-3 py-2.5"
+                >
+                  <span
+                    aria-hidden="true"
+                    class="mt-0.5 flex size-4 shrink-0 items-center justify-center border border-error/60 font-mono text-xs font-semibold text-diff-remove-text"
+                  >
+                    !
+                  </span>
+                  <div class="min-w-0">
+                    <p class="m-0 text-sm font-medium text-diff-remove-text">{loadError().title}</p>
+                    <p class="m-0 mt-0.5 text-sm leading-5 text-text">{loadError().message}</p>
+                  </div>
+                </div>
+              )}
+            </Show>
           </div>
 
           {/* PR Status Bar */}

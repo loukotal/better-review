@@ -20,10 +20,14 @@ import type {
 
 import { runCommand } from "../command";
 
-class GhError extends Data.TaggedError("GhError")<{
+export class GhError extends Data.TaggedError("GhError")<{
   readonly command: string;
   readonly cause: unknown;
-}> {}
+}> {
+  override get message(): string {
+    return this.cause instanceof Error ? this.cause.message : String(this.cause);
+  }
+}
 
 // Re-export shared types for convenience
 export type {
@@ -343,22 +347,25 @@ export type GhServiceApi = GhCli;
 const GH_COMMAND_TIMEOUT_MS = Number(process.env.GH_COMMAND_TIMEOUT_MS ?? 45_000);
 
 const runGh = (...args: string[]) =>
-  Effect.tryPromise(async () => {
-    const { stdout, stderr, exitCode, timedOut } = await runCommand("gh", args, {
-      timeoutMs: GH_COMMAND_TIMEOUT_MS,
-    });
+  Effect.tryPromise({
+    try: async () => {
+      const { stdout, stderr, exitCode, timedOut } = await runCommand("gh", args, {
+        timeoutMs: GH_COMMAND_TIMEOUT_MS,
+      });
 
-    if (timedOut) {
-      throw new Error(
-        `gh command timed out after ${GH_COMMAND_TIMEOUT_MS}ms: gh ${args.join(" ")}`,
-      );
-    }
+      if (timedOut) {
+        throw new Error(
+          `gh command timed out after ${GH_COMMAND_TIMEOUT_MS}ms: gh ${args.join(" ")}`,
+        );
+      }
 
-    if (exitCode !== 0) {
-      throw new Error(stderr.trim() || stdout.trim() || `gh exited with code ${exitCode}`);
-    }
+      if (exitCode !== 0) {
+        throw new Error(stderr.trim() || stdout.trim() || `gh exited with code ${exitCode}`);
+      }
 
-    return stdout;
+      return stdout;
+    },
+    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
   });
 
 // Validate it's a PR number or valid PR URL (not an issue URL)

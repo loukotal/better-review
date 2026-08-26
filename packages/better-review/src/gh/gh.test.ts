@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { Effect } from "effect";
+
 import { isDiffCommentTargetInPatch, parseFullDiff } from "../diff";
-import { buildUnifiedDiffFromPullFiles, isPullRequestDiffTooLarge } from "./gh";
+import { buildUnifiedDiffFromPullFiles, GhError, isPullRequestDiffTooLarge } from "./gh";
+
+test("preserves the underlying gh failure in raw Effect errors", async () => {
+  const message = "failed to connect to api.github.com: GitHub is unavailable";
+  const error = new GhError({ command: "listCommits", cause: new Error(message) });
+
+  assert.equal(error.message, message);
+
+  await assert.rejects(Effect.runPromise(Effect.fail(error)), (failure) => {
+    assert.match(String(failure), new RegExp(`GhError: ${message}`));
+    assert.doesNotMatch(String(failure), /GhError: An error has occurred/);
+    return true;
+  });
+});
 
 test("builds a unified diff from pull request file API patches", () => {
   const diff = buildUnifiedDiffFromPullFiles([
