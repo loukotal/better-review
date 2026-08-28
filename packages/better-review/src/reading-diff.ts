@@ -18,14 +18,8 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { getFlueProviders } from "./flue/oauth-auth";
 import { STORE_BASE_DIR } from "./store";
 
-const READING_DIFF_PROTOCOL_VERSION = "better-review-reading-diff-v4";
-const LEGACY_REPORT_PROTOCOL_VERSION = "better-review-reading-diff-v3";
+const READING_DIFF_PROTOCOL_VERSION = "better-review-reading-diff-v5";
 const READING_DIFF_CACHE_DIR = join(STORE_BASE_DIR, "reading-diffs");
-const PR_INTELLIGENCE_SKILL_URL = new URL(
-  "../../../.agents/skills/pr-intelligence/SKILL.md",
-  import.meta.url,
-);
-const PR_INTELLIGENCE_SKILL_NAME = "pr-intelligence";
 const READING_MODEL = "openai-codex/gpt-5.6-luna";
 const READING_THINKING_LEVEL = "xhigh";
 const MAX_TOTAL_DIFF_BYTES = 2 * 1024 * 1024;
@@ -49,49 +43,28 @@ export interface ReadingDiffPlan {
   report: ReadingDiffReport;
 }
 
-export type ReadingDiffConfidence = "high" | "medium" | "low";
-export type ReadingDiffRisk = "high" | "medium" | "low";
-
 export interface ReadingDiffEvidence {
   file: string;
   line?: number;
 }
 
-export interface ReadingDiffFlowStep {
+export interface ReadingDiffCallstackNode {
+  id: string;
+  parentId?: string;
   kind: "entry" | "boundary" | "service" | "persistence" | "side_effect" | "other";
   label: string;
   detail?: string;
   evidence?: ReadingDiffEvidence;
-  confidence: ReadingDiffConfidence;
   inferred: boolean;
 }
 
-export interface ReadingDiffFlow {
+export interface ReadingDiffFeature {
   title: string;
-  confidence: ReadingDiffConfidence;
-  steps: ReadingDiffFlowStep[];
-}
-
-export interface ReadingDiffImpact {
-  area: string;
-  impact: string;
-  risk: ReadingDiffRisk;
-  evidence: ReadingDiffEvidence[];
-}
-
-export interface ReadingDiffReviewFocus {
-  severity: ReadingDiffRisk;
-  title: string;
-  rationale: string;
-  evidence: ReadingDiffEvidence[];
+  nodes: ReadingDiffCallstackNode[];
 }
 
 export interface ReadingDiffReport {
-  overview: string;
-  flows: ReadingDiffFlow[];
-  blastRadius: ReadingDiffImpact[];
-  reviewFocus: ReadingDiffReviewFocus[];
-  unknowns: string[];
+  features: ReadingDiffFeature[];
 }
 
 export interface ReadingDiffStats {
@@ -133,12 +106,6 @@ type PlanGenerator = (
   repositoryRoot?: string,
 ) => Promise<ReadingDiffPlan>;
 
-const confidenceSchema = Type.Union([
-  Type.Literal("high"),
-  Type.Literal("medium"),
-  Type.Literal("low"),
-]);
-
 const evidenceSchema = Type.Object(
   {
     file: Type.String({ minLength: 1, maxLength: 500 }),
@@ -149,15 +116,15 @@ const evidenceSchema = Type.Object(
 
 const reportSchema = Type.Object(
   {
-    overview: Type.String({ minLength: 1, maxLength: 1_200 }),
-    flows: Type.Array(
+    features: Type.Array(
       Type.Object(
         {
           title: Type.String({ minLength: 1, maxLength: 160 }),
-          confidence: confidenceSchema,
-          steps: Type.Array(
+          nodes: Type.Array(
             Type.Object(
               {
+                id: Type.String({ minLength: 1, maxLength: 48 }),
+                parentId: Type.Union([Type.String({ minLength: 1, maxLength: 48 }), Type.Null()]),
                 kind: Type.Union([
                   Type.Literal("entry"),
                   Type.Literal("boundary"),
@@ -169,50 +136,24 @@ const reportSchema = Type.Object(
                 label: Type.String({ minLength: 1, maxLength: 160 }),
                 detail: Type.Union([Type.String({ maxLength: 300 }), Type.Null()]),
                 evidence: Type.Union([evidenceSchema, Type.Null()]),
-                confidence: confidenceSchema,
                 inferred: Type.Boolean(),
               },
               { additionalProperties: false },
             ),
-            { maxItems: 10 },
+            { maxItems: 24 },
           ),
         },
         { additionalProperties: false },
       ),
-      { maxItems: 3 },
+      { maxItems: 6 },
     ),
-    blastRadius: Type.Array(
-      Type.Object(
-        {
-          area: Type.String({ minLength: 1, maxLength: 160 }),
-          impact: Type.String({ minLength: 1, maxLength: 500 }),
-          risk: confidenceSchema,
-          evidence: Type.Array(evidenceSchema, { maxItems: 5 }),
-        },
-        { additionalProperties: false },
-      ),
-      { maxItems: 12 },
-    ),
-    reviewFocus: Type.Array(
-      Type.Object(
-        {
-          severity: confidenceSchema,
-          title: Type.String({ minLength: 1, maxLength: 200 }),
-          rationale: Type.String({ minLength: 1, maxLength: 500 }),
-          evidence: Type.Array(evidenceSchema, { maxItems: 5 }),
-        },
-        { additionalProperties: false },
-      ),
-      { maxItems: 12 },
-    ),
-    unknowns: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 12 }),
   },
   { additionalProperties: false },
 );
 
 const submitReadingReportTool = {
   name: "submit_reading_report",
-  description: "Submit the PR intelligence report and a one-line summary.",
+  description: "Submit feature callstack trees and a one-line summary.",
   parameters: Type.Object(
     {
       summary: Type.String({
@@ -240,10 +181,13 @@ const submitSummaryTool = {
 };
 
 const baseSystemPrompt = [
-  "You produce a source-derived PR intelligence report for an experienced reviewer.",
-  "Explain changed behavior, control flow, data flow, contracts, architecture, security boundaries, compatibility decisions, and meaningful test scenarios.",
+  "You produce source-derived feature callstack trees for an experienced reviewer.",
+  "Identify the user-visible or system behavior represented by the change, then trace its runtime call tree.",
+  "Each feature contains flat nodes linked by id and parentId. Use parentId null for roots and parent ids for calls or events that branch from them.",
+  "Use short, code-shaped labels with exact symbols. Put optional behavioral context in detail.",
+  "Return only feature callstacks. Do not produce an overview, blast radius, review focus, or unknowns.",
   "Do not rewrite or condense the diff. It remains unchanged as the canonical review surface.",
-  "Use repository tools to inspect surrounding implementation before claiming program paths, callers, persistence, or side effects.",
+  "Use repository tools to inspect surrounding implementation before claiming callers, persistence, or side effects.",
   "Call submit_reading_report exactly once with the summary and structured report.",
 ].join("\n");
 
@@ -282,13 +226,6 @@ function ensureText(value: unknown, label: string, maxLength = 500): string {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
-function ensureConfidence(value: unknown, label: string): ReadingDiffConfidence {
-  if (value !== "high" && value !== "medium" && value !== "low") {
-    throw new Error(`${label} must be high, medium, or low`);
-  }
-  return value;
-}
-
 function normalizeEvidence(value: unknown, label: string): ReadingDiffEvidence {
   if (!value || typeof value !== "object") throw new Error(`${label} must be an object`);
   const evidence = value as { file?: unknown; line?: unknown };
@@ -309,108 +246,94 @@ function normalizeEvidence(value: unknown, label: string): ReadingDiffEvidence {
 function normalizeReport(value: unknown): ReadingDiffReport {
   if (!value || typeof value !== "object") throw new Error("Reading diff plan needs a report");
   const report = value as Record<string, unknown>;
-  if (
-    !Array.isArray(report.flows) ||
-    !Array.isArray(report.blastRadius) ||
-    !Array.isArray(report.reviewFocus) ||
-    !Array.isArray(report.unknowns)
-  ) {
-    throw new Error("Reading diff report arrays are incomplete");
-  }
+  if (!Array.isArray(report.features)) throw new Error("Reading report needs feature callstacks");
 
   return {
-    overview: ensureText(report.overview, "report.overview", 1_200),
-    flows: report.flows.slice(0, 3).map((value, flowIndex) => {
+    features: report.features.slice(0, 6).map((value, featureIndex) => {
       if (!value || typeof value !== "object")
-        throw new Error(`report.flows[${flowIndex}] invalid`);
-      const flow = value as Record<string, unknown>;
-      if (!Array.isArray(flow.steps)) throw new Error(`report.flows[${flowIndex}].steps invalid`);
-      return {
-        title: ensureText(flow.title, `report.flows[${flowIndex}].title`, 160),
-        confidence: ensureConfidence(flow.confidence, `report.flows[${flowIndex}].confidence`),
-        steps: flow.steps.slice(0, 10).map((stepValue, stepIndex) => {
-          if (!stepValue || typeof stepValue !== "object") {
-            throw new Error(`report.flows[${flowIndex}].steps[${stepIndex}] invalid`);
-          }
-          const step = stepValue as Record<string, unknown>;
-          const allowedKinds = new Set([
-            "entry",
-            "boundary",
-            "service",
-            "persistence",
-            "side_effect",
-            "other",
-          ]);
-          if (typeof step.kind !== "string" || !allowedKinds.has(step.kind)) {
-            throw new Error(`report.flows[${flowIndex}].steps[${stepIndex}].kind invalid`);
-          }
-          return {
-            kind: step.kind as ReadingDiffFlowStep["kind"],
-            label: ensureText(
-              step.label,
-              `report.flows[${flowIndex}].steps[${stepIndex}].label`,
-              160,
-            ),
-            detail:
-              typeof step.detail === "string"
-                ? ensureText(
-                    step.detail,
-                    `report.flows[${flowIndex}].steps[${stepIndex}].detail`,
-                    300,
-                  )
-                : undefined,
-            evidence: step.evidence
-              ? normalizeEvidence(
-                  step.evidence,
-                  `report.flows[${flowIndex}].steps[${stepIndex}].evidence`,
+        throw new Error(`report.features[${featureIndex}] invalid`);
+      const feature = value as Record<string, unknown>;
+      if (!Array.isArray(feature.nodes)) {
+        throw new Error(`report.features[${featureIndex}].nodes invalid`);
+      }
+
+      const nodes = feature.nodes.slice(0, 24).map((nodeValue, nodeIndex) => {
+        if (!nodeValue || typeof nodeValue !== "object") {
+          throw new Error(`report.features[${featureIndex}].nodes[${nodeIndex}] invalid`);
+        }
+        const node = nodeValue as Record<string, unknown>;
+        const allowedKinds = new Set([
+          "entry",
+          "boundary",
+          "service",
+          "persistence",
+          "side_effect",
+          "other",
+        ]);
+        if (typeof node.kind !== "string" || !allowedKinds.has(node.kind)) {
+          throw new Error(`report.features[${featureIndex}].nodes[${nodeIndex}].kind invalid`);
+        }
+        return {
+          id: ensureText(node.id, `report.features[${featureIndex}].nodes[${nodeIndex}].id`, 48),
+          parentId:
+            typeof node.parentId === "string"
+              ? ensureText(
+                  node.parentId,
+                  `report.features[${featureIndex}].nodes[${nodeIndex}].parentId`,
+                  48,
                 )
               : undefined,
-            confidence: ensureConfidence(
-              step.confidence,
-              `report.flows[${flowIndex}].steps[${stepIndex}].confidence`,
-            ),
-            inferred: step.inferred === true,
-          };
-        }),
-      };
-    }),
-    blastRadius: report.blastRadius.slice(0, 12).map((value, index) => {
-      if (!value || typeof value !== "object")
-        throw new Error(`report.blastRadius[${index}] invalid`);
-      const impact = value as Record<string, unknown>;
-      return {
-        area: ensureText(impact.area, `report.blastRadius[${index}].area`, 160),
-        impact: ensureText(impact.impact, `report.blastRadius[${index}].impact`, 500),
-        risk: ensureConfidence(impact.risk, `report.blastRadius[${index}].risk`),
-        evidence: Array.isArray(impact.evidence)
-          ? impact.evidence
-              .slice(0, 5)
-              .map((item, evidenceIndex) =>
-                normalizeEvidence(item, `report.blastRadius[${index}].evidence[${evidenceIndex}]`),
+          kind: node.kind as ReadingDiffCallstackNode["kind"],
+          label: ensureText(
+            node.label,
+            `report.features[${featureIndex}].nodes[${nodeIndex}].label`,
+            160,
+          ),
+          detail:
+            typeof node.detail === "string"
+              ? ensureText(
+                  node.detail,
+                  `report.features[${featureIndex}].nodes[${nodeIndex}].detail`,
+                  300,
+                )
+              : undefined,
+          evidence: node.evidence
+            ? normalizeEvidence(
+                node.evidence,
+                `report.features[${featureIndex}].nodes[${nodeIndex}].evidence`,
               )
-          : [],
-      };
-    }),
-    reviewFocus: report.reviewFocus.slice(0, 12).map((value, index) => {
-      if (!value || typeof value !== "object")
-        throw new Error(`report.reviewFocus[${index}] invalid`);
-      const focus = value as Record<string, unknown>;
+            : undefined,
+          inferred: node.inferred === true,
+        };
+      });
+
+      const ids = new Set<string>();
+      for (const node of nodes) {
+        if (ids.has(node.id)) {
+          throw new Error(`report.features[${featureIndex}] has duplicate node id ${node.id}`);
+        }
+        ids.add(node.id);
+      }
+      for (const node of nodes) {
+        if (node.parentId === node.id || (node.parentId && !ids.has(node.parentId))) {
+          throw new Error(`report.features[${featureIndex}] has invalid parent ${node.parentId}`);
+        }
+        const visited = new Set([node.id]);
+        let parentId = node.parentId;
+        while (parentId) {
+          if (visited.has(parentId)) {
+            throw new Error(`report.features[${featureIndex}] contains a callstack cycle`);
+          }
+          visited.add(parentId);
+          parentId = nodes.find((candidate) => candidate.id === parentId)?.parentId;
+        }
+      }
+
       return {
-        severity: ensureConfidence(focus.severity, `report.reviewFocus[${index}].severity`),
-        title: ensureText(focus.title, `report.reviewFocus[${index}].title`, 200),
-        rationale: ensureText(focus.rationale, `report.reviewFocus[${index}].rationale`, 500),
-        evidence: Array.isArray(focus.evidence)
-          ? focus.evidence
-              .slice(0, 5)
-              .map((item, evidenceIndex) =>
-                normalizeEvidence(item, `report.reviewFocus[${index}].evidence[${evidenceIndex}]`),
-              )
-          : [],
+        title: ensureText(feature.title, `report.features[${featureIndex}].title`, 160),
+        nodes,
       };
     }),
-    unknowns: report.unknowns
-      .slice(0, 12)
-      .map((unknown, index) => ensureText(unknown, `report.unknowns[${index}]`, 500)),
   };
 }
 
@@ -563,19 +486,18 @@ async function requestPlan(
   repositoryRoot?: string,
 ): Promise<ReadingDiffPlan> {
   const { models, model } = resolveReadingModel();
-  const skillInstructions = await readFile(PR_INTELLIGENCE_SKILL_URL, "utf8");
   const correctionText = correction
     ? `\n\nThe previous report was rejected: ${correction}\nSubmit a corrected complete report.`
     : "";
   const repositoryText = repositoryRoot
     ? "A prepared repository checkout is available through the repository tools. Inspect it before submitting."
-    : "No prepared repository checkout is available. Limit claims to the diff and put unresolved context in Unknowns.";
+    : "No prepared repository checkout is available. Limit the callstack to paths supported by the diff.";
   const context: Context = {
-    systemPrompt: `${baseSystemPrompt}\n\nSelected skill instructions:\n${skillInstructions}`,
+    systemPrompt: baseSystemPrompt,
     messages: [
       {
         role: "user",
-        content: `Create an overview-first PR intelligence report for this unified diff.${correctionText}\n\n${repositoryText}\n\n${diff}`,
+        content: `Create feature callstack trees for this unified diff.${correctionText}\n\n${repositoryText}\n\n${diff}`,
         timestamp: Date.now(),
       },
     ],
@@ -594,7 +516,7 @@ async function requestPlan(
       context.messages.push({
         role: "user",
         content:
-          "Repository inspection is complete. Do not request more files or searches. Submit the complete structured report now, using the evidence already gathered and putting unresolved facts in Unknowns.",
+          "Repository inspection is complete. Do not request more files or searches. Submit the feature callstack trees now using only the evidence already gathered.",
         timestamp: Date.now(),
       });
       context.tools = [submitReadingReportTool];
@@ -988,23 +910,13 @@ function uniqueBy<T>(values: T[], key: (value: T) => string): T[] {
   });
 }
 
-function combineReports(results: PlanChunkResult[], summary: string): ReadingDiffReport {
+function combineReports(results: PlanChunkResult[]): ReadingDiffReport {
   if (results.length === 1) return results[0].report;
   return {
-    overview: summary,
-    flows: uniqueBy(
-      results.flatMap((result) => result.report.flows),
-      (flow) => flow.title,
-    ).slice(0, 3),
-    blastRadius: uniqueBy(
-      results.flatMap((result) => result.report.blastRadius),
-      (impact) => `${impact.area}\0${impact.impact}`,
-    ).slice(0, 12),
-    reviewFocus: uniqueBy(
-      results.flatMap((result) => result.report.reviewFocus),
-      (focus) => `${focus.title}\0${focus.rationale}`,
-    ).slice(0, 12),
-    unknowns: [...new Set(results.flatMap((result) => result.report.unknowns))].slice(0, 12),
+    features: uniqueBy(
+      results.flatMap((result) => result.report.features),
+      (feature) => feature.title,
+    ).slice(0, 6),
   };
 }
 
@@ -1013,41 +925,21 @@ function markdownEvidence(evidence: ReadingDiffEvidence): string {
 }
 
 export function renderReadingDiffReportMarkdown(report: ReadingDiffReport): string {
-  const lines = ["## Overview", "", report.overview, "", "## Program design", ""];
-  if (report.flows.length === 0)
-    lines.push("No runtime flow could be established from the available evidence.");
-  for (const flow of report.flows) {
-    lines.push(`### ${flow.title}`, "");
-    lines.push(
-      flow.steps
-        .map((step) => {
-          const evidence = step.evidence ? ` (${markdownEvidence(step.evidence)})` : "";
-          return `${step.label}${evidence}${step.inferred ? " [inferred]" : ""}`;
-        })
-        .join(" → "),
-      "",
-    );
+  const lines = ["## Feature callstacks", ""];
+  if (report.features.length === 0) {
+    lines.push("No feature callstack could be established from the available evidence.");
   }
-  lines.push("## Blast radius", "");
-  for (const impact of report.blastRadius) {
-    const evidence = impact.evidence.map(markdownEvidence).join(", ");
-    lines.push(
-      `- **${impact.risk}: ${impact.area}**: ${impact.impact}${evidence ? ` (${evidence})` : ""}`,
-    );
+  for (const feature of report.features) {
+    lines.push(`### ${feature.title}`, "");
+    for (const node of feature.nodes) {
+      const evidence = node.evidence ? ` (${markdownEvidence(node.evidence)})` : "";
+      const parent = node.parentId ? ` ← ${node.parentId}` : "";
+      lines.push(
+        `- \`${node.id}\`${parent}: ${node.label}${evidence}${node.inferred ? " [inferred]" : ""}`,
+      );
+    }
+    lines.push("");
   }
-  lines.push("", "## Review focus", "");
-  for (const focus of report.reviewFocus) {
-    const evidence = focus.evidence.map(markdownEvidence).join(", ");
-    lines.push(
-      `- **${focus.severity}: ${focus.title}**: ${focus.rationale}${evidence ? ` (${evidence})` : ""}`,
-    );
-  }
-  lines.push("", "## Unknowns", "");
-  lines.push(
-    ...(report.unknowns.length > 0
-      ? report.unknowns.map((item) => `- ${item}`)
-      : ["- None identified."]),
-  );
   return lines.join("\n");
 }
 
@@ -1096,7 +988,7 @@ export async function abridgeReadingDiff(
 
   const smartDiff = results.map((result) => result.smartDiff).join("");
   const summary = await summarizeChunks(results.map((result) => result.summary));
-  const report = combineReports(results, summary);
+  const report = combineReports(results);
   return {
     smartDiff,
     summary,
@@ -1129,7 +1021,7 @@ export async function analyzeReadingDiff(
   }
 
   const summary = await summarizeChunks(results.map((result) => result.summary));
-  const report = combineReports(results, summary);
+  const report = combineReports(results);
   return {
     smartDiff: diff,
     summary,
@@ -1156,24 +1048,6 @@ export async function getOrGenerateReadingDiff(
     const cached = await readCache(cacheKey);
     if (cached) return { ...cached, cached: true };
 
-    const legacyCacheKey = readingDiffCacheKeyForProtocol(
-      diff,
-      model,
-      LEGACY_REPORT_PROTOCOL_VERSION,
-    );
-    const legacy = await readCache(legacyCacheKey, LEGACY_REPORT_PROTOCOL_VERSION);
-    if (legacy) {
-      const migrated: ReadingDiffCacheEntry = {
-        ...legacy,
-        smartDiff: diff,
-        stats: diffStats(diff, diff),
-        cacheKey,
-        protocolVersion: READING_DIFF_PROTOCOL_VERSION,
-      };
-      await writeCache(cacheKey, migrated);
-      return { ...migrated, cached: true };
-    }
-
     const pending = inFlight.get(cacheKey);
     if (pending) return pending;
   }
@@ -1185,7 +1059,7 @@ export async function getOrGenerateReadingDiff(
       ...abridged,
       model,
       sourceHeadSha: options.sourceHeadSha ?? "unknown",
-      selectedSkills: [PR_INTELLIGENCE_SKILL_NAME],
+      selectedSkills: [],
       generatedAt: Date.now(),
       cacheKey,
       protocolVersion: READING_DIFF_PROTOCOL_VERSION,

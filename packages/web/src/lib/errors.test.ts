@@ -3,25 +3,28 @@ import { test } from "node:test";
 
 import { describePrLoadError } from "./errors";
 
-test("describes GitHub connectivity failures without discarding their details", () => {
-  const message = "failed to connect to api.github.com: GitHub is unavailable";
+test("turns a GitHub 503 stack into a concise actionable error", () => {
+  const error = new Error(
+    "GhError: HTTP 503: No server is currently available to service your request. Sorry about that. Please try resubmitting your request and contact us if the problem persists. (https://api.github.com/graphql) at <anonymous> (/Users/example/better-review/src/gh/gh.ts:841:34) at FiberRuntime.Sync (/Users/example/node_modules/effect/src/internal/fiberRuntime.ts:1161:19)",
+  );
 
-  assert.deepEqual(describePrLoadError(new Error(message)), {
-    title: "GitHub is unavailable",
-    message,
+  assert.deepEqual(describePrLoadError(error), {
+    title: "GitHub is temporarily unavailable",
+    message: "GitHub returned HTTP 503. Try opening this pull request again in a few minutes.",
   });
 });
 
-test("describes other PR loading failures", () => {
-  assert.deepEqual(describePrLoadError(new Error("Pull request not found")), {
-    title: "Could not load pull request",
-    message: "Pull request not found",
-  });
-});
+test("never exposes an internal stack for an unexpected load error", () => {
+  const result = describePrLoadError(
+    new Error(
+      "GhError: unexpected response from GitHub at <anonymous> (/Users/example/better-review/src/gh/gh.ts:841:34)",
+    ),
+  );
 
-test("provides a useful fallback for unknown failures", () => {
-  assert.deepEqual(describePrLoadError(null), {
-    title: "Could not load pull request",
-    message: "An unexpected error occurred. Please try again.",
-  });
+  assert.equal(result.title, "Couldn’t open this pull request");
+  assert.equal(result.message, "Unexpected response from GitHub. Check the URL and try again.");
+  assert.doesNotMatch(
+    `${result.title} ${result.message}`,
+    /Users|node_modules|gh\.ts|FiberRuntime/,
+  );
 });

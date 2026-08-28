@@ -15,45 +15,27 @@ import {
 } from "./reading-diff";
 
 const report: ReadingDiffReport = {
-  overview: "The run path prepares, audits, records, and returns a value.",
-  flows: [
+  features: [
     {
       title: "Run input",
-      confidence: "high",
-      steps: [
+      nodes: [
         {
+          id: "run",
           kind: "entry",
           label: "run(input)",
           evidence: { file: "src/example.ts", line: 3 },
-          confidence: "high",
           inferred: false,
         },
         {
+          id: "audit",
+          parentId: "run",
           kind: "side_effect",
           label: "audit and record",
-          confidence: "high",
           inferred: false,
         },
       ],
     },
   ],
-  blastRadius: [
-    {
-      area: "run callers",
-      impact: "They receive the prepared value after audit and record side effects.",
-      risk: "medium",
-      evidence: [{ file: "src/example.ts", line: 3 }],
-    },
-  ],
-  reviewFocus: [
-    {
-      severity: "high",
-      title: "Side-effect ordering",
-      rationale: "Audit and record must complete before returning.",
-      evidence: [{ file: "src/example.ts", line: 6 }],
-    },
-  ],
-  unknowns: ["Whether audit or record can fail."],
 };
 
 const fixture = [
@@ -210,7 +192,7 @@ test("abridgeReadingDiff applies an injected plan and reports compression", asyn
   assert.match(received, new RegExp(`^${auditLine}\\|\\+  audit`, "m"));
   assert.equal(result.summary, plan.summary);
   assert.deepEqual(result.report, report);
-  assert.match(result.reportMarkdown, /## Program design/);
+  assert.match(result.reportMarkdown, /## Feature callstacks/);
   assert.ok(result.stats.originalChangedLines > result.stats.readingChangedLines);
   assert.ok(result.stats.compressionPercent > 0);
 });
@@ -229,14 +211,13 @@ test("analyzeReadingDiff preserves the original diff while returning intelligenc
   assert.equal(result.report, report);
 });
 
-test("renderReadingDiffReportMarkdown emits stable report sections and evidence", () => {
+test("renderReadingDiffReportMarkdown emits feature callstacks and evidence", () => {
   const markdown = renderReadingDiffReportMarkdown(report);
-  assert.match(markdown, /^## Overview/m);
-  assert.match(markdown, /^## Program design/m);
-  assert.match(markdown, /^## Blast radius/m);
-  assert.match(markdown, /^## Review focus/m);
-  assert.match(markdown, /^## Unknowns/m);
+  assert.match(markdown, /^## Feature callstacks/m);
+  assert.match(markdown, /^### Run input/m);
+  assert.match(markdown, /`audit` ← run: audit and record/);
   assert.match(markdown, /`src\/example\.ts:3`/);
+  assert.doesNotMatch(markdown, /Blast radius|Review focus|Unknowns/);
 });
 
 test("readingDiffCacheKey includes the diff and selected model identity", () => {
