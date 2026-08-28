@@ -23,6 +23,7 @@ blockExoticSubdeps: true
 allowBuilds:
   "@google/genai": true
   "@mongodb-js/zstd": true
+  core-js-pure: true
   esbuild: true
   lefthook: true
   node-liblzma: true
