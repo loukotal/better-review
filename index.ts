@@ -134,6 +134,8 @@ async function getGitDiff(cwd: string, args: string[] = []): Promise<string> {
     "diff",
     "--no-ext-diff",
     "--binary",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
     ...args,
   ]);
 
@@ -142,6 +144,41 @@ async function getGitDiff(cwd: string, args: string[] = []): Promise<string> {
   }
 
   return stdout;
+}
+
+async function getUntrackedDiff(cwd: string): Promise<string> {
+  const filesResult = await runGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  if (filesResult.exitCode !== 0) {
+    throw new Error(filesResult.stderr.trim() || "git ls-files failed");
+  }
+
+  const files = filesResult.stdout.split("\0").filter(Boolean);
+  const patches: string[] = [];
+  for (const file of files) {
+    const result = await runGit(cwd, [
+      "diff",
+      "--no-index",
+      "--binary",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "--",
+      "/dev/null",
+      file,
+    ]);
+
+    // git diff --no-index returns 1 when it found a difference.
+    if (result.exitCode !== 0 && result.exitCode !== 1) {
+      throw new Error(result.stderr.trim() || `git diff failed for untracked file ${file}`);
+    }
+    if (result.stdout) patches.push(result.stdout);
+  }
+
+  return patches.join("\n");
+}
+
+async function getWorkingTreeDiff(cwd: string): Promise<string> {
+  const [tracked, untracked] = await Promise.all([getGitDiff(cwd), getUntrackedDiff(cwd)]);
+  return [tracked, untracked].filter(Boolean).join("\n");
 }
 
 async function gitRefExists(cwd: string, ref: string): Promise<boolean> {
@@ -206,7 +243,7 @@ async function buildDiffVariants(cwd: string): Promise<ReviewSessionDiffVariant[
       id: "unstaged",
       label: "Unstaged changes",
       description: "git diff",
-      rawPatch: await getGitDiff(cwd),
+      rawPatch: await getWorkingTreeDiff(cwd),
       contentSource: { kind: "unstaged", headSha },
     },
     {
@@ -333,7 +370,10 @@ async function getResult(
   sessionId: string,
 ): Promise<ReviewSessionResult | null> {
   const response = await fetch(`${apiUrl}/api/sessions/${encodeURIComponent(sessionId)}/result`, {
-    headers: getApiAuthHeaders(apiToken),
+    headers: {
+      Connection: "close",
+      ...getApiAuthHeaders(apiToken),
+    },
   });
   if (response.status === 204 || response.status === 404) return null;
   if (!response.ok) {

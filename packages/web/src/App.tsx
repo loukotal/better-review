@@ -25,18 +25,17 @@ import { ThemeToggle } from "./components/ThemeToggle";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
-import { ACCENT_LABELS, ACCENT_THEME_VARS } from "./diff/types";
-import { THEME_LABELS, type ReviewMode, type PrCommit } from "./diff/types";
+import { type ReviewMode, type PrCommit } from "./diff/types";
 import {
   DiffViewer,
   getFileElementId,
   type DiffCommentDraft,
   type PRComment,
   type DiffSettings,
-  DEFAULT_DIFF_SETTINGS,
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
+import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
 import {
   queryKeys,
@@ -56,51 +55,8 @@ import { uiTheme } from "./lib/theme";
 import { trpc } from "./lib/trpc";
 import type { Annotation } from "./utils/parseReviewTokens";
 
-const SETTINGS_STORAGE_KEY = "diff-settings";
 const PANELS_STORAGE_KEY = "panel-visibility";
 const FOCUS_MODE_STORAGE_KEY = "focus-mode";
-
-// Valid theme keys for validation
-const VALID_THEMES = new Set(Object.keys(THEME_LABELS));
-const VALID_ACCENTS = new Set(Object.keys(ACCENT_LABELS));
-const ACCENT_CSS_VAR_MAP = {
-  accent: "--color-accent",
-  accentDim: "--color-accent-dim",
-  accentBright: "--color-accent-bright",
-  accentText: "--color-accent-text",
-  borderFocus: "--color-border-focus",
-  primary: "--color-primary",
-  primaryHover: "--color-primary-hover",
-  primaryText: "--color-primary-text",
-} as const;
-
-function loadSettings(): DiffSettings {
-  try {
-    const stored = localStorage.getItem(SETTINGS_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      // Validate theme - if invalid, use default
-      if (parsed.theme && !VALID_THEMES.has(parsed.theme)) {
-        parsed.theme = DEFAULT_DIFF_SETTINGS.theme;
-      }
-      if (parsed.accentColor && !VALID_ACCENTS.has(parsed.accentColor)) {
-        parsed.accentColor = DEFAULT_DIFF_SETTINGS.accentColor;
-      }
-      return { ...DEFAULT_DIFF_SETTINGS, ...parsed };
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return DEFAULT_DIFF_SETTINGS;
-}
-
-function saveSettings(settings: DiffSettings): void {
-  try {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
-  } catch {
-    // Ignore storage errors
-  }
-}
 
 interface PanelVisibility {
   chat: boolean;
@@ -150,7 +106,7 @@ const AppContent: Component = () => {
   const [comments, setComments] = createSignal<PRComment[]>([]);
   const [issueComments, setIssueComments] = createSignal<IssueComment[]>([]);
   const [error, setError] = createSignal<PrLoadError | null>(null);
-  const [settings, setSettings] = createSignal<DiffSettings>(loadSettings());
+  const [settings, setSettings] = createSignal<DiffSettings>(loadDiffSettings());
 
   // Review state
   const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
@@ -547,7 +503,7 @@ const AppContent: Component = () => {
 
   // Persist settings to localStorage when they change
   createEffect(() => {
-    saveSettings(settings());
+    saveDiffSettings(settings());
   });
 
   // Update document title when PR is loaded
@@ -561,13 +517,7 @@ const AppContent: Component = () => {
   });
 
   createEffect(() => {
-    const accentVars = ACCENT_THEME_VARS[settings().accentColor][uiTheme()];
-    for (const [key, cssVar] of Object.entries(ACCENT_CSS_VAR_MAP)) {
-      document.documentElement.style.setProperty(
-        cssVar,
-        accentVars[key as keyof typeof accentVars],
-      );
-    }
+    applyDiffAccent(settings().accentColor, uiTheme());
   });
 
   const loadPr = async (e: Event) => {

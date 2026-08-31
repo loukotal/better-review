@@ -36,6 +36,8 @@ import {
   applySafeMarkdownRenderer,
   escapeHtmlText,
   normalizeMalformedInlineCode,
+  renderMermaidCodeBlock,
+  renderSemanticTextCodeBlock,
 } from "./lib/markdown";
 import {
   ADVERSARIAL_REVIEW_PROMPT,
@@ -529,6 +531,15 @@ export function ChatPanel(props: ChatPanelProps) {
     // Custom renderer that creates placeholders for code blocks
     const renderer = applySafeMarkdownRenderer(new marked.Renderer());
     renderer.code = (token: Tokens.Code) => {
+      const language = (token.lang ?? "").trim().toLowerCase().split(/\s+/, 1)[0];
+      if (language === "mermaid" && !mdProps.streaming) {
+        const diagram = renderMermaidCodeBlock(token.text);
+        if (diagram) return diagram;
+      }
+
+      const semanticText = renderSemanticTextCodeBlock(token.text, token.lang);
+      if (semanticText) return semanticText;
+
       const id = `code-block-${blockCounter++}`;
       const lang = token.lang || "text";
       codeBlocks.push({ id, code: token.text, lang });

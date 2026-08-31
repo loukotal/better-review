@@ -130,6 +130,28 @@ better-review review
 better-review plan < plan.md
 ```
 
+### Pi integration
+
+Install the global Pi extension and prompt templates:
+
+```sh
+./scripts/install-local-command.sh
+./scripts/install-pi-integration.sh
+```
+
+Run `/reload` in an active Pi session. The integration adds the `submit_plan`,
+`review_last_message`, and `review_working_diff` tools plus these prompts:
+
+- `/better-review-plan`
+- `/better-review-last`
+- `/better-review-diff`
+
+While a tool waits for human feedback, it displays the live review-session URL. It prefers
+`BETTER_REVIEW_TAILSCALE_URL`, then the Tailscale URL registered for Better Review by Portless, so
+the session can be opened from another device on the tailnet.
+
+The source examples are in [`examples/`](./examples/).
+
 ### OpenCode integration examples
 
 - [Plugin example](./examples/opencode-better-review-plugin.ts)

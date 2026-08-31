@@ -227,6 +227,10 @@
       padding: 0.125em 0.3em;
     }
 
+    &:where(:not(pre) > code.markdown-inline-add) {
+      color: var(--color-diff-add-text);
+    }
+
     &:where(pre) {
       background: var(--color-bg-elevated);
       border: 1px solid var(--typeset-rule);
@@ -247,7 +251,7 @@
       background: color-mix(in oklab, var(--color-bg-elevated) 94%, var(--color-info));
     }
 
-    &:where(pre.markdown-flow .markdown-flow-line) {
+    &:where(pre.markdown-flow .markdown-flow-line, pre.markdown-diff-tree .markdown-flow-line) {
       display: inline;
     }
 
@@ -259,6 +263,25 @@
     &:where(pre.markdown-flow .markdown-flow-call) {
       color: color-mix(in oklab, var(--color-info) 72%, var(--color-text));
       font-weight: 500;
+    }
+
+    &:where(pre.markdown-flow .markdown-flow-add, pre.markdown-diff-tree .markdown-flow-add) {
+      color: var(--color-diff-add-text);
+    }
+
+    &:where(.mermaid-diagram) {
+      background: var(--color-bg-surface);
+      border: 1px solid var(--typeset-rule);
+      margin-block: var(--typeset-flow) 0;
+      overflow-x: auto;
+      padding: 1em;
+    }
+
+    &:where(.mermaid-diagram svg) {
+      display: block;
+      height: auto;
+      margin-inline: auto;
+      max-width: 100%;
     }
 
     &:where(pre code) {

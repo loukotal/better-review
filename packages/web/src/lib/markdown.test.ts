@@ -65,3 +65,47 @@ test("leaves ordinary text code blocks unaccented", () => {
   assert.doesNotMatch(html, /markdown-flow/);
   assert.match(html, /<pre><code class="markdown-code-block language-text">/);
 });
+
+test("highlights added lines in plain-text tree diagrams", () => {
+  const html = parseMarkdown(`\`\`\`text
+db/
+ └── pms.users_residency.sql
++    # expose deposit configuration
+\`\`\``);
+
+  assert.match(html, /markdown-flow-add/);
+  assert.match(html, /\+    # expose deposit configuration/);
+});
+
+test("highlights inline code beginning with an added-line marker", () => {
+  const html = parseMarkdown("`+    # expose deposit configuration`");
+
+  assert.match(html, /<code class="markdown-inline-add">/);
+});
+
+test("highlights added lines in diff tree code blocks", () => {
+  const html = parseMarkdown(`\`\`\`diff
+ functions/src/
+ ├── one-time-payments/
++│   # persist propertyUnitId
+\`\`\``);
+
+  assert.match(html, /<pre class="markdown-diff-tree">/);
+  assert.match(html, /<span class="markdown-flow-line markdown-flow-add">/);
+});
+
+test("renders mermaid code blocks as themed SVG diagrams", () => {
+  const html = parseMarkdown("```mermaid\ngraph LR\n  A[Plan] --> B[Review]\n```");
+
+  assert.match(html, /<figure class="mermaid-diagram">/);
+  assert.match(html, /<svg[^>]+/);
+  assert.match(html, /var\(--color-accent-bright\)/);
+  assert.doesNotMatch(html, /language-mermaid/);
+});
+
+test("falls back to escaped code for unsupported mermaid", () => {
+  const html = parseMarkdown("```mermaid\nthis is not a diagram\n```");
+
+  assert.match(html, /<pre><code class="markdown-code-block language-mermaid">/);
+  assert.match(html, /this is not a diagram/);
+});

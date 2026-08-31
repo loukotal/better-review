@@ -1,3 +1,4 @@
+import { renderMermaidSVG } from "beautiful-mermaid";
 import { marked, type Renderer, type Tokens } from "marked";
 
 import { extractGitHubAssetId, toGitHubAssetProxyPath } from "@better-review/shared/github-asset";
@@ -74,13 +75,40 @@ function getLanguageClass(lang: string | undefined): string {
   return normalized.length > 0 ? ` language-${normalized}` : "";
 }
 
+function isMermaidLanguage(lang: string | undefined): boolean {
+  return (lang ?? "").trim().toLowerCase().split(/\s+/, 1)[0] === "mermaid";
+}
+
+export function renderMermaidCodeBlock(text: string): string | null {
+  try {
+    const svg = renderMermaidSVG(text, {
+      bg: "var(--color-bg-surface)",
+      fg: "var(--color-text)",
+      line: "var(--color-text-muted)",
+      accent: "var(--color-accent-bright)",
+      muted: "var(--color-text-muted)",
+      surface: "var(--color-bg-elevated)",
+      border: "var(--color-border)",
+      font: "var(--font-sans)",
+      transparent: true,
+    });
+    return `<figure class="mermaid-diagram">${svg}</figure>`;
+  } catch {
+    return null;
+  }
+}
+
 function isTextFlowBlock(text: string, lang: string | undefined): boolean {
   const normalizedLang = (lang ?? "text").toLowerCase().trim();
+  const lines = text.split("\n");
+  const addedLines = lines.filter((line) => /^\s*\+(?!\+)/.test(line)).length;
+
+  if (normalizedLang === "diff") return addedLines > 0;
   if (!["", "text", "txt", "plaintext"].includes(normalizedLang)) return false;
 
   const arrowCount = text.match(/(?:->|→)/g)?.length ?? 0;
-  const arrowLedLines = text.split("\n").filter((line) => /^\s*(?:->|→)/.test(line)).length;
-  return arrowCount >= 3 && arrowLedLines >= 2;
+  const arrowLedLines = lines.filter((line) => /^\s*(?:->|→)/.test(line)).length;
+  return (arrowCount >= 3 && arrowLedLines >= 2) || addedLines > 0;
 }
 
 function renderTextFlow(text: string): string {
@@ -103,9 +131,19 @@ function renderTextFlow(text: string): string {
         cursor = index + token.length;
       }
 
-      return `<span class="markdown-flow-line">${html}${escapeHtmlText(line.slice(cursor))}</span>`;
+      const lineClass = /^\s*\+(?!\+)/.test(line)
+        ? "markdown-flow-line markdown-flow-add"
+        : "markdown-flow-line";
+      return `<span class="${lineClass}">${html}${escapeHtmlText(line.slice(cursor))}</span>`;
     })
     .join("\n");
+}
+
+export function renderSemanticTextCodeBlock(text: string, lang: string | undefined): string | null {
+  if (!isTextFlowBlock(text, lang)) return null;
+  const blockClass =
+    (lang ?? "").toLowerCase().trim() === "diff" ? "markdown-diff-tree" : "markdown-flow";
+  return `<pre class="${blockClass}"><code class="markdown-code-block${getLanguageClass(lang)}">${renderTextFlow(text)}</code></pre>`;
 }
 
 function renderSafeImage({ href, title, text }: Tokens.Image): string {
@@ -150,10 +188,16 @@ function renderSafeHtml(token: Tokens.HTML | Tokens.Tag): string {
   return escapeHtmlText(token.text);
 }
 
+function renderCodeSpan(token: Tokens.Codespan): string {
+  const addedClass = /^\s*\+(?!\+)/.test(token.text) ? ' class="markdown-inline-add"' : "";
+  return `<code${addedClass}>${escapeHtmlText(token.text)}</code>`;
+}
+
 export function applySafeMarkdownRenderer(renderer: Renderer): Renderer {
   renderer.link = renderSafeLink;
   renderer.image = renderSafeImage;
   renderer.html = renderSafeHtml;
+  renderer.codespan = renderCodeSpan;
   return renderer;
 }
 
@@ -161,9 +205,13 @@ export function applySafeMarkdownRenderer(renderer: Renderer): Renderer {
 const renderer = applySafeMarkdownRenderer(new marked.Renderer());
 
 renderer.code = ({ text, lang }) => {
-  if (isTextFlowBlock(text, lang)) {
-    return `<pre class="markdown-flow"><code class="markdown-code-block${getLanguageClass(lang)}">${renderTextFlow(text)}</code></pre>`;
+  if (isMermaidLanguage(lang)) {
+    const diagram = renderMermaidCodeBlock(text);
+    if (diagram) return diagram;
   }
+
+  const semanticText = renderSemanticTextCodeBlock(text, lang);
+  if (semanticText) return semanticText;
 
   return `<pre><code class="markdown-code-block${getLanguageClass(lang)}">${escapeHtmlText(text)}</code></pre>`;
 };
@@ -190,8 +238,9 @@ function processGitHubRefs(html: string, ctx: GitHubContext | null): string {
   // This regex matches HTML tags (including their attributes)
   const parts = html.split(/(<[^>]+>)/);
 
-  // Track nesting depth inside <a> tags so we don't inject links inside links
+  // Track nesting depth inside links and generated diagrams so we don't inject links into either.
   let insideAnchor = 0;
+  let insideMermaid = 0;
 
   const processedParts = parts.map((part) => {
     // If this is an HTML tag, track <a> nesting but don't modify it
@@ -200,12 +249,16 @@ function processGitHubRefs(html: string, ctx: GitHubContext | null): string {
         insideAnchor++;
       } else if (/^<\/a>/i.test(part)) {
         insideAnchor = Math.max(0, insideAnchor - 1);
+      } else if (/^<figure\b[^>]*class="[^"]*\bmermaid-diagram\b/i.test(part)) {
+        insideMermaid++;
+      } else if (/^<\/figure>/i.test(part) && insideMermaid > 0) {
+        insideMermaid--;
       }
       return part;
     }
 
-    // Skip text content that's inside an <a> tag (link text) to avoid nested links
-    if (insideAnchor > 0) {
+    // Skip text content that's inside a link or generated SVG diagram.
+    if (insideAnchor > 0 || insideMermaid > 0) {
       return part;
     }
 

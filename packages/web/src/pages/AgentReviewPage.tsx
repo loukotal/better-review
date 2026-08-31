@@ -22,16 +22,19 @@ import type {
 
 import { ThemeToggle } from "../components/ThemeToggle";
 import { Badge, Button, Card, Select, Textarea } from "../design-system";
+import { SettingsPanel } from "../diff/SettingsPanel";
 import {
   DiffViewer,
-  DEFAULT_DIFF_SETTINGS,
   getFileElementId,
   type DiffCommentDraft,
+  type DiffSettings,
 } from "../DiffViewer";
 import { FileTreePanel } from "../FileTreePanel";
 import { fetchWithApiAuth } from "../lib/apiAuth";
+import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "../lib/diff-settings";
 import { parseMarkdown } from "../lib/markdown";
 import { getReviewedFiles, toggleReviewedFile } from "../lib/query";
+import { uiTheme } from "../lib/theme";
 import { annotationInlineCommentId, appendAnnotationReply } from "../review-annotations";
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -346,6 +349,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 export default function AgentReviewPage() {
   const params = useParams<{ sessionId: string }>();
   const [feedback, setFeedback] = createSignal("");
+  const [settings, setSettings] = createSignal<DiffSettings>(loadDiffSettings());
   const [annotationComment, setAnnotationComment] = createSignal("");
   const [draftQuote, setDraftQuote] = createSignal<string | null>(null);
   const [currentDiffVariantId, setCurrentDiffVariantId] = createSignal<string | null>(null);
@@ -435,6 +439,14 @@ export default function AgentReviewPage() {
   });
 
   const isDiffSession = createMemo(() => session()?.payload.kind === "diff");
+
+  createEffect(() => {
+    saveDiffSettings(settings());
+  });
+
+  createEffect(() => {
+    applyDiffAccent(settings().accentColor, uiTheme());
+  });
 
   const showFilesPanel = createMemo(
     () => isDiffSession() && panelVisibility().files && !focusMode(),
@@ -955,6 +967,7 @@ export default function AgentReviewPage() {
                       )}
                     </Show>
                     <ThemeToggle />
+                    <SettingsPanel settings={settings()} onChange={setSettings} />
                   </div>
                 </div>
               </header>
@@ -1047,7 +1060,7 @@ export default function AgentReviewPage() {
                       <DiffViewer
                         rawDiff={diffRawPatch()}
                         comments={annotationsHidden() ? [] : inlineReviewComments()}
-                        settings={DEFAULT_DIFF_SETTINGS}
+                        settings={settings()}
                         onFilesLoaded={handleFilesLoaded}
                         onAddComment={addDiffAnnotation}
                         onReplyToComment={replyToInlineAnnotation}
