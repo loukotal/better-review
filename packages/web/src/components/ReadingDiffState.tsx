@@ -1,6 +1,8 @@
-import { For, Show, type Component } from "solid-js";
+import { For, Show, createSignal, type Component } from "solid-js";
 
 import { Button } from "../design-system";
+import { ChevronDownIcon } from "../icons/chevron-down-icon";
+import { ChevronRightIcon } from "../icons/chevron-right-icon";
 import { SpinnerIcon } from "../icons/spinner-icon";
 import type { ReadingDiffResult } from "../lib/query";
 
@@ -110,84 +112,126 @@ const kindLabel: Record<CallstackNode["kind"], string> = {
   other: "call",
 };
 
-const CallstackNodeContent: Component<{
-  node: CallstackNode;
-  onNavigate: (file: string, line?: number) => void;
-}> = (props) => {
-  const content = () => (
-    <>
-      <span class="min-w-0 break-words font-mono text-xs font-medium text-text">
-        {props.node.label}
-      </span>
-      <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[0.6875rem] text-text-faint">
-        <span>{kindLabel[props.node.kind]}</span>
-        <Show when={props.node.evidence}>
-          {(evidence) => (
-            <span>
-              {evidence().file}
-              {evidence().line ? `:${evidence().line}` : ""}
-            </span>
-          )}
-        </Show>
-        <Show when={props.node.inferred}>
-          <span class="text-warning">inferred</span>
-        </Show>
-      </span>
-    </>
-  );
-
-  return (
-    <Show
-      when={props.node.evidence}
-      fallback={
-        <div
-          class="inline-flex max-w-full flex-col border border-border bg-bg-elevated px-3 py-2"
-          title={props.node.detail}
-        >
-          {content()}
-        </div>
-      }
-    >
-      {(evidence) => (
-        <button
-          type="button"
-          class="inline-flex max-w-full flex-col border border-border bg-bg-elevated px-3 py-2 text-left hover:border-accent/60 hover:bg-accent/5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          title={`${props.node.detail ? `${props.node.detail}\n` : ""}Open ${evidence().file}${evidence().line ? `:${evidence().line}` : ""} in the diff`}
-          onClick={() => props.onNavigate(evidence().file, evidence().line)}
-        >
-          {content()}
-        </button>
-      )}
-    </Show>
-  );
+const kindTone: Record<CallstackNode["kind"], string> = {
+  entry: "bg-accent text-accent",
+  boundary: "bg-warning text-warning",
+  service: "bg-info text-info",
+  persistence: "bg-success text-success",
+  side_effect: "bg-error text-error",
+  other: "bg-text-faint text-text-faint",
 };
 
-const CallstackBranches: Component<{
-  nodes: CallstackTreeNode[];
-  nested?: boolean;
+function compactEvidencePath(path: string): string {
+  const parts = path.split("/");
+  return parts.at(-1) || path;
+}
+
+function countDescendants(item: CallstackTreeNode): number {
+  return item.children.reduce((count, child) => count + 1 + countDescendants(child), 0);
+}
+
+const CallstackNodeBody: Component<{ node: CallstackNode }> = (props) => (
+  <>
+    <span class="min-w-0 [overflow-wrap:anywhere] font-mono text-xs font-medium leading-5 text-text">
+      {props.node.label}
+    </span>
+    <span class="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.6875rem] leading-4 text-text-faint">
+      <span class="inline-flex items-center gap-1.5">
+        <span class={`size-1.5 rounded-full ${kindTone[props.node.kind]}`} aria-hidden="true" />
+        {kindLabel[props.node.kind]}
+      </span>
+      <Show when={props.node.evidence}>
+        {(evidence) => (
+          <span class="min-w-0 truncate font-mono" title={evidence().file}>
+            {compactEvidencePath(evidence().file)}
+            {evidence().line ? `:${evidence().line}` : ""}
+          </span>
+        )}
+      </Show>
+      <Show when={props.node.inferred}>
+        <span class="text-warning">inferred</span>
+      </Show>
+    </span>
+  </>
+);
+
+const CallstackBranch: Component<{
+  item: CallstackTreeNode;
+  depth: number;
   onNavigate: (file: string, line?: number) => void;
-}> = (props) => (
-  <ul class={props.nested ? "ml-3 border-l border-border pl-5" : "space-y-3"}>
-    <For each={props.nodes}>
-      {(item) => (
-        <li
-          class={
-            props.nested
-              ? "relative pb-3 before:absolute before:-left-5 before:top-4 before:w-5 before:border-t before:border-border last:pb-0"
-              : "pb-3 last:pb-0"
+}> = (props) => {
+  const hasChildren = () => props.item.children.length > 0;
+  const [expanded, setExpanded] = createSignal(props.depth < 2);
+  const node = () => props.item.node;
+  const locationTitle = () => {
+    const evidence = node().evidence;
+    if (!evidence) return node().detail;
+    return `${node().detail ? `${node().detail}\n` : ""}Open ${evidence.file}${evidence.line ? `:${evidence.line}` : ""} in the diff`;
+  };
+
+  return (
+    <li class="relative min-w-0 py-0.5">
+      <div class="grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)] items-start">
+        <Show
+          when={hasChildren()}
+          fallback={<span class="mt-2.5 ml-2 size-1 rounded-full bg-border" aria-hidden="true" />}
+        >
+          <button
+            type="button"
+            class="mt-1 inline-flex size-6 items-center justify-center text-text-faint hover:bg-bg-elevated hover:text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+            aria-label={`${expanded() ? "Collapse" : "Expand"} ${node().label}`}
+            aria-expanded={expanded()}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <Show when={expanded()} fallback={<ChevronRightIcon size={13} />}>
+              <ChevronDownIcon size={13} />
+            </Show>
+          </button>
+        </Show>
+
+        <Show
+          when={node().evidence}
+          fallback={
+            <div class="min-w-0 px-2 py-1.5" title={locationTitle()}>
+              <CallstackNodeBody node={node()} />
+            </div>
           }
         >
-          <CallstackNodeContent node={item.node} onNavigate={props.onNavigate} />
-          <Show when={item.children.length > 0}>
-            <div class="pt-3">
-              <CallstackBranches nodes={item.children} nested onNavigate={props.onNavigate} />
-            </div>
-          </Show>
-        </li>
-      )}
-    </For>
-  </ul>
-);
+          {(evidence) => (
+            <button
+              type="button"
+              class="min-w-0 px-2 py-1.5 text-left hover:bg-bg-elevated focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+              title={locationTitle()}
+              onClick={() => props.onNavigate(evidence().file, evidence().line)}
+            >
+              <CallstackNodeBody node={node()} />
+            </button>
+          )}
+        </Show>
+      </div>
+
+      <Show when={hasChildren() && expanded()}>
+        <ul class="ml-3 border-l border-border pl-3">
+          <For each={props.item.children}>
+            {(child) => (
+              <CallstackBranch item={child} depth={props.depth + 1} onNavigate={props.onNavigate} />
+            )}
+          </For>
+        </ul>
+      </Show>
+      <Show when={hasChildren() && !expanded()}>
+        <button
+          type="button"
+          class="ml-6 px-2 py-1 text-left text-[0.6875rem] text-text-faint hover:text-text focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
+          onClick={() => setExpanded(true)}
+        >
+          {countDescendants(props.item)} hidden{" "}
+          {countDescendants(props.item) === 1 ? "call" : "calls"}
+        </button>
+      </Show>
+    </li>
+  );
+};
 
 const FeatureCallstack: Component<{
   feature: Feature;
@@ -197,14 +241,16 @@ const FeatureCallstack: Component<{
 
   return (
     <section class="min-w-0 border-t border-border pt-4 first:border-t-0 first:pt-0">
-      <h3 class="mb-3 text-sm font-semibold text-text">{props.feature.title}</h3>
+      <h3 class="mb-2 text-sm font-semibold text-text text-balance">{props.feature.title}</h3>
       <Show
         when={roots().length > 0}
         fallback={<p class="text-xs text-text-faint">No supported call path found.</p>}
       >
-        <div class="overflow-x-auto pb-1">
-          <CallstackBranches nodes={roots()} onNavigate={props.onNavigate} />
-        </div>
+        <ul class="min-w-0 space-y-1" aria-label={props.feature.title}>
+          <For each={roots()}>
+            {(root) => <CallstackBranch item={root} depth={0} onNavigate={props.onNavigate} />}
+          </For>
+        </ul>
       </Show>
     </section>
   );
@@ -212,10 +258,15 @@ const FeatureCallstack: Component<{
 
 export const ReadingDiffSummary: Component<ReadingDiffSummaryProps> = (props) => (
   <section class="mb-4 border-y border-border bg-bg-surface" aria-labelledby="feature-callstacks">
-    <div class="flex items-center justify-between gap-4 border-b border-border px-3 py-3 sm:px-4">
-      <h2 id="feature-callstacks" class="text-base font-semibold text-text">
-        Feature callstacks
-      </h2>
+    <div class="flex items-start justify-between gap-4 border-b border-border px-3 py-3 sm:px-4">
+      <div class="min-w-0">
+        <h2 id="feature-callstacks" class="text-base font-semibold text-text">
+          Feature callstacks
+        </h2>
+        <p class="mt-1 max-w-3xl text-sm leading-5 text-text-muted text-pretty">
+          {props.result.summary}
+        </p>
+      </div>
       <Button
         type="button"
         variant="ghost"
