@@ -1,5 +1,6 @@
 import { type Component, For, createMemo, createSignal } from "solid-js";
 
+import { IconButton } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
 import { CopyIcon } from "../icons/copy-icon";
 import { CriticalIcon } from "../icons/critical-icon";
@@ -27,9 +28,9 @@ const severityStyles: Record<
     label: "Info",
   },
   warning: {
-    bg: "bg-yellow-500/10",
-    border: "border-yellow-500/30",
-    icon: "text-yellow-500",
+    bg: "bg-warning/10",
+    border: "border-warning/30",
+    icon: "text-warning",
     label: "Warning",
   },
   critical: {
@@ -48,13 +49,13 @@ const severityStyles: Record<
 
 function SeverityIcon(props: { severity: AnnotationSeverity }) {
   if (props.severity === "info") {
-    return <InfoIcon size={12} />;
+    return <InfoIcon size={14} />;
   }
   if (props.severity === "warning") {
-    return <WarningIcon size={12} />;
+    return <WarningIcon size={14} />;
   }
   // critical / error
-  return <CriticalIcon size={12} />;
+  return <CriticalIcon size={14} />;
 }
 
 /**
@@ -105,37 +106,30 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
   };
 
   return (
-    <div class={`my-2 p-2.5 border ${styles().bg} ${styles().border}`}>
+    <div class={`my-5 rounded-md border ${styles().border} ${styles().bg} p-3.5`}>
       {/* Header */}
-      <div class="flex items-center justify-between gap-2 mb-1.5">
-        <div class="flex items-center gap-2">
+      <div class="flex items-center justify-between gap-2 mb-3">
+        <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span class={styles().icon}>
             <SeverityIcon severity={props.annotation.severity} />
           </span>
-          <span class={`text-xs font-medium ${styles().icon}`}>{styles().label}</span>
+          <span class={`text-sm font-semibold ${styles().icon}`}>{styles().label}</span>
           <button
             type="button"
             onClick={handleNavigate}
-            class="text-xs font-mono text-text-muted hover:text-accent transition-colors"
+            class="w-full truncate text-left text-xs font-mono text-text-muted hover:text-accent transition-colors"
+            title={`${props.annotation.file}:${props.annotation.line}`}
           >
             {fileName()}:{props.annotation.line}
           </button>
         </div>
-        <button
-          type="button"
-          onClick={handleCopy}
-          class={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 transition-colors ${
-            copied() ? "text-success" : "text-text-faint hover:text-accent"
-          }`}
-          title="Copy to clipboard"
-        >
+        <IconButton label={copied() ? "Copied finding" : "Copy finding"} onClick={handleCopy}>
           {copied() ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-          <span>{copied() ? "Copied" : "Copy"}</span>
-        </button>
+        </IconButton>
       </div>
 
       {/* Message */}
-      <div class="text-sm text-text-muted leading-relaxed pl-5 whitespace-pre-wrap">
+      <div class="text-sm text-text leading-relaxed whitespace-pre-wrap">
         <For each={parsedMessage()}>
           {(part) =>
             part.type === "text" ? (

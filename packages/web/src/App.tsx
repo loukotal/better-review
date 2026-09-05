@@ -14,6 +14,7 @@ import {
 import type { PrStatus, PrInfo } from "@better-review/shared";
 
 import { ChatPanel } from "./ChatPanel";
+import { AppHeader } from "./components/AppHeader";
 import { ApproveButton } from "./components/ApproveButton";
 import { CommitNavigator } from "./components/CommitNavigator";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
@@ -21,7 +22,6 @@ import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReadingDiffEmpty, ReadingDiffSummary } from "./components/ReadingDiffState";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
-import { ThemeToggle } from "./components/ThemeToggle";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
@@ -67,10 +67,10 @@ function loadPanelVisibility(): PanelVisibility {
   try {
     const stored = localStorage.getItem(PANELS_STORAGE_KEY);
     if (stored) {
-      return { chat: true, files: true, ...JSON.parse(stored) };
+      return { chat: false, files: true, ...JSON.parse(stored) };
     }
   } catch {}
-  return { chat: true, files: true };
+  return { chat: false, files: true };
 }
 
 function savePanelVisibility(visibility: PanelVisibility): void {
@@ -89,6 +89,8 @@ const AppContent: Component = () => {
   const { setPrUrl: setContextPrUrl } = usePrContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const [prUrl, setPrUrl] = createSignal("");
+  const [switchingPr, setSwitchingPr] = createSignal(false);
+  const [conversationOpen, setConversationOpen] = createSignal(false);
   const [loadedPrUrl, setLoadedPrUrl] = createSignal<string | null>(null);
   const [initialLoadTriggered, setInitialLoadTriggered] = createSignal(false);
   const [prQueue, setPrQueue] = createSignal<QueuedPr[]>([]);
@@ -135,7 +137,7 @@ const AppContent: Component = () => {
   };
 
   onMount(() => {
-    const query = window.matchMedia("(max-width: 1024px)");
+    const query = window.matchMedia("(max-width: 1279px)");
     const syncLayout = () => {
       const enteringCompactLayout = query.matches && !compactLayout();
       setCompactLayout(query.matches);
@@ -557,6 +559,7 @@ const AppContent: Component = () => {
     if (cachedDiff) {
       setDiff(cachedDiff);
       setLoadedPrUrl(currentPrUrl);
+      setSwitchingPr(false);
       setContextPrUrl(currentPrUrl);
     }
     if (cachedInfo) setPrInfo(cachedInfo);
@@ -593,6 +596,7 @@ const AppContent: Component = () => {
 
       setDiff(data.diff);
       setLoadedPrUrl(currentPrUrl);
+      setSwitchingPr(false);
       setContextPrUrl(currentPrUrl);
       setCommits(data.commits);
       if (data.info) {
@@ -818,125 +822,119 @@ const AppContent: Component = () => {
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header Bar - hidden in focus mode */}
       <Show when={!focusMode()}>
-        <header class="border-b border-border bg-bg-surface">
-          <div class="px-4 py-2.5">
-            <div class="flex items-center justify-between mb-2.5">
-              <A href="/" class="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
-                <span class="w-2 h-2 bg-accent" aria-hidden="true" />
-                <h1 class="text-sm font-mono font-semibold tracking-tight text-text">
-                  better-review
-                </h1>
-              </A>
-              <div class="flex items-center gap-1 text-sm font-mono">
-                <div class="flex items-center gap-0.5 border-r border-border pr-2 mr-1">
-                  <Button
-                    onClick={() => togglePanel("chat")}
-                    variant="ghost"
-                    size="sm"
-                    class={panelVisibility().chat ? "bg-bg-elevated text-text" : "text-text-muted"}
-                    aria-pressed={panelVisibility().chat}
-                    aria-controls="chat-panel"
-                    title="Toggle chat panel"
-                  >
-                    Chat
-                  </Button>
-                  <Button
-                    onClick={() => togglePanel("files")}
-                    variant="ghost"
-                    size="sm"
-                    class={panelVisibility().files ? "bg-bg-elevated text-text" : "text-text-muted"}
-                    aria-pressed={panelVisibility().files}
-                    aria-controls="file-tree-panel"
-                    title="Toggle file tree panel"
-                  >
-                    Files
-                  </Button>
-                </div>
+        <AppHeader
+          onOpenPr={() => setSwitchingPr(!switchingPr())}
+          prSwitcherOpen={switchingPr()}
+          actions={
+            <>
+              {" "}
+              <div class="flex items-center gap-0.5 border-r border-border pr-2 mr-1">
                 <Button
-                  onClick={toggleFocusMode}
+                  onClick={() => togglePanel("chat")}
                   variant="ghost"
                   size="sm"
-                  title="Enter focus mode (F)"
+                  class={panelVisibility().chat ? "bg-bg-elevated text-text" : "text-text-muted"}
+                  aria-pressed={panelVisibility().chat}
+                  aria-controls="chat-panel"
+                  title="Toggle chat panel"
                 >
-                  Focus
+                  Chat
                 </Button>
-                <A
-                  href="/"
-                  class="max-xl:hidden px-2 py-1.5 text-text-muted hover:text-text transition-colors"
-                >
-                  Reviews
-                </A>
-                <A
-                  href="/kanban"
-                  class="max-xl:hidden px-2 py-1.5 text-text-muted hover:text-text transition-colors"
-                >
-                  Projects
-                </A>
-                <ThemeToggle />
-                <SettingsPanel settings={settings()} onChange={setSettings} />
-              </div>
-            </div>
-
-            <form onSubmit={loadPr} class="flex items-center gap-2 border-t border-border pt-2.5">
-              <TextInput
-                type="text"
-                inputMode="url"
-                size="sm"
-                value={prUrl()}
-                onInput={(e) => setPrUrl(e.currentTarget.value)}
-                placeholder="github.com/owner/repo/pull/123"
-                aria-label="Pull request URL"
-                class="min-w-0 flex-1 font-mono"
-              />
-              <Show when={!loadedPrUrl() || prUrl().trim() !== loadedPrUrl()}>
                 <Button
-                  type="submit"
-                  disabled={loading() || !prUrl().trim()}
-                  variant="primary"
+                  onClick={() => togglePanel("files")}
+                  variant="ghost"
                   size="sm"
+                  class={panelVisibility().files ? "bg-bg-elevated text-text" : "text-text-muted"}
+                  aria-pressed={panelVisibility().files}
+                  aria-controls="file-tree-panel"
+                  title="Toggle file tree panel"
                 >
-                  {loading() ? "Opening…" : error() ? "Try again" : "Open"}
+                  Files
                 </Button>
+              </div>
+              <Button
+                onClick={toggleFocusMode}
+                variant="ghost"
+                size="sm"
+                title="Enter focus mode (F)"
+              >
+                Focus
+              </Button>
+            </>
+          }
+        >
+          <Show when={!loadedPrUrl() || switchingPr() || error()}>
+            <div class="px-4 pb-3">
+              <Show when={!loadedPrUrl() || switchingPr()}>
+                <form
+                  id="pr-switcher"
+                  onSubmit={loadPr}
+                  class="mt-2 flex items-center gap-2 border-t border-border pt-2"
+                >
+                  <TextInput
+                    type="text"
+                    inputMode="url"
+                    size="sm"
+                    value={prUrl()}
+                    onInput={(e) => setPrUrl(e.currentTarget.value)}
+                    placeholder="github.com/owner/repo/pull/123"
+                    aria-label="Pull request URL"
+                    class="min-w-0 flex-1 font-mono"
+                  />
+                  <Show when={!loadedPrUrl() || prUrl().trim() !== loadedPrUrl()}>
+                    <Button
+                      type="submit"
+                      disabled={loading() || !prUrl().trim()}
+                      variant="primary"
+                      size="sm"
+                    >
+                      {loading() ? "Opening…" : error() ? "Try again" : "Open"}
+                    </Button>
+                  </Show>
+                  <Show when={loadedPrUrl()}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setPrUrl(loadedPrUrl()!);
+                        setSwitchingPr(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </Show>
+                </form>
               </Show>
-              <Show when={nextPr()}>
-                {(next) => (
-                  <A
-                    href={`/review?prUrl=${encodeURIComponent(next().url)}`}
-                    class="flex items-center gap-1 px-2 py-1.5 font-mono text-xs text-text-muted transition-colors hover:text-text"
-                    title={`Next: ${next().title}`}
+
+              <Show when={error()}>
+                {(loadError) => (
+                  <div
+                    role="alert"
+                    aria-live="polite"
+                    class="mt-3 flex max-w-3xl items-start gap-2.5 border border-error/50 bg-diff-remove-bg px-3 py-2.5"
                   >
-                    Next <span aria-hidden="true">→</span>
-                  </A>
+                    <span
+                      aria-hidden="true"
+                      class="mt-0.5 flex size-4 shrink-0 items-center justify-center border border-error/60 font-mono text-xs font-semibold text-diff-remove-text"
+                    >
+                      !
+                    </span>
+                    <div class="min-w-0">
+                      <p class="m-0 text-sm font-medium text-diff-remove-text">
+                        {loadError().title}
+                      </p>
+                      <p class="m-0 mt-0.5 text-sm leading-5 text-text">{loadError().message}</p>
+                    </div>
+                  </div>
                 )}
               </Show>
-            </form>
-
-            <Show when={error()}>
-              {(loadError) => (
-                <div
-                  role="alert"
-                  aria-live="polite"
-                  class="mt-3 flex max-w-3xl items-start gap-2.5 border border-error/50 bg-diff-remove-bg px-3 py-2.5"
-                >
-                  <span
-                    aria-hidden="true"
-                    class="mt-0.5 flex size-4 shrink-0 items-center justify-center border border-error/60 font-mono text-xs font-semibold text-diff-remove-text"
-                  >
-                    !
-                  </span>
-                  <div class="min-w-0">
-                    <p class="m-0 text-sm font-medium text-diff-remove-text">{loadError().title}</p>
-                    <p class="m-0 mt-0.5 text-sm leading-5 text-text">{loadError().message}</p>
-                  </div>
-                </div>
-              )}
-            </Show>
-          </div>
-
+            </div>
+          </Show>
           {/* PR Status Bar */}
           <Show when={loadedPrUrl()}>
-            <div class="px-4 py-2 border-t border-border bg-bg flex items-start justify-between gap-4 relative">
-              <div class="flex-1 min-w-0">
+            <div class="px-4 py-3 border-t border-border bg-bg flex flex-wrap items-center justify-between gap-x-6 gap-y-3 relative">
+              <div class="flex-1 min-w-64">
                 <PrStatusBar
                   status={prStatus()}
                   loading={loadingStatus()}
@@ -944,21 +942,7 @@ const AppContent: Component = () => {
                   repoName={prInfo()?.repo}
                 />
               </div>
-              <div class="flex items-center gap-2 flex-shrink-0">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  disabled={aiAnnotations().length === 0 && comments().length === 0}
-                  onClick={() => setReviewCommentsHidden((hidden) => !hidden)}
-                  title={
-                    reviewCommentsHidden()
-                      ? "Show all annotations and GitHub comments"
-                      : "Hide all annotations and GitHub comments"
-                  }
-                >
-                  {reviewCommentsHidden() ? "Show comments" : "Hide comments"}
-                </Button>
+              <div class="flex flex-wrap items-center gap-2">
                 <ReviewModeToggle
                   mode={reviewMode()}
                   onModeChange={handleModeChange}
@@ -970,21 +954,57 @@ const AppContent: Component = () => {
                   onModeChange={setDiffViewMode}
                   disabled={loading() || loadingCommits()}
                 />
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-expanded={conversationOpen()}
+                  aria-controls="pr-conversation"
+                  onClick={() => setConversationOpen(!conversationOpen())}
+                >
+                  Conversation{issueComments().length ? ` (${issueComments().length})` : ""}
+                </Button>
+                <Show when={nextPr()}>
+                  {(next) => (
+                    <A
+                      href={`/review?prUrl=${encodeURIComponent(next().url)}`}
+                      class="px-2 py-1 text-xs text-text-muted hover:text-text"
+                      title={`Next: ${next().title}`}
+                    >
+                      Next PR →
+                    </A>
+                  )}
+                </Show>
+                <SettingsPanel settings={settings()} onChange={setSettings}>
+                  <Button
+                    fullWidth
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={!reviewCommentsHidden()}
+                    disabled={aiAnnotations().length === 0 && comments().length === 0}
+                    onClick={() => setReviewCommentsHidden((hidden) => !hidden)}
+                  >
+                    Inline comments
+                  </Button>
+                </SettingsPanel>
                 <ApproveButton />
               </div>
             </div>
             {/* PR Comments (top-level conversation) */}
-            <PrCommentsPanel
-              comments={issueComments()}
-              loading={loadingComments()}
-              repoOwner={prInfo()?.owner}
-              repoName={prInfo()?.repo}
-              onAddComment={addIssueComment}
-              onEditComment={editIssueComment}
-              onDeleteComment={deleteIssueComment}
-            />
+            <div id="pr-conversation" hidden={!conversationOpen()}>
+              <PrCommentsPanel
+                embedded
+                comments={issueComments()}
+                loading={loadingComments()}
+                repoOwner={prInfo()?.owner}
+                repoName={prInfo()?.repo}
+                onAddComment={addIssueComment}
+                onEditComment={editIssueComment}
+                onDeleteComment={deleteIssueComment}
+              />
+            </div>
           </Show>
-        </header>
+        </AppHeader>
       </Show>
 
       {/* Focus mode exit bar */}
@@ -1043,7 +1063,7 @@ const AppContent: Component = () => {
                       Open a pull request
                     </h2>
                     <p class="mt-2 text-sm leading-relaxed text-text-muted">
-                      Paste a GitHub PR URL above to load its diff, comments, and review tools.
+                      Paste a GitHub PR URL above to start reviewing.
                     </p>
                     <p class="mt-4 font-mono text-xs text-text-faint">
                       github.com/owner/repo/pull/123

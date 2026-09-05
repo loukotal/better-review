@@ -2,8 +2,8 @@ import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 
-import { ThemeToggle } from "../components/ThemeToggle";
-import { Badge, Button, Select } from "../design-system";
+import { AppHeader } from "../components/AppHeader";
+import { Alert, Badge, Button, EmptyState, LoadingState, Select } from "../design-system";
 import { SpinnerIcon } from "../icons/spinner-icon";
 import {
   queryKeys,
@@ -26,7 +26,7 @@ const CiStatusBadgeInner: Component<{ status: CiStatus }> = (props) => {
       (passed < total && state !== "PENDING" && state !== "EXPECTED")
     )
       return "text-error";
-    if (state === "PENDING" || state === "EXPECTED") return "text-yellow-500";
+    if (state === "PENDING" || state === "EXPECTED") return "text-warning";
     return "text-text-faint";
   };
 
@@ -227,40 +227,14 @@ const PrListPage: Component = () => {
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header */}
-      <header class="border-b border-border bg-bg-surface flex-shrink-0">
-        <div class="mx-auto h-12 max-w-6xl px-4">
-          <div class="flex items-center justify-between">
-            <A href="/" class="flex h-12 items-center gap-2.5 transition-opacity hover:opacity-80">
-              <span class="w-2 h-2 bg-accent" aria-hidden="true" />
-              <h1 class="text-sm font-mono font-semibold tracking-tight text-text">
-                better-review
-              </h1>
-            </A>
-            <nav class="flex items-center gap-1 text-sm font-mono" aria-label="Main navigation">
-              <A
-                href="/kanban"
-                class="px-2.5 py-1.5 text-text-muted hover:text-text transition-colors"
-              >
-                Projects
-              </A>
-              <A
-                href="/review"
-                class="px-2.5 py-1.5 text-text-muted hover:text-text transition-colors"
-              >
-                Open PR
-              </A>
-              <ThemeToggle />
-            </nav>
-          </div>
-        </div>
-      </header>
+      <AppHeader constrained />
 
       {/* Content */}
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-6xl px-4 py-4">
           <div class="mb-3 flex items-center justify-between gap-4">
             <div class="flex min-w-0 items-baseline gap-2.5">
-              <h2 class="font-mono text-lg font-semibold tracking-tight text-text">Reviews</h2>
+              <h1 class="text-lg font-semibold tracking-tight text-text">Reviews</h1>
               <Show when={!prsQuery.isPending}>
                 <span class="font-mono text-xs text-text-faint">{filteredPrs().length}</span>
               </Show>
@@ -285,7 +259,7 @@ const PrListPage: Component = () => {
             </div>
           </div>
 
-          <div class="mb-3 flex items-center justify-between gap-3 border-y border-border py-1">
+          <div class="mb-3 flex flex-wrap items-center justify-between gap-3 border-y border-border py-1">
             <div
               class="flex items-center gap-1 text-sm"
               role="group"
@@ -312,23 +286,26 @@ const PrListPage: Component = () => {
                 ]}
               >
                 {(filter) => (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     type="button"
                     aria-pressed={filter.active()}
                     onClick={filter.toggle}
-                    class={`px-2 py-1 text-xs font-mono font-medium ${
+                    class={`font-medium ${
                       filter.active()
                         ? "bg-bg-elevated text-text"
                         : "text-text-muted hover:text-text hover:bg-bg-surface"
                     }`}
                   >
                     {filter.label}
-                  </button>
+                  </Button>
                 )}
               </For>
             </div>
             <Select
               id="repo-filter"
+              aria-label="Filter by repository"
               compact
               value={repoFilter()}
               onChange={(e) => setSearchParams({ repo: e.currentTarget.value || undefined })}
@@ -345,19 +322,27 @@ const PrListPage: Component = () => {
 
           {/* Loading state */}
           <Show when={prsQuery.isPending || (prsQuery.isFetching && filteredPrs().length === 0)}>
-            <div class="text-center py-12">
-              <div class="flex items-center justify-center gap-2 text-text-faint text-base">
-                <SpinnerIcon size={14} class="animate-spin" />
-                Loading PRs...
-              </div>
-            </div>
+            <LoadingState label="Loading pull requests…" />
           </Show>
 
           {/* Error state */}
           <Show when={prsQuery.isError}>
-            <div class="border border-error/50 bg-diff-remove-bg px-4 py-3 text-base text-error">
-              {prsQuery.error?.message ?? "Failed to load PRs"}
-            </div>
+            <Alert
+              intent="danger"
+              title="Could not load pull requests"
+              actions={
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => prsQuery.refetch()}
+                  disabled={prsQuery.isFetching}
+                >
+                  Try again
+                </Button>
+              }
+            >
+              {prsQuery.error?.message ?? "Please try again."}
+            </Alert>
           </Show>
 
           {/* Empty state */}
@@ -368,12 +353,10 @@ const PrListPage: Component = () => {
               !(prsQuery.isPending || prsQuery.isFetching)
             }
           >
-            <div class="text-center py-16 border-y border-border">
-              <div class="text-text text-sm font-medium">No matching pull requests</div>
-              <p class="text-sm text-text-muted mt-1">
-                Change or clear a filter to widen the queue.
-              </p>
-            </div>
+            <EmptyState
+              title="No matching pull requests"
+              description="Change or clear a filter to widen the queue."
+            />
           </Show>
 
           {/* PR list */}

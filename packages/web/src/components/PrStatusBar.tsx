@@ -1,10 +1,10 @@
-import { type Component, Show, createMemo, createSignal, createEffect, onCleanup } from "solid-js";
+import { type Component, Show, createMemo } from "solid-js";
 
 import type { PrState, PrStatus, CheckRun } from "@better-review/shared";
 
+import { Badge, Popover, IconButton } from "../design-system";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { CheckIcon } from "../icons/check-icon";
-import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CloseIcon } from "../icons/close-icon";
 import { CopyIcon } from "../icons/copy-icon";
 import { ExternalLinkIcon } from "../icons/external-link-icon";
@@ -18,10 +18,10 @@ interface PrStatusBarProps {
   repoName?: string | null;
 }
 
-const stateStyles: Record<PrState, { bg: string; text: string; label: string }> = {
-  open: { bg: "bg-success/20", text: "text-success", label: "Open" },
-  closed: { bg: "bg-error/20", text: "text-error", label: "Closed" },
-  merged: { bg: "bg-merged/20", text: "text-merged", label: "Merged" },
+const stateStyles: Record<PrState, { variant: "success" | "neutral" | "merged"; label: string }> = {
+  open: { variant: "success", label: "Open" },
+  closed: { variant: "neutral", label: "Closed" },
+  merged: { variant: "merged", label: "Merged" },
 };
 
 function ChecksIndicator(props: { checks: readonly CheckRun[] }) {
@@ -67,7 +67,7 @@ function ChecksIndicator(props: { checks: readonly CheckRun[] }) {
             <CloseIcon size={12} class="text-error" />
           </Show>
           <Show when={status() === "pending"}>
-            <SpinnerIcon size={12} class="text-yellow-500 animate-spin" />
+            <SpinnerIcon size={12} class="text-warning animate-spin" />
           </Show>
           <span class="text-sm text-text-muted">
             {s().passed}/{s().total} checks
@@ -79,7 +79,6 @@ function ChecksIndicator(props: { checks: readonly CheckRun[] }) {
 }
 
 export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
-  const [showDescription, setShowDescription] = createSignal(false);
   const { copied, copy } = useCopyToClipboard();
 
   const githubContext = createMemo(() => {
@@ -87,19 +86,6 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
       return { owner: props.repoOwner, repo: props.repoName };
     }
     return null;
-  });
-
-  // Close description panel on Escape key
-  createEffect(() => {
-    if (showDescription()) {
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === "Escape") {
-          setShowDescription(false);
-        }
-      };
-      document.addEventListener("keydown", handleKeyDown);
-      onCleanup(() => document.removeEventListener("keydown", handleKeyDown));
-    }
   });
 
   return (
@@ -149,11 +135,9 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
             {/* Line 2: State badge, author, branch, CI checks, mergeable, description toggle */}
             <div class="flex items-center gap-3 flex-wrap">
               {/* State badge */}
-              <div class={`flex items-center gap-1.5 px-1.5 py-0.5 ${style().bg}`}>
-                <span class={`text-xs font-medium ${style().text}`}>
-                  {status().draft ? "Draft" : style().label}
-                </span>
-              </div>
+              <Badge variant={status().draft ? "neutral" : style().variant}>
+                {status().draft ? "Draft" : style().label}
+              </Badge>
 
               {/* Author */}
               <span class="text-xs text-text-faint">by {status().author}</span>
@@ -163,11 +147,11 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
 
               {/* Branch name with copy button */}
               <div class="flex items-center gap-1 text-xs">
-                <code class="px-1.5 py-0.5 bg-bg-elevated text-text-muted font-mono">
+                <code title={status().headRef} class="max-w-48 truncate text-text-muted font-mono">
                   {status().headRef}
                 </code>
-                <button
-                  type="button"
+                <IconButton
+                  label={copied() ? "Branch copied" : "Copy branch name"}
                   onClick={() => copy(status().headRef)}
                   class="p-0.5 text-text-faint hover:text-text transition-colors"
                   title={copied() ? "Copied!" : "Copy branch name"}
@@ -175,7 +159,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                   <Show when={copied()} fallback={<CopyIcon size={14} />}>
                     <CheckIcon size={14} class="text-success" />
                   </Show>
-                </button>
+                </IconButton>
               </div>
 
               {/* CI Checks */}
@@ -193,64 +177,21 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 </div>
               </Show>
 
-              {/* Description toggle */}
               <Show when={hasDescription()}>
-                <button
-                  type="button"
-                  onClick={() => setShowDescription(!showDescription())}
-                  class={`flex items-center gap-1 text-xs px-1.5 py-0.5 transition-colors ${
-                    showDescription()
-                      ? "text-text bg-bg-elevated"
-                      : "text-text-faint hover:text-text hover:bg-bg-elevated/50"
-                  }`}
-                  title={showDescription() ? "Hide description" : "Show description"}
+                <Popover
+                  label="PR description"
+                  trigger={<span>Description</span>}
+                  triggerSize="sm"
+                  width={600}
+                  align="left"
                 >
-                  <span
-                    class={`transform transition-transform duration-150 ${showDescription() ? "rotate-180" : ""}`}
-                  >
-                    <ChevronDownIcon size={12} />
-                  </span>
-                  <span>Description</span>
-                </button>
+                  <div
+                    class="typeset text-sm text-text-muted"
+                    innerHTML={parseMarkdown(status().body, githubContext())}
+                  />
+                </Popover>
               </Show>
             </div>
-
-            {/* Description panel - positioned absolutely to overlay without pushing controls */}
-            <Show when={showDescription() && hasDescription()}>
-              {/* Backdrop for click-outside-to-close */}
-              <div class="fixed inset-0 z-40" onClick={() => setShowDescription(false)} />
-              {/* Panel */}
-              <div
-                class="absolute left-0 top-full mt-2 z-50 bg-bg-elevated border border-border shadow-xl overflow-hidden"
-                style={{
-                  width: "min(600px, calc(100vw - 32px))",
-                  "max-height": "min(400px, 50vh)",
-                }}
-              >
-                <div class="flex items-center justify-between px-4 py-2 border-b border-border bg-bg sticky top-0">
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs text-text-muted font-medium">PR description</span>
-                    <Show when={prNumber()}>
-                      <span class="text-xs text-text-faint/60">#{prNumber()}</span>
-                    </Show>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowDescription(false)}
-                    class="flex items-center gap-1.5 px-2 py-1 text-xs text-text-faint hover:text-text hover:bg-bg-elevated transition-colors"
-                    title="Close (Esc)"
-                  >
-                    <span class="hidden sm:inline">Close</span>
-                    <CloseIcon size={14} />
-                  </button>
-                </div>
-                <div
-                  class="typeset overflow-y-auto p-4 text-sm text-text-muted"
-                  style={{ "max-height": "calc(min(400px, 50vh) - 48px)" }}
-                  innerHTML={parseMarkdown(status().body, githubContext())}
-                />
-              </div>
-            </Show>
           </div>
         );
       }}

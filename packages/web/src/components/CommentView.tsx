@@ -1,6 +1,7 @@
 import { type Component, Show, For, createSignal, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
 
+import { Button, Textarea } from "../design-system";
 import { GitHubIcon } from "../icons/github-icon";
 import { parseMarkdown } from "../lib/markdown";
 
@@ -139,34 +140,37 @@ export const CommentView: Component<CommentViewProps> = (props) => {
               <span class="text-sm text-text">{props.comment.user.login}</span>
               <span class="text-sm text-accent">editing</span>
             </div>
-            <textarea
+            <Textarea
+              aria-label="Comment"
               ref={(el) => setTimeout(() => el.focus(), 0)}
               value={editBody()}
               onInput={(e) => setEditBody(e.currentTarget.value)}
               onKeyDown={handleKeyDown}
-              class="w-full px-2 py-1.5 bg-bg border border-accent text-text focus:border-accent resize-y min-h-[60px] text-sm"
+              class="w-full min-h-20 resize-y"
               disabled={isSubmitting()}
             />
             <div class="flex gap-2 mt-1.5">
-              <button
+              <Button
                 type="button"
                 onClick={submitEdit}
                 disabled={isSubmitting()}
-                class="px-2.5 py-1 bg-primary text-primary-text text-sm hover:bg-primary-hover disabled:opacity-50 transition-colors"
+                variant="primary"
+                size="sm"
               >
                 {isSubmitting() ? "Saving..." : "Save"}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
                 onClick={cancelEditing}
                 disabled={isSubmitting()}
-                class="px-2.5 py-1 text-text-faint text-sm hover:text-text transition-colors"
+                variant="ghost"
+                size="sm"
               >
                 Cancel
-              </button>
+              </Button>
             </div>
             <Show when={editError()}>
-              <div class="mt-2 px-2 py-1.5 border border-red-500/50 bg-red-500/10 text-red-400 text-sm">
+              <div class="mt-2 px-2 py-1.5 border border-error/50 bg-error/10 text-error text-sm">
                 {editError()}
               </div>
             </Show>
@@ -204,7 +208,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
           <Show when={props.onReply || showActions()}>
             <div class="flex items-center gap-2 ml-auto text-xs">
               <Show when={props.onReply}>
-                <button
+                <Button
                   type="button"
                   onClick={() =>
                     props.onReply?.(
@@ -213,29 +217,27 @@ export const CommentView: Component<CommentViewProps> = (props) => {
                       props.comment.displayBody ?? props.comment.body,
                     )
                   }
-                  class="text-text-faint hover:text-accent transition-colors"
+                  variant="ghost"
+                  size="sm"
                 >
                   Reply
-                </button>
+                </Button>
               </Show>
               <Show when={showActions() && props.onEdit}>
-                <button
-                  type="button"
-                  onClick={startEditing}
-                  class="text-text-faint hover:text-accent transition-colors"
-                >
+                <Button type="button" onClick={startEditing} variant="ghost" size="sm">
                   Edit
-                </button>
+                </Button>
               </Show>
               <Show when={showActions() && props.onDelete}>
-                <button
+                <Button
                   type="button"
                   onClick={handleDelete}
                   disabled={isSubmitting()}
-                  class="text-text-faint hover:text-red-400 transition-colors"
+                  variant="ghost"
+                  size="sm"
                 >
                   Delete
-                </button>
+                </Button>
               </Show>
             </div>
           </Show>
@@ -243,7 +245,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
 
         {/* Delete error message */}
         <Show when={deleteError()}>
-          <div class="text-xs text-red-400 mb-1">{deleteError()}</div>
+          <div class="text-xs text-error mb-1">{deleteError()}</div>
         </Show>
 
         {/* Comment body - markdown rendered */}
@@ -310,13 +312,14 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
 
   return (
     <div class="ml-3 pl-3 border-l border-accent mt-2">
-      <textarea
+      <Textarea
+        aria-label="Comment"
         ref={(el) => setTimeout(() => el.focus(), 0)}
         value={body()}
         onInput={(e) => setBody(e.currentTarget.value)}
         onKeyDown={handleKeyDown}
         placeholder="Write a reply..."
-        class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[50px] text-sm"
+        class="w-full min-h-20 resize-y"
         disabled={isSubmitting()}
       />
       <Show when={error()}>
@@ -325,22 +328,24 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
         </div>
       </Show>
       <div class="flex gap-2 mt-1.5">
-        <button
+        <Button
           type="button"
           onClick={submit}
           disabled={!body().trim() || isSubmitting()}
-          class="px-2.5 py-1 bg-primary text-primary-text text-xs hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          variant="primary"
+          size="sm"
         >
           {isSubmitting() ? "Replying..." : "Reply"}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           onClick={props.onCancel}
           disabled={isSubmitting()}
-          class="px-2.5 py-1 text-text-faint text-xs hover:text-text transition-colors"
+          variant="ghost"
+          size="sm"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -407,13 +412,15 @@ export const CommentThread: Component<CommentThreadProps> = (props) => {
 
         {/* Expand button */}
         <Show when={hiddenCount() > 0}>
-          <button
+          <Button
             type="button"
             onClick={() => setShowAllReplies(true)}
-            class="ml-3 text-sm text-accent hover:text-accent-bright cursor-pointer"
+            variant="ghost"
+            size="sm"
+            class="ml-3"
           >
             +{hiddenCount()} more
-          </button>
+          </Button>
         </Show>
 
         {/* Last reply */}
@@ -452,13 +459,9 @@ export const CommentThread: Component<CommentThreadProps> = (props) => {
         <Show
           when={isReplying()}
           fallback={
-            <button
-              type="button"
-              onClick={() => setIsReplying(true)}
-              class="text-xs text-text-faint hover:text-accent transition-colors cursor-pointer"
-            >
+            <Button type="button" onClick={() => setIsReplying(true)} variant="ghost" size="sm">
               Reply
-            </button>
+            </Button>
           }
         >
           <ReplyForm
@@ -471,18 +474,19 @@ export const CommentThread: Component<CommentThreadProps> = (props) => {
         </Show>
 
         <Show when={props.onResolve && !isReplying()}>
-          <button
+          <Button
             type="button"
             onClick={handleResolveToggle}
             disabled={isResolving()}
-            class="text-xs transition-colors cursor-pointer disabled:opacity-50"
+            variant="ghost"
+            size="sm"
             classList={{
               "text-success hover:text-text-faint": props.isResolved,
               "text-text-faint hover:text-success": !props.isResolved,
             }}
           >
             {isResolving() ? "..." : props.isResolved ? "Unresolve" : "Resolve"}
-          </button>
+          </Button>
         </Show>
       </div>
     </div>
@@ -554,7 +558,8 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
   return (
     <div>
       <div class="text-sm text-accent mb-2">{lineLabel()}</div>
-      <textarea
+      <Textarea
+        aria-label="Comment"
         ref={(el) => setTimeout(() => el.focus(), 0)}
         value={body()}
         onInput={(e) => {
@@ -564,26 +569,28 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
         }}
         onKeyDown={handleKeyDown}
         placeholder="Write a comment..."
-        class="w-full px-2 py-1.5 bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent resize-y min-h-[60px] text-sm"
+        class="w-full min-h-20 resize-y"
         disabled={isSubmitting()}
       />
       <div class="flex gap-2 mt-2">
-        <button
+        <Button
           type="button"
           onClick={submit}
           disabled={!body().trim() || isSubmitting()}
-          class="px-2.5 py-1 bg-primary text-primary-text text-sm hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          variant="primary"
+          size="sm"
         >
           {isSubmitting() ? "Commenting..." : "Comment"}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           onClick={props.onCancel}
           disabled={isSubmitting()}
-          class="px-2.5 py-1 text-text-faint text-sm hover:text-text transition-colors"
+          variant="ghost"
+          size="sm"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );

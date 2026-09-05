@@ -1,11 +1,13 @@
 import { type Component, For, Show, createSignal, createMemo } from "solid-js";
 
+import { Button, Textarea } from "../design-system";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CommentIcon } from "../icons/comment-icon";
 import type { IssueComment } from "../lib/query";
 import { CommentView } from "./CommentView";
 
 interface PrCommentsPanelProps {
+  embedded?: boolean;
   comments: IssueComment[];
   loading?: boolean;
   repoOwner?: string | null;
@@ -146,7 +148,7 @@ function groupIntoThreads(comments: IssueComment[]): CommentThread[] {
 }
 
 export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
-  const [expanded, setExpanded] = createSignal(false);
+  const [expanded, setExpanded] = createSignal(props.embedded ?? false);
   const [showNewCommentForm, setShowNewCommentForm] = createSignal(false);
   const [newCommentBody, setNewCommentBody] = createSignal("");
   const [isSubmitting, setIsSubmitting] = createSignal(false);
@@ -213,32 +215,35 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
     <div class="mt-2 ml-3 pl-3 border-l border-border">
       <div class="bg-bg-surface border border-accent p-2 space-y-2">
         <div class="text-xs text-accent">Replying to @{replyingToUsername()}</div>
-        <textarea
+        <Textarea
           value={newCommentBody()}
           onInput={(e) => setNewCommentBody(e.currentTarget.value)}
           onKeyDown={handleKeyDown}
           placeholder={`Reply to @${replyingToUsername()}...`}
-          class="w-full min-h-[80px] bg-bg-base border border-border p-2 text-sm text-text resize-y focus:outline-none focus:border-accent"
+          aria-label="Comment reply"
+          class="w-full min-h-20 resize-y"
           disabled={isSubmitting()}
           autofocus
         />
         <div class="flex items-center justify-end gap-2">
-          <button
+          <Button
             type="button"
             onClick={cancelReply}
-            class="px-2 py-1 text-xs text-text-muted hover:text-text transition-colors"
+            variant="ghost"
+            size="sm"
             disabled={isSubmitting()}
           >
             Cancel
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={handleSubmitComment}
             disabled={!newCommentBody().trim() || isSubmitting()}
-            class="px-2 py-1 text-xs bg-accent text-accent-text hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            variant="primary"
+            size="sm"
           >
             {isSubmitting() ? "Posting..." : "Reply"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -247,27 +252,31 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
   return (
     <Show when={!props.loading}>
       <div class="border-t border-border">
-        {/* Header */}
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded())}
-          class="w-full flex items-center gap-2 px-4 py-2 hover:bg-bg-surface transition-colors text-left"
-        >
-          <span
-            class={`transform transition-transform text-text-faint ${expanded() ? "" : "-rotate-90"}`}
+        <Show when={!props.embedded}>
+          {/* Header */}
+          <Button
+            type="button"
+            onClick={() => setExpanded(!expanded())}
+            variant="ghost"
+            size="sm"
+            class="w-full justify-start"
           >
-            <ChevronDownIcon size={12} />
-          </span>
-          <span class="text-text-muted">
-            <CommentIcon size={16} />
-          </span>
-          <span class="text-sm text-text-muted">Comments</span>
-          <Show when={hasComments()}>
-            <span class="px-1.5 py-0.5 text-xs bg-accent/20 text-accent rounded-full">
-              {commentCount()}
+            <span
+              class={`transform transition-transform text-text-faint ${expanded() ? "" : "-rotate-90"}`}
+            >
+              <ChevronDownIcon size={12} />
             </span>
-          </Show>
-        </button>
+            <span class="text-text-muted">
+              <CommentIcon size={16} />
+            </span>
+            <span class="text-sm text-text-muted">Comments</span>
+            <Show when={hasComments()}>
+              <span class="px-1.5 py-0.5 text-xs bg-accent/20 text-accent rounded-full">
+                {commentCount()}
+              </span>
+            </Show>
+          </Button>
+        </Show>
 
         {/* Comments list */}
         <Show when={expanded()}>
@@ -322,44 +331,49 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
               <Show
                 when={showNewCommentForm()}
                 fallback={
-                  <button
+                  <Button
                     type="button"
                     onClick={() => setShowNewCommentForm(true)}
-                    class="w-full py-2 px-3 text-sm text-text-muted border border-dashed border-border hover:border-accent hover:text-accent transition-colors"
+                    variant="ghost"
+                    size="sm"
+                    class="w-full"
                   >
                     + Add comment
-                  </button>
+                  </Button>
                 }
               >
                 <div class="bg-bg-elevated border border-border p-3 space-y-2">
-                  <textarea
+                  <Textarea
                     value={newCommentBody()}
                     onInput={(e) => setNewCommentBody(e.currentTarget.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Write a comment..."
-                    class="w-full min-h-[80px] bg-bg-base border border-border p-2 text-sm text-text resize-y focus:outline-none focus:border-accent"
+                    aria-label="New conversation comment"
+                    class="w-full min-h-20 resize-y"
                     disabled={isSubmitting()}
                     autofocus
                   />
                   <div class="flex items-center justify-between">
                     <span class="text-xs text-text-faint">Markdown supported</span>
                     <div class="flex gap-2">
-                      <button
+                      <Button
                         type="button"
                         onClick={cancelReply}
-                        class="px-3 py-1 text-sm text-text-muted hover:text-text transition-colors"
+                        variant="ghost"
+                        size="sm"
                         disabled={isSubmitting()}
                       >
                         Cancel
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
                         onClick={handleSubmitComment}
                         disabled={!newCommentBody().trim() || isSubmitting()}
-                        class="px-3 py-1 text-sm bg-accent text-accent-text hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        variant="primary"
+                        size="sm"
                       >
                         {isSubmitting() ? "Posting..." : "Comment"}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>

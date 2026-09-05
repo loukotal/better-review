@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ConversationStreamChunk } from "@flue/sdk";
+import type { ConversationStreamChunk, FlueConversationSnapshot } from "@flue/sdk";
 import { createRoot } from "solid-js";
 
 type UseStreamingChat = typeof import("./useStreamingChat").useStreamingChat;
@@ -10,6 +10,7 @@ type CreateConversationClient = typeof import("./useStreamingChat").createConver
 type FlueClientFactory = NonNullable<Parameters<UseStreamingChat>[1]>;
 type FlueClient = ReturnType<FlueClientFactory>;
 
+let conversationSnapshotMessages: typeof import("./useStreamingChat").conversationSnapshotMessages;
 let useStreamingChat: UseStreamingChat;
 let createConversationClient: CreateConversationClient;
 
@@ -18,7 +19,8 @@ test.before(async () => {
     configurable: true,
     value: { location: { origin: "http://localhost" } },
   });
-  ({ createConversationClient, useStreamingChat } = await import("./useStreamingChat"));
+  ({ createConversationClient, useStreamingChat, conversationSnapshotMessages } =
+    await import("./useStreamingChat"));
 });
 
 test("retries a failed prompt without duplicating the user message", async () => {
@@ -330,4 +332,68 @@ test("Flue 2 events render text, reasoning, and completed tool calls", async () 
     },
   ]);
   dispose();
+});
+
+test("history excludes system messages while preserving conversation roles and order", () => {
+  const snapshot: FlueConversationSnapshot = {
+    v: 1,
+    conversationId: "session-1",
+    offset: "0",
+    settlements: [],
+    messages: [
+      {
+        id: "system",
+        role: "system",
+        purpose: "dispatch",
+        display: "hidden",
+        parts: [{ type: "text", state: "done", text: "Internal dispatch" }],
+      },
+      {
+        id: "user",
+        role: "user",
+        purpose: "user",
+        display: "visible",
+        parts: [{ type: "text", state: "done", text: "Review this" }],
+      },
+      {
+        id: "assistant",
+        role: "assistant",
+        purpose: "assistant",
+        display: "visible",
+        parts: [{ type: "text", state: "done", text: "One finding" }],
+      },
+    ],
+  };
+  assert.deepEqual(
+    conversationSnapshotMessages(snapshot).map(({ id, role, content }) => ({ id, role, content })),
+    [
+      { id: "user", role: "user", content: "Review this" },
+      { id: "assistant", role: "assistant", content: "One finding" },
+    ],
+  );
+});
+
+test("history parses string timestamps, preserves epoch zero, and tolerates malformed metadata", () => {
+  const before = Date.now();
+  const timestamps = ["2026-09-05T10:00:00Z", "1970-01-01T00:00:00Z", undefined, {}, "invalid"];
+  const snapshot: FlueConversationSnapshot = {
+    v: 1,
+    conversationId: "session-1",
+    offset: "0",
+    settlements: [],
+    messages: timestamps.map((timestamp, index) => ({
+      id: String(index),
+      role: "assistant",
+      purpose: "assistant",
+      display: "visible",
+      parts: [],
+      metadata: { timestamp },
+    })),
+  };
+  const messages = conversationSnapshotMessages(snapshot);
+  const after = Date.now();
+  assert.equal(messages[0]?.timestamp, Date.parse("2026-09-05T10:00:00Z"));
+  assert.equal(messages[1]?.timestamp, 0);
+  for (const message of messages.slice(2))
+    assert.ok(message.timestamp >= before && message.timestamp <= after);
 });

@@ -1,6 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { createSignal, createMemo, For, Show } from "solid-js";
 
+import { TextInput } from "./design-system";
 import { CheckIcon } from "./icons/check-icon";
 import { CircleIcon } from "./icons/circle-icon";
 import { ListOrderIcon } from "./icons/list-order-icon";
@@ -271,11 +272,13 @@ export function FileTreePanel(props: FileTreePanelProps) {
     <div class="h-full w-[220px] shrink-0 border-l border-border flex flex-col bg-bg-surface">
       {/* Panel Header */}
       <div class="px-2 py-2 border-b border-border">
-        <input
-          type="text"
+        <TextInput
+          size="sm"
+          aria-label="Filter changed files"
+          type="search"
           value={searchQuery()}
           onInput={(e) => setSearchQuery(e.currentTarget.value)}
-          placeholder="Filter..."
+          placeholder="Filter files…"
           class="w-full px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent font-mono"
         />
       </div>

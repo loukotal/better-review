@@ -2,13 +2,15 @@ import { splitProps, type JSX, type Component, type ParentProps } from "solid-js
 
 import { cn } from "./cn";
 
-type BadgeVariant = "neutral" | "accent" | "success" | "warning" | "danger";
+type BadgeVariant = "neutral" | "accent" | "success" | "warning" | "danger" | "info" | "merged";
 
 interface BadgeProps extends ParentProps, JSX.HTMLAttributes<HTMLSpanElement> {
   variant?: BadgeVariant;
 }
 
 const variantClasses: Record<BadgeVariant, string> = {
+  info: "border-info/30 text-info bg-info/5",
+  merged: "border-merged/30 text-merged bg-merged/5",
   neutral: "border-border text-text-faint bg-bg",
   accent: "border-accent/50 text-accent bg-accent/10",
   success: "border-success/50 text-success bg-success/10",
@@ -22,7 +24,7 @@ export const Badge: Component<BadgeProps> = (props) => {
   return (
     <span
       class={cn(
-        "inline-flex items-center px-1.5 py-0.5 text-[11px] leading-4 border font-mono font-medium",
+        "inline-flex items-center px-1.5 py-0.5 rounded text-xs leading-4 border font-sans font-medium",
         variantClasses[local.variant ?? "neutral"],
         local.class,
       )}

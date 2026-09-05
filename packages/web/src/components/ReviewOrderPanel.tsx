@@ -1,5 +1,6 @@
 import { For, Show, createSignal, type Component } from "solid-js";
 
+import { Button } from "../design-system";
 import { ListOrderBoxIcon } from "../icons/list-order-icon";
 
 interface ReviewOrderPanelProps {
@@ -46,30 +47,33 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
   };
 
   return (
-    <div class="my-2 border border-accent/30 bg-accent/5">
+    <div class="my-2 rounded-md border border-border">
       {/* Header */}
-      <div class="flex items-center justify-between px-2.5 py-2 border-b border-accent/20">
+      <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-border">
         <div class="flex items-center gap-2">
-          <ListOrderBoxIcon size={12} class="text-accent" />
-          <span class="text-xs font-medium text-accent">Suggested Review Order</span>
+          <ListOrderBoxIcon size={12} class="text-text-muted" />
+          <span class="text-xs font-medium text-text">Review order</span>
           <span class="text-xs text-text-faint">({props.files.length} files)</span>
         </div>
         <div class="flex items-center gap-2">
-          <button
+          <Button
             type="button"
+            size="xs"
+            variant="ghost"
+            aria-expanded={showPreview()}
             onClick={() => setShowPreview(!showPreview())}
-            class="text-xs text-text-faint hover:text-text transition-colors"
           >
             {showPreview() ? "Hide" : "Preview"}
-          </button>
+          </Button>
           <Show when={orderDiffers()}>
-            <button
+            <Button
               type="button"
+              size="xs"
+              variant="secondary"
               onClick={() => props.onApplyOrder(props.files)}
-              class="text-xs px-2 py-0.5 bg-primary text-primary-text hover:bg-primary-hover transition-colors"
             >
-              Apply Order
-            </button>
+              Apply order
+            </Button>
           </Show>
           <Show when={!orderDiffers()}>
             <span class="text-xs text-success">Applied</span>

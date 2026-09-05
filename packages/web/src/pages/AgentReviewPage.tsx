@@ -20,8 +20,18 @@ import type {
   ReviewSessionResult,
 } from "@better-review/shared";
 
-import { ThemeToggle } from "../components/ThemeToggle";
-import { Badge, Button, Card, Select, Textarea } from "../design-system";
+import { AppHeader } from "../components/AppHeader";
+import {
+  Badge,
+  Button,
+  Select,
+  Textarea,
+  Popover,
+  Dialog,
+  LoadingState,
+  Alert,
+  PanelHeader,
+} from "../design-system";
 import { SettingsPanel } from "../diff/SettingsPanel";
 import {
   DiffViewer,
@@ -384,9 +394,18 @@ export default function AgentReviewPage() {
   let composerRef: HTMLElement | undefined;
   let composerTextareaRef: HTMLTextAreaElement | undefined;
 
-  const [session, { refetch: refetchSession }] = createResource(async () =>
-    fetchJson<ReviewSessionWithContext>(`/api/sessions/${encodeURIComponent(params.sessionId)}`),
-  );
+  const [sessionLoadError, setSessionLoadError] = createSignal<string | null>(null);
+  const [session, { refetch: refetchSession }] = createResource(async () => {
+    setSessionLoadError(null);
+    try {
+      return await fetchJson<ReviewSessionWithContext>(
+        `/api/sessions/${encodeURIComponent(params.sessionId)}`,
+      );
+    } catch (error) {
+      setSessionLoadError(error instanceof Error ? error.message : "Unable to load this session.");
+      return undefined;
+    }
+  });
 
   const [result, { refetch: refetchResult }] = createResource(
     () => resultVersion(),
@@ -448,6 +467,18 @@ export default function AgentReviewPage() {
     applyDiffAccent(settings().accentColor, uiTheme());
   });
 
+  const [compactPanels, setCompactPanels] = createSignal(window.innerWidth < 1280);
+  onMount(() => {
+    const media = window.matchMedia("(max-width: 1279px)");
+    const update = () => {
+      setCompactPanels(media.matches);
+      if (media.matches) setPanelVisibility({ files: false, review: false });
+    };
+    update();
+    media.addEventListener("change", update);
+    onCleanup(() => media.removeEventListener("change", update));
+  });
+
   const showFilesPanel = createMemo(
     () => isDiffSession() && panelVisibility().files && !focusMode(),
   );
@@ -456,7 +487,7 @@ export default function AgentReviewPage() {
 
   const togglePanel = (panel: keyof AgentReviewPanelVisibility) => {
     const next = {
-      ...panelVisibility(),
+      ...(compactPanels() ? { files: false, review: false } : panelVisibility()),
       [panel]: !panelVisibility()[panel],
     };
 
@@ -492,16 +523,6 @@ export default function AgentReviewPage() {
       label: value.payload.label ?? "Diff",
       rawPatch: value.payload.rawPatch,
     };
-  });
-
-  const selectedRangeCommit = createMemo(
-    () => commits()?.find((commit) => commit.sha === rangeBaseSha()) ?? null,
-  );
-
-  const diffLabel = createMemo(() => {
-    const rangeCommit = selectedRangeCommit();
-    if (rangeCommit) return `Since ${rangeCommit.shortSha}`;
-    return selectedDiffVariant()?.label ?? undefined;
   });
 
   const activeVariantId = createMemo(() => {
@@ -878,20 +899,43 @@ export default function AgentReviewPage() {
       <Show
         when={session()}
         fallback={
-          <div class="mx-auto mt-20 max-w-3xl">
-            <Card>
-              <div class="text-sm text-text-faint">Loading review session...</div>
-            </Card>
-          </div>
+          <>
+            <AppHeader />
+            <Show
+              when={sessionLoadError()}
+              fallback={<LoadingState label="Loading review session…" />}
+            >
+              {(message) => (
+                <div class="mx-auto max-w-3xl px-4 py-8">
+                  <Alert
+                    intent="danger"
+                    title="Could not load review session"
+                    actions={
+                      <Button type="button" size="sm" onClick={() => refetchSession()}>
+                        Try again
+                      </Button>
+                    }
+                  >
+                    {message()}
+                  </Alert>
+                </div>
+              )}
+            </Show>
+          </>
         }
       >
         {(loadedSession) => (
           <div class="flex flex-col h-screen">
             <Show when={!focusMode()}>
-              <header class="border-b border-border bg-bg-surface flex-shrink-0">
-                <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                  <div class="flex items-center gap-3 min-w-0">
-                    <h1 class="text-sm text-text truncate">{loadedSession().title}</h1>
+              <AppHeader>
+                <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+                  <div class="flex flex-1 items-center gap-3 min-w-0">
+                    <h1
+                      class="text-sm font-medium text-text truncate"
+                      title={loadedSession().title}
+                    >
+                      {loadedSession().title}
+                    </h1>
                     <Badge variant={statusVariant(loadedSession().status)}>
                       {loadedSession().status}
                     </Badge>
@@ -899,36 +943,15 @@ export default function AgentReviewPage() {
                   </div>
                   <div class="flex flex-wrap items-center justify-end gap-3 text-xs text-text-faint flex-shrink-0">
                     <div class="flex items-center gap-1 border-r border-border pr-3">
-                      <Show when={(sessionHistory()?.length ?? 0) > 1}>
-                        <Select
-                          compact
-                          value={params.sessionId}
-                          title="Review session history"
-                          onInput={(event) => {
-                            const sessionId = event.currentTarget.value;
-                            if (sessionId !== params.sessionId) {
-                              window.location.assign(
-                                `/agent-review/${encodeURIComponent(sessionId)}`,
-                              );
-                            }
-                          }}
-                        >
-                          <For each={sessionHistory() ?? []}>
-                            {(reviewSession) => (
-                              <option value={reviewSession.id}>
-                                {new Date(reviewSession.createdAt).toLocaleString()} -{" "}
-                                {reviewSession.title}
-                              </option>
-                            )}
-                          </For>
-                        </Select>
-                      </Show>
                       <Show when={isDiffSession()}>
                         <Button
                           type="button"
                           variant="secondary"
                           size="sm"
-                          class={panelVisibility().files ? "border-primary/50" : "text-text-faint"}
+                          class={
+                            panelVisibility().files ? "bg-bg-elevated text-text" : "text-text-muted"
+                          }
+                          aria-pressed={panelVisibility().files}
                           title="Toggle file panel"
                           onClick={() => togglePanel("files")}
                         >
@@ -939,7 +962,10 @@ export default function AgentReviewPage() {
                         type="button"
                         variant="secondary"
                         size="sm"
-                        class={panelVisibility().review ? "border-primary/50" : "text-text-faint"}
+                        class={
+                          panelVisibility().review ? "bg-bg-elevated text-text" : "text-text-muted"
+                        }
+                        aria-pressed={panelVisibility().review}
                         title="Toggle review panel"
                         onClick={() => togglePanel("review")}
                       >
@@ -955,30 +981,64 @@ export default function AgentReviewPage() {
                     >
                       Focus
                     </Button>
-                    <span>Created {formatTimestamp(loadedSession().createdAt)}</span>
-                    <span class="text-text-faint">·</span>
-                    <span>{loadedSession().origin}</span>
-                    <Show when={loadedSession().cwd}>
-                      {(cwd) => (
-                        <>
-                          <span class="text-text-faint">·</span>
-                          <span class="truncate max-w-48">{cwd()}</span>
-                        </>
-                      )}
-                    </Show>
-                    <ThemeToggle />
+                    <Popover label="Session details" width={360}>
+                      <div class="space-y-2 mb-4">
+                        <p class="text-sm text-text-muted">Review session history</p>
+                        <Show when={(sessionHistory()?.length ?? 0) > 1}>
+                          <Select
+                            compact
+                            value={params.sessionId}
+                            aria-label="Review session history"
+                            class="w-full"
+                            onInput={(event) => {
+                              const sessionId = event.currentTarget.value;
+                              if (sessionId !== params.sessionId) {
+                                window.location.assign(
+                                  `/agent-review/${encodeURIComponent(sessionId)}`,
+                                );
+                              }
+                            }}
+                          >
+                            <For each={sessionHistory() ?? []}>
+                              {(reviewSession) => (
+                                <option value={reviewSession.id}>
+                                  {new Date(reviewSession.createdAt).toLocaleString()} -{" "}
+                                  {reviewSession.title}
+                                </option>
+                              )}
+                            </For>
+                          </Select>
+                        </Show>
+                      </div>
+                      <dl class="space-y-3 text-sm">
+                        <div>
+                          <dt class="text-text-muted">Created</dt>
+                          <dd>{formatTimestamp(loadedSession().createdAt)}</dd>
+                        </div>
+                        <div>
+                          <dt class="text-text-muted">Origin</dt>
+                          <dd>{loadedSession().origin}</dd>
+                        </div>
+                        <Show when={loadedSession().cwd}>
+                          {(cwd) => (
+                            <div>
+                              <dt class="text-text-muted">Working directory</dt>
+                              <dd class="break-all font-mono text-xs">{cwd()}</dd>
+                            </div>
+                          )}
+                        </Show>
+                      </dl>
+                    </Popover>
                     <SettingsPanel settings={settings()} onChange={setSettings} />
                   </div>
                 </div>
-              </header>
+              </AppHeader>
             </Show>
 
             <Show when={focusMode()}>
               <div class="flex items-center justify-between px-3 py-1.5 bg-bg-surface border-b border-accent/30 flex-shrink-0">
                 <div class="flex items-center gap-2">
-                  <span class="text-[10px] text-accent font-mono uppercase tracking-wide">
-                    Focus mode
-                  </span>
+                  <span class="text-xs text-text-muted font-medium">Focus mode</span>
                   <span class="text-xs text-text-faint">
                     Side panels hidden. Press Esc or F to exit.
                   </span>
@@ -997,9 +1057,15 @@ export default function AgentReviewPage() {
             </Show>
 
             <Show when={isDiffSession()}>
-              <div class="flex flex-1 min-h-0">
+              <div class="relative flex flex-1 min-h-0">
                 <Show when={showFilesPanel()}>
-                  <div class="shrink-0 border-r border-border">
+                  <div
+                    class={
+                      compactPanels()
+                        ? "absolute inset-y-0 left-0 z-30 border-r border-border bg-bg-surface"
+                        : "shrink-0 border-r border-border"
+                    }
+                  >
                     <FileTreePanel
                       files={files()}
                       onFileSelect={scrollToFile}
@@ -1012,9 +1078,12 @@ export default function AgentReviewPage() {
                 <div class="flex-1 min-w-0 flex flex-col">
                   <Show when={availableDiffVariants().length > 0 || (commits()?.length ?? 0) > 0}>
                     <div class="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 bg-bg-surface shrink-0">
+                      <span class="text-xs text-text-muted">Compare</span>
                       <Show when={availableDiffVariants().length > 0}>
                         <Select
                           compact
+                          aria-label="Diff source"
+                          class="max-w-full sm:max-w-52"
                           value={currentDiffVariantId() ?? ""}
                           disabled={Boolean(rangeBaseSha())}
                           onInput={(event) => setCurrentDiffVariantId(event.currentTarget.value)}
@@ -1027,6 +1096,8 @@ export default function AgentReviewPage() {
                       <Select
                         compact
                         value={rangeBaseSha() ?? ""}
+                        aria-label="Comparison base"
+                        class="min-w-0 w-full sm:w-64"
                         title="Review changes since this commit"
                         onInput={(event) =>
                           setRangeBaseSha(event.currentTarget.value.trim() || null)
@@ -1043,9 +1114,6 @@ export default function AgentReviewPage() {
                       </Select>
                       <Show when={rangeDiff.loading}>
                         <span class="text-xs text-text-faint">Loading diff...</span>
-                      </Show>
-                      <Show when={diffLabel()}>
-                        {(label) => <Badge variant="accent">{label()}</Badge>}
                       </Show>
                     </div>
                   </Show>
@@ -1079,7 +1147,13 @@ export default function AgentReviewPage() {
                     </div>
 
                     <Show when={showReviewPanel()}>
-                      <div class="w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface">
+                      <div
+                        class={
+                          compactPanels()
+                            ? "absolute inset-y-0 right-0 z-30 w-72 max-w-full border-l border-border flex flex-col bg-bg-surface"
+                            : "w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface"
+                        }
+                      >
                         <div class="flex-1 overflow-y-auto">
                           <AnnotationsPanel
                             annotations={annotations()}
@@ -1167,45 +1241,33 @@ export default function AgentReviewPage() {
         )}
       </Show>
 
-      <Show when={pendingVerdict() !== null}>
-        <div
-          class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4"
-          role="presentation"
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="unsent-comment-title"
-            class="w-full max-w-md border border-border bg-bg-surface shadow-xl"
-          >
-            <div class="border-b border-border px-4 py-3">
-              <h2 id="unsent-comment-title" class="text-sm font-medium text-text">
-                Discard unsent {draftCommentFiles().size === 1 ? "comment" : "comments"}?
-              </h2>
-            </div>
-            <div class="space-y-4 px-4 py-4">
-              <p class="m-0 text-sm leading-6 text-text-muted">
-                You have {draftCommentFiles().size} unsent inline
-                {draftCommentFiles().size === 1 ? " comment" : " comments"}. Submitting this review
-                will discard {draftCommentFiles().size === 1 ? "it" : "them"}.
-              </p>
-              <div class="flex justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPendingVerdict(null)}
-                >
-                  Keep Editing
-                </Button>
-                <Button type="button" variant="danger" size="sm" onClick={confirmSubmit}>
-                  {pendingVerdict() ? "Approve Anyway" : "Request Changes Anyway"}
-                </Button>
-              </div>
-            </div>
+      <Dialog
+        open={pendingVerdict() !== null}
+        onClose={() => setPendingVerdict(null)}
+        title={`Discard unsent ${draftCommentFiles().size === 1 ? "comment" : "comments"}?`}
+      >
+        <div class="space-y-4">
+          <p class="m-0 text-sm leading-6 text-text-muted">
+            You have {draftCommentFiles().size} unsent inline{" "}
+            {draftCommentFiles().size === 1 ? "comment" : "comments"}. Submitting this review will
+            discard {draftCommentFiles().size === 1 ? "it" : "them"}.
+          </p>
+          <div class="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              autofocus
+              onClick={() => setPendingVerdict(null)}
+            >
+              Keep editing
+            </Button>
+            <Button type="button" variant="danger" size="sm" onClick={confirmSubmit}>
+              {pendingVerdict() ? "Approve anyway" : "Request changes anyway"}
+            </Button>
           </div>
         </div>
-      </Show>
+      </Dialog>
 
       <Show when={!isDiffSession() && draftQuote() && !composerOpen()}>
         <Show when={selectionActionPosition()}>
@@ -1334,25 +1396,31 @@ function AnnotationsPanel(props: {
 
   return (
     <div class="p-3 space-y-3">
-      <div class="flex items-center justify-between gap-2 text-xs text-text-faint">
-        <span>
-          {items().length} annotation{items().length === 1 ? "" : "s"}
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="xs"
-          disabled={items().length === 0}
-          onClick={() => props.onAnnotationsHiddenChange(!props.annotationsHidden)}
-          title={
-            props.annotationsHidden
-              ? "Show all comments and annotations"
-              : "Hide all comments and annotations"
-          }
-        >
-          {props.annotationsHidden ? "Show all" : "Hide all"}
-        </Button>
-      </div>
+      <PanelHeader
+        class="-mx-3 -mt-3"
+        title="Review notes"
+        actions={
+          <>
+            <Badge variant="neutral">{items().length}</Badge>
+            <Show when={items().length > 0}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                disabled={items().length === 0}
+                onClick={() => props.onAnnotationsHiddenChange(!props.annotationsHidden)}
+                title={
+                  props.annotationsHidden
+                    ? "Show all comments and annotations"
+                    : "Hide all comments and annotations"
+                }
+              >
+                {props.annotationsHidden ? "Show all" : "Hide all"}
+              </Button>
+            </Show>
+          </>
+        }
+      />
 
       <Show
         when={!props.annotationsHidden}
@@ -1506,7 +1574,7 @@ function SubmitBar(props: {
       <Match when={props.result.loading}>
         <div class="px-4 py-3 text-sm text-text-faint">Loading existing result...</div>
       </Match>
-      <Match when={props.result()}>
+      <Match when={!props.result.error && props.result()}>
         {(existingResult) => (
           <div class="px-4 py-3 space-y-2">
             <div class="flex items-center gap-3">
@@ -1529,12 +1597,13 @@ function SubmitBar(props: {
       <Match when={true}>
         <div class="space-y-3 px-4 py-3">
           <Show when={props.result.error}>
-            <div class="border border-error/50 bg-error/10 px-3 py-2 text-sm text-error">
+            <Alert intent="danger" title="Could not load review result">
               {props.result.error?.message}
-            </div>
+            </Alert>
           </Show>
 
           <Textarea
+            aria-label="Review verdict"
             value={props.feedback}
             onInput={(event) => props.setFeedback(event.currentTarget.value)}
             placeholder="Write your verdict..."
@@ -1542,9 +1611,9 @@ function SubmitBar(props: {
           />
 
           <Show when={props.submitError}>
-            <div class="border border-error/50 bg-error/10 px-3 py-2 text-sm text-error">
+            <Alert intent="danger" title="Could not submit review">
               {props.submitError}
-            </div>
+            </Alert>
           </Show>
 
           <div class="flex gap-2">

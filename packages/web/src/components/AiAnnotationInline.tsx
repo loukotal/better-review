@@ -1,6 +1,7 @@
 import { type Component, For, createMemo, createSignal, Show } from "solid-js";
 import { render } from "solid-js/web";
 
+import { Button, IconButton } from "../design-system";
 import { formatAnnotationForClipboard } from "../utils/formatAnnotationForClipboard";
 import type { Annotation, AnnotationSeverity } from "../utils/parseReviewTokens";
 import { FileLink } from "./FileLink";
@@ -28,8 +29,8 @@ const severityConfig: Record<
     label: "Info",
   },
   warning: {
-    surface: "border-yellow-500/35 bg-yellow-500/10",
-    iconColor: "text-yellow-500",
+    surface: "border-warning/35 bg-warning/10",
+    iconColor: "text-warning",
     label: "Warning",
   },
   critical: {
@@ -110,10 +111,9 @@ function SeverityIcon(props: { severity: AnnotationSeverity }) {
 
 /**
  * Inline AI annotation displayed in the diff view.
- * Visually distinct from GitHub comments with a colored left border and AI badge.
+ * Severity-tinted card on an opaque UI surface, independent of the code theme.
  */
 export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) => {
-  const [isHovered, setIsHovered] = createSignal(false);
   const [copied, setCopied] = createSignal(false);
   const config = () => severityConfig[props.annotation.severity];
   const parsedMessage = createMemo<MessagePart[]>(() => {
@@ -157,88 +157,61 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
   };
 
   return (
-    <div
-      class={`
-        relative border ${config().surface}
-        px-3 py-2 font-mono
-        transition-colors duration-150
-        ${isHovered() ? "bg-bg-surface/20" : ""}
-      `}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
-      {/* Header row */}
-      <div class="flex items-center gap-2 mb-1">
-        {/* Severity indicator */}
-        <span class={`inline-flex items-center gap-1 ${config().iconColor}`}>
-          <SeverityIcon severity={props.annotation.severity} />
-          <span class="text-xs">{config().label}</span>
-        </span>
+    <div class="rounded-md bg-bg-surface text-text">
+      <div class={`relative rounded-md border ${config().surface} px-3.5 py-3 font-sans`}>
+        {/* Header row */}
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          {/* Severity indicator */}
+          <span class={`inline-flex items-center gap-1 ${config().iconColor}`}>
+            <SeverityIcon severity={props.annotation.severity} />
+            <span class="text-sm font-semibold">{config().label}</span>
+          </span>
 
-        {/* Line number */}
-        <span class="text-xs text-text-faint font-mono">L{props.annotation.line}</span>
-        <span class="inline-flex items-center gap-1 text-accent/70 text-xs">
-          <SparklesIcon />
-          <span>AI</span>
-        </span>
+          {/* Line number */}
+          <span class="text-xs text-text-faint font-mono">L{props.annotation.line}</span>
+          <span class="inline-flex items-center gap-1 text-text-muted text-xs">
+            <SparklesIcon />
+            <span>AI</span>
+          </span>
 
-        {/* Actions - fade in on hover */}
-        <div
-          class={`flex items-center gap-1 ml-auto transition-opacity duration-150 ${isHovered() ? "opacity-100" : "opacity-0 pointer-events-none"}`}
-        >
-          <button
-            type="button"
-            onClick={handleCopy}
-            class={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 
-                   transition-colors duration-150
-                   ${copied() ? "text-success" : "text-text-faint hover:text-accent"}`}
-            title="Copy to clipboard"
-          >
-            {copied() ? <CheckIcon /> : <CopyIcon />}
-            <span>{copied() ? "Copied" : "Copy"}</span>
-          </button>
-          <Show when={props.onCreateComment}>
-            <button
-              type="button"
-              onClick={handleCreateComment}
-              class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 
-                     text-text-faint hover:text-accent
-                     transition-colors duration-150"
-              title="Create PR comment from this suggestion"
-            >
-              <CommentIcon />
-              <span>Comment</span>
-            </button>
-          </Show>
-          <Show when={props.onDismiss}>
-            <button
-              type="button"
-              onClick={handleDismiss}
-              class="inline-flex items-center justify-center w-5 h-5 
-                     text-text-faint hover:text-error
-                     transition-colors duration-150"
-              title="Dismiss annotation"
-            >
-              <DismissIcon />
-            </button>
-          </Show>
+          <div class="ml-auto flex items-center gap-1">
+            <IconButton label={copied() ? "Copied finding" : "Copy finding"} onClick={handleCopy}>
+              {copied() ? <CheckIcon /> : <CopyIcon />}
+            </IconButton>
+            <Show when={props.onCreateComment}>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={handleCreateComment}
+                title="Create PR comment from this suggestion"
+              >
+                <CommentIcon /> Comment
+              </Button>
+            </Show>
+            <Show when={props.onDismiss}>
+              <IconButton label="Dismiss annotation" onClick={handleDismiss}>
+                <DismissIcon />
+              </IconButton>
+            </Show>
+          </div>
         </div>
-      </div>
 
-      {/* Message */}
-      <p class="text-sm text-text-muted leading-relaxed m-0 pl-0 whitespace-pre-wrap">
-        <For each={parsedMessage()}>
-          {(part) =>
-            part.type === "text" ? (
-              part.text
-            ) : props.onNavigate ? (
-              <FileLink file={part.file} line={part.line} onClick={props.onNavigate} />
-            ) : (
-              `${part.file}${part.line ? `:${part.line}` : ""}`
-            )
-          }
-        </For>
-      </p>
+        {/* Message */}
+        <p class="text-sm text-text leading-relaxed m-0 whitespace-pre-wrap wrap-break-word">
+          <For each={parsedMessage()}>
+            {(part) =>
+              part.type === "text" ? (
+                part.text
+              ) : props.onNavigate ? (
+                <FileLink file={part.file} line={part.line} onClick={props.onNavigate} />
+              ) : (
+                `${part.file}${part.line ? `:${part.line}` : ""}`
+              )
+            }
+          </For>
+        </p>
+      </div>
     </div>
   );
 };

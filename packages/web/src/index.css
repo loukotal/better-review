@@ -43,6 +43,7 @@
   --color-error: #ef4444;
   --color-warning: #eab308;
   --color-success: #22c55e;
+  --color-success-solid: #15803d;
   --color-info: #3b82f6;
   --color-merged: #a855f7;
 }
@@ -178,14 +179,6 @@ textarea::placeholder {
   opacity: 1;
 }
 
-/* Focus states - orange accent */
-input:focus,
-textarea:focus,
-select:focus {
-  outline: none;
-  border-color: var(--color-accent) !important;
-}
-
 /* === BUTTON BASE === */
 button {
   cursor: pointer;
@@ -211,7 +204,7 @@ button:disabled {
   min-width: 220px;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1279px) {
   .chat-panel {
     position: absolute;
     inset: 0 auto 0 0;

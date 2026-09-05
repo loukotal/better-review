@@ -21,16 +21,15 @@ import { FileLink } from "./components/FileLink";
 import { ModelSelector } from "./components/ModelSelector";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { SessionSelector } from "./components/SessionSelector";
-import { Button } from "./design-system";
+import { Button, Checkbox, IconButton, PanelHeader, Textarea } from "./design-system";
 import type { DiffTheme } from "./diff/types";
 import {
   loadConversationMessages,
   useStreamingChat,
   type ToolCall,
 } from "./hooks/useStreamingChat";
-import { CheckIcon } from "./icons/check-icon";
-import { CopyIcon } from "./icons/copy-icon";
 import { SpinnerIcon } from "./icons/spinner-icon";
+import { groupTranscript, reviewRequestLabel } from "./lib/chat-transcript";
 import { resolveFileReference } from "./lib/file-reference";
 import {
   applySafeMarkdownRenderer,
@@ -100,6 +99,7 @@ function loadSte100Preference(): boolean {
 
 export function ChatPanel(props: ChatPanelProps) {
   const [input, setInput] = createSignal("");
+  const [assistantSettingsOpen, setAssistantSettingsOpen] = createSignal(false);
   const [sessionId, setSessionId] = createSignal<string | null>(null);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [initializing, setInitializing] = createSignal(false);
@@ -717,10 +717,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   function ReasoningBlock(reasoningProps: { content: string; streaming?: boolean }) {
     return (
-      <details
-        open={reasoningProps.streaming}
-        class="mb-2 border border-accent/25 bg-accent/10 px-2.5 py-1.5 text-text-muted"
-      >
+      <details class="py-1 text-text-muted">
         <summary class="cursor-pointer select-none text-xs font-medium text-text-faint">
           Reasoning
         </summary>
@@ -735,7 +732,6 @@ export function ChatPanel(props: ChatPanelProps) {
   function ToolCallView(toolProps: { tool: ToolCall }) {
     const tool = toolProps.tool;
     const targetKeys = ["path", "filePath", "file", "url", "query", "command", "pattern"];
-    const rangeKeys = ["offset", "limit", "line", "startLine", "endLine"];
 
     const targetEntry = () =>
       targetKeys
@@ -763,18 +759,13 @@ export function ChatPanel(props: ChatPanelProps) {
       return null;
     };
 
-    const remainingInput = () => {
-      const hiddenKeys = new Set([...(targetEntry() ? [targetEntry()![0]] : []), ...rangeKeys]);
-      return Object.fromEntries(Object.entries(tool.input).filter(([key]) => !hiddenKeys.has(key)));
-    };
-
     const statusColor = () => {
       switch (tool.status) {
         case "pending":
         case "running":
           return "text-accent";
         case "completed":
-          return "text-success";
+          return "text-text-faint";
         case "error":
           return "text-error";
         default:
@@ -798,10 +789,10 @@ export function ChatPanel(props: ChatPanelProps) {
     };
 
     const hasDetails = () =>
-      Object.keys(remainingInput()).length > 0 || Boolean(tool.output) || Boolean(tool.error);
+      Object.keys(tool.input).length > 0 || Boolean(tool.output) || Boolean(tool.error);
 
     return (
-      <details class="mb-1 min-w-0 max-w-full overflow-hidden border border-border bg-bg px-2 py-1 font-mono text-sm">
+      <details class="min-w-0 max-w-full overflow-hidden py-1.5 font-mono text-xs">
         <summary class="flex min-w-0 cursor-pointer list-none items-center gap-2 overflow-hidden">
           <span
             class={`shrink-0 ${statusColor()} ${tool.status === "running" ? "animate-pulse" : ""}`}
@@ -822,11 +813,11 @@ export function ChatPanel(props: ChatPanelProps) {
         </summary>
         <Show when={hasDetails()}>
           <div class="mt-1 min-w-0 max-w-full space-y-1 overflow-hidden border-t border-border pt-1 text-[11px] leading-relaxed text-text-faint">
-            <Show when={Object.keys(remainingInput()).length > 0}>
+            <Show when={Object.keys(tool.input).length > 0}>
               <div class="min-w-0 max-w-full overflow-hidden">
                 <div class="text-text-muted">Arguments</div>
                 <pre class="max-w-full overflow-auto whitespace-pre">
-                  {JSON.stringify(remainingInput(), null, 2)}
+                  {JSON.stringify(tool.input, null, 2)}
                 </pre>
               </div>
             </Show>
@@ -897,8 +888,40 @@ export function ChatPanel(props: ChatPanelProps) {
     document.removeEventListener("mouseup", handleMouseUp);
   });
 
-  const streamingToolsOnly = () =>
-    chat.activeTools().length > 0 && !chat.streamingContent() && !chat.streamingReasoning();
+  const transcript = createMemo(() => groupTranscript(chat.messages()));
+
+  function Activity(props: { tools: ToolCall[]; live?: boolean }) {
+    const running = () =>
+      props.live ? props.tools.filter((t) => t.status === "running" || t.status === "pending") : [];
+    const failed = () => props.tools.filter((t) => t.status === "error").length;
+    return (
+      <Show when={props.tools.length > 0}>
+        <div class="min-w-0 space-y-1">
+          <Show when={running().length > 0}>
+            <div class="flex min-w-0 items-center gap-2 text-xs text-text-muted" role="status">
+              <SpinnerIcon size={12} class="shrink-0 animate-spin text-accent" />
+              <span class="truncate">
+                Running {running().at(-1)?.tool}
+                {running().length > 1 ? ` · ${running().length} active` : ""}
+              </span>
+            </div>
+          </Show>
+          <details class="text-xs text-text-muted">
+            <summary class="cursor-pointer select-none py-1 hover:text-text">
+              {props.tools.length} {props.tools.length === 1 ? "step" : "steps"}
+              {props.tools.every((t) => t.status === "completed") ? " completed" : " recorded"}
+              <Show when={failed() > 0}>
+                <span class="text-error"> · {failed()} failed</span>
+              </Show>
+            </summary>
+            <div class="mt-1 divide-y divide-border">
+              <For each={props.tools}>{(tool) => <ToolCallView tool={tool} />}</For>
+            </div>
+          </details>
+        </div>
+      </Show>
+    );
+  }
 
   return (
     <div
@@ -915,133 +938,94 @@ export function ChatPanel(props: ChatPanelProps) {
         onMouseDown={handleMouseDown}
       />
 
-      {/* Header */}
-      <div class="px-3 py-2 border-b border-border">
-        <div class="flex items-center justify-between gap-2">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="text-accent text-sm shrink-0">AI</span>
-            <h2 class="text-sm text-text font-medium truncate">Review Assistant</h2>
-          </div>
-          <div class="flex items-center gap-1 shrink-0">
-            <Show when={chat.messages().some((m) => m.role === "assistant") && !chat.isStreaming()}>
-              <button
-                type="button"
-                onClick={handleCopyFeedback}
-                class={`inline-flex items-center gap-1 px-1.5 py-0.5 text-xs border transition-colors whitespace-nowrap ${
-                  feedbackCopied()
-                    ? "border-success/50 text-success"
-                    : "border-border text-text-faint hover:border-accent hover:text-accent"
-                }`}
-                title="Copy all AI feedback to clipboard (skips dismissed suggestions)"
-              >
-                {feedbackCopied() ? <CheckIcon size={10} /> : <CopyIcon size={10} />}
-                <span>
-                  {feedbackCopied() ? "Copied" : width() < 360 ? "Copy" : "Copy Feedback"}
-                </span>
-              </button>
-            </Show>
+      <PanelHeader
+        title="Review assistant"
+        actions={
+          <>
             <Show when={sessionId() && !chat.isStreaming()}>
               <Button
-                type="button"
                 onClick={startReview}
                 disabled={creatingNewSession()}
                 variant="primary"
-                size="xs"
-                class="whitespace-nowrap"
-                title="Start review"
+                size="sm"
               >
                 Review
               </Button>
-            </Show>
-            <Show when={sessionId() && !chat.isStreaming()}>
               <Button
                 type="button"
                 onClick={() => void startAdversarialReview()}
                 disabled={creatingNewSession()}
-                variant="ghost"
-                size="xs"
-                class="whitespace-nowrap text-error hover:text-error hover:bg-error/10"
-                title="Start adversarial review"
+                variant="secondary"
+                size="sm"
+                aria-label="Adversarial review"
+                title="Adversarial review"
               >
                 Adversarial
               </Button>
             </Show>
             <Show when={chat.isStreaming()}>
-              <button
-                type="button"
-                onClick={handleAbort}
-                class="px-1.5 py-0.5 text-xs bg-error text-white hover:bg-error/80 transition-colors"
-              >
+              <Button onClick={handleAbort} variant="danger" size="sm">
                 Stop
-              </button>
+              </Button>
             </Show>
-          </div>
+            <IconButton
+              label="Assistant settings"
+              aria-expanded={assistantSettingsOpen()}
+              aria-controls="assistant-settings"
+              onClick={() => setAssistantSettingsOpen(!assistantSettingsOpen())}
+            >
+              ···
+            </IconButton>
+          </>
+        }
+      />
+      <Show when={sessionId()}>
+        <div class="border-b border-border px-3 py-1.5">
+          <SessionSelector
+            sessions={sessions()}
+            activeSessionId={sessionId()}
+            currentHeadSha={currentHeadSha() || undefined}
+            disabled={chat.isStreaming() || initializing() || creatingNewSession()}
+            creatingNewSession={creatingNewSession()}
+            onSelect={handleSessionSwitch}
+            onNewSession={handleNewSession}
+            onHide={handleHideSession}
+          />
         </div>
-        {/* Session selector row - show when we have a session */}
-        <Show when={sessionId()}>
-          <div
-            class="mt-1.5 gap-1.5"
-            classList={{
-              "flex flex-col": width() < 300,
-              "flex items-center justify-between": width() >= 300,
-            }}
-          >
-            <div class="flex items-center gap-1.5 min-w-0">
-              <SessionSelector
-                sessions={sessions()}
-                activeSessionId={sessionId()}
-                currentHeadSha={currentHeadSha() || undefined}
-                disabled={chat.isStreaming() || initializing() || creatingNewSession()}
-                creatingNewSession={creatingNewSession()}
-                onSelect={handleSessionSwitch}
-                onNewSession={handleNewSession}
-                onHide={handleHideSession}
-              />
-              <button
-                type="button"
-                onClick={handleNewSession}
-                disabled={chat.isStreaming() || initializing() || creatingNewSession()}
-                class="flex size-6 shrink-0 items-center justify-center border border-border text-sm text-text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
-                title={creatingNewSession() ? "Creating new session" : "Create new session"}
-                aria-label={creatingNewSession() ? "Creating new session" : "Create new session"}
-              >
-                <Show when={creatingNewSession()} fallback={<span aria-hidden="true">+</span>}>
-                  <SpinnerIcon size={10} class="animate-spin" />
-                </Show>
-              </button>
-            </div>
-            <div class="flex items-center gap-1.5 self-end shrink-0">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={useSte100()}
-                onClick={toggleSte100}
-                disabled={chat.isStreaming() || initializing() || creatingNewSession()}
-                class="inline-flex items-center gap-1.5 px-1.5 py-0.5 font-mono text-xs text-text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
-                title="Use ASD-STE100 Simplified Technical English for reviews"
-              >
-                <span
-                  aria-hidden="true"
-                  class={`flex h-3.5 w-6 items-center border px-0.5 transition-colors ${
-                    useSte100() ? "border-accent bg-accent/20" : "border-border bg-bg"
-                  }`}
-                >
-                  <span
-                    class={`size-2.5 bg-text-faint transition-transform ${
-                      useSte100() ? "translate-x-2.5 bg-accent" : "translate-x-0"
-                    }`}
-                  />
-                </span>
-                <span>STE100</span>
-              </button>
+      </Show>
+      <div hidden={!assistantSettingsOpen()}>
+        <div id="assistant-settings" class="border-b border-border bg-bg px-3 py-3 space-y-3">
+          <Show when={sessionId()}>
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-xs text-text-muted">Model</span>{" "}
               <ModelSelector
-                align="right"
+                align="left"
                 disabled={chat.isStreaming() || initializing() || creatingNewSession()}
                 class="shrink-0"
               />
             </div>
-          </div>
-        </Show>
+            <Checkbox
+              label="Simplified technical English (STE100)"
+              checked={useSte100()}
+              onChange={toggleSte100}
+              disabled={chat.isStreaming() || initializing() || creatingNewSession()}
+            />
+            <div>
+              <Show
+                when={chat.messages().some((m) => m.role === "assistant") && !chat.isStreaming()}
+              >
+                <Button onClick={handleCopyFeedback} size="sm">
+                  {feedbackCopied() ? "Copied" : "Copy feedback"}
+                </Button>
+              </Show>
+            </div>
+          </Show>
+          <Show when={!sessionId()}>
+            <p class="text-xs text-text-muted">
+              Session settings are available after the PR loads.
+            </p>
+          </Show>
+        </div>
       </div>
 
       {/* Messages */}
@@ -1049,7 +1033,7 @@ export function ChatPanel(props: ChatPanelProps) {
         ref={(el) => {
           _messagesContainer = el;
         }}
-        class="flex-1 overflow-y-auto px-3 py-2 space-y-3"
+        class="flex-1 overflow-y-auto px-4 py-3 space-y-2"
       >
         <Show when={!props.prUrl}>
           <div class="text-center py-8">
@@ -1114,60 +1098,59 @@ export function ChatPanel(props: ChatPanelProps) {
           </div>
         </Show>
 
-        {/* Completed messages */}
-        <For each={chat.messages()}>
-          {(msg) => {
-            const toolOnly = () =>
-              msg.role === "assistant" &&
-              msg.toolCalls.length > 0 &&
-              !msg.reasoning &&
-              !msg.content.trim();
-
-            return (
-              <Show
-                when={!toolOnly()}
-                fallback={
-                  <div class="mr-2 min-w-0">
-                    <For each={msg.toolCalls}>{(tool) => <ToolCallView tool={tool} />}</For>
-                  </div>
-                }
-              >
-                <div class={`text-sm ${msg.role === "user" ? "ml-4" : "mr-2"}`}>
-                  <div
-                    class={`px-2.5 py-2 ${
-                      msg.role === "user"
-                        ? "bg-accent/10 border border-accent/20"
-                        : "bg-bg-elevated border border-border"
-                    }`}
-                  >
-                    <div class="text-sm text-text-faint mb-1">
-                      {msg.role === "user" ? "You" : "Assistant"}
+        <For each={transcript()}>
+          {(group) => (
+            <Show
+              when={group.role === "user"}
+              fallback={
+                <section class="min-w-0 space-y-3 py-2" aria-label="Assistant response">
+                  <Activity tools={group.messages.flatMap((message) => message.toolCalls)} />
+                  <Show when={group.messages.some((message) => message.reasoning?.trim())}>
+                    <ReasoningBlock
+                      content={group.messages
+                        .map((message) => message.reasoning)
+                        .filter(Boolean)
+                        .join("\n\n")}
+                    />
+                  </Show>
+                  <For each={group.messages.filter((message) => message.content.trim())}>
+                    {(message) => (
+                      <div class="text-sm text-text wrap-break-word leading-relaxed">
+                        <MessageContent role="assistant" content={message.content} />
+                      </div>
+                    )}
+                  </For>
+                </section>
+              }
+            >
+              <div class="border-t border-border pt-4 pb-2 text-sm">
+                <Show
+                  when={reviewRequestLabel(group.messages[0]!.content)}
+                  fallback={
+                    <div class="space-y-1">
+                      <span class="text-xs text-text-faint">You</span>
+                      <p class="whitespace-pre-wrap wrap-break-word leading-relaxed">
+                        {group.messages[0]!.content}
+                      </p>
                     </div>
-
-                    {/* Show tool calls for assistant messages */}
-                    <Show when={msg.role === "assistant" && msg.toolCalls.length > 0}>
-                      <div class="mb-2">
-                        <For each={msg.toolCalls}>{(tool) => <ToolCallView tool={tool} />}</For>
-                      </div>
-                    </Show>
-
-                    <Show when={msg.role === "assistant" && msg.reasoning}>
-                      <ReasoningBlock content={msg.reasoning!} />
-                    </Show>
-
-                    <Show when={msg.content.trim()}>
-                      <div class="text-text wrap-break-word leading-relaxed text-sm">
-                        <MessageContent role={msg.role} content={msg.content} />
-                      </div>
-                    </Show>
-                  </div>
-                </div>
-              </Show>
-            );
-          }}
+                  }
+                >
+                  {(label) => (
+                    <details>
+                      <summary class="cursor-pointer text-sm font-medium text-text">
+                        {label()}
+                      </summary>
+                      <p class="mt-3 whitespace-pre-wrap wrap-break-word text-xs text-text-muted leading-relaxed">
+                        {group.messages[0]!.content}
+                      </p>
+                    </details>
+                  )}
+                </Show>
+              </div>
+            </Show>
+          )}
         </For>
 
-        {/* Streaming message */}
         <Show
           when={
             chat.isStreaming() ||
@@ -1176,54 +1159,27 @@ export function ChatPanel(props: ChatPanelProps) {
             chat.activeTools().length > 0
           }
         >
-          <div class="mr-2">
-            <div
-              class={
-                streamingToolsOnly() ? "min-w-0" : "px-2.5 py-2 bg-bg-elevated border border-border"
-              }
-            >
-              <Show when={!streamingToolsOnly()}>
-                <div class="text-sm text-text-faint mb-1">Assistant</div>
-              </Show>
-
-              <Show when={chat.streamingReasoning()}>
-                <ReasoningBlock content={chat.streamingReasoning()} streaming={true} />
-              </Show>
-
-              {/* Active tool calls */}
-              <Show when={chat.activeTools().length > 0}>
-                <div class={streamingToolsOnly() ? "" : "mb-2"}>
-                  <For each={chat.activeTools()}>{(tool) => <ToolCallView tool={tool} />}</For>
-                </div>
-              </Show>
-
-              {/* Streaming content - render markdown with remend for incomplete blocks */}
-              <Show when={chat.streamingContent()}>
-                <div class="text-sm text-text wrap-break-word leading-relaxed">
-                  <MessageContent
-                    role="assistant"
-                    content={chat.streamingContent()!}
-                    streaming={true}
-                  />
-                </div>
-              </Show>
-
-              {/* Show cursor when actively streaming with no content yet */}
-              <Show
-                when={
-                  chat.awaitingFirstToken() &&
-                  !chat.streamingContent() &&
-                  !chat.streamingReasoning() &&
-                  chat.activeTools().length === 0
-                }
-              >
-                <div class="text-text-muted text-sm flex items-center gap-2">
-                  <SpinnerIcon size={12} class="animate-spin" />
-                  <span class="inline-block animate-pulse">Model is thinking...</span>
-                </div>
-              </Show>
-            </div>
-          </div>
+          <section class="min-w-0 space-y-3 py-2" aria-label="Current assistant response">
+            <Show when={chat.isStreaming()}>
+              <div class="flex items-center gap-2 text-xs text-text-muted" role="status">
+                <span class="size-1.5 rounded-full bg-accent" />
+                {chat.streamingContent()
+                  ? "Writing review"
+                  : chat.activeTools().some((t) => t.status === "running" || t.status === "pending")
+                    ? "Reviewing changes"
+                    : "Thinking"}
+              </div>
+            </Show>
+            <Activity tools={chat.activeTools()} live={chat.isStreaming()} />
+            <Show when={chat.streamingReasoning()}>
+              <ReasoningBlock content={chat.streamingReasoning()} streaming />
+            </Show>
+            <Show when={chat.streamingContent()}>
+              <div class="text-sm text-text wrap-break-word leading-relaxed">
+                <MessageContent role="assistant" content={chat.streamingContent()} streaming />
+              </div>
+            </Show>
+          </section>
         </Show>
       </div>
 
@@ -1243,7 +1199,7 @@ export function ChatPanel(props: ChatPanelProps) {
       <div class="border-t border-border p-2">
         <form onSubmit={sendMessage}>
           <div class="flex flex-col gap-2">
-            <textarea
+            <Textarea
               value={input()}
               onInput={(e) => setInput(e.currentTarget.value)}
               onKeyDown={(e) => {
@@ -1266,7 +1222,8 @@ export function ChatPanel(props: ChatPanelProps) {
                     : "Load a PR first"
               }
               disabled={!sessionId() || chat.isStreaming() || creatingNewSession()}
-              class="w-full px-2 py-1.5 bg-bg border border-border text-sm text-text placeholder:text-text-faint hover:border-text-faint focus:border-accent resize-none disabled:opacity-50 disabled:cursor-not-allowed font-mono"
+              aria-label="Message review assistant"
+              class="w-full resize-none"
               rows={2}
             />
             <div class="flex justify-between items-center">

@@ -19,10 +19,11 @@ export const Textarea: Component<TextareaProps> = (props) => {
   return (
     <textarea
       class={cn(
-        "w-full bg-bg border px-3 py-2 text-sm text-text placeholder:text-text-faint resize-y focus:outline-none disabled:opacity-50",
+        "w-full bg-bg border px-3 py-2 text-sm text-text placeholder:text-text-faint resize-y disabled:opacity-50",
         intentClasses[local.intent ?? "default"],
         local.class,
       )}
+      aria-invalid={local.intent === "danger" || undefined}
       {...rest}
     />
   );

@@ -1,11 +1,8 @@
-import { createSignal, For, Show, createMemo, onCleanup, onMount } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 
 import type { StoredSession } from "@better-review/shared";
 
-import { ChevronDownLargeIcon } from "../icons/chevron-down-icon";
-import { CloseLargeIcon } from "../icons/close-icon";
-import { PlusIcon } from "../icons/plus-icon";
-import { SpinnerIcon } from "../icons/spinner-icon";
+import { Button, IconButton, Popover } from "../design-system";
 
 interface SessionSelectorProps {
   sessions: StoredSession[];
@@ -19,12 +16,6 @@ interface SessionSelectorProps {
 }
 
 export function SessionSelector(props: SessionSelectorProps) {
-  const [isOpen, setIsOpen] = createSignal(false);
-
-  const activeSession = createMemo(() =>
-    props.sessions.find((s) => s.id === props.activeSessionId),
-  );
-
   const activeIndex = createMemo(() => {
     const idx = props.sessions.findIndex((s) => s.id === props.activeSessionId);
     return idx >= 0 ? idx + 1 : null;
@@ -49,13 +40,11 @@ export function SessionSelector(props: SessionSelectorProps) {
     if (sessionId !== props.activeSessionId) {
       props.onSelect(sessionId);
     }
-    setIsOpen(false);
   };
 
   const handleNewSession = () => {
     if (props.disabled || props.creatingNewSession) return;
     props.onNewSession();
-    setIsOpen(false);
   };
 
   const handleHide = (e: MouseEvent, sessionId: string) => {
@@ -63,104 +52,57 @@ export function SessionSelector(props: SessionSelectorProps) {
     props.onHide?.(sessionId);
   };
 
-  // Close dropdown when clicking outside
-  const handleClickOutside = (e: MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (!target.closest(".session-selector")) {
-      setIsOpen(false);
-    }
-  };
-
-  // Add/remove click listener with proper cleanup
-  onMount(() => {
-    document.addEventListener("click", handleClickOutside);
-  });
-
-  onCleanup(() => {
-    document.removeEventListener("click", handleClickOutside);
-  });
-
   return (
-    <div class="session-selector relative">
-      {/* Trigger button */}
-      <button
-        type="button"
-        onClick={() => setIsOpen(!isOpen())}
-        disabled={props.disabled}
-        class="flex items-center gap-1.5 px-2 py-0.5 text-sm border border-border hover:border-text-faint disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        title="Switch session"
-      >
-        <span class="text-text-muted">Session {activeIndex() || 1}</span>
-        <Show when={activeSession() && isShaOutdated(activeSession()!.headSha)}>
-          <span class="text-warning text-xs" title="PR has new commits">
-            *
-          </span>
-        </Show>
-        <ChevronDownLargeIcon size={12} class="text-text-faint" />
-      </button>
-
-      {/* Dropdown */}
-      <Show when={isOpen()}>
-        <div class="absolute top-full left-0 mt-1 z-50 min-w-[200px] bg-bg-surface border border-border shadow-lg">
-          {/* Session list */}
-          <div class="max-h-[240px] overflow-y-auto">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <Popover align="left" label={`Session ${activeIndex() || 1}`} disabled={props.disabled}>
+        {(close) => (
+          <div class="space-y-1">
             <For each={props.sessions}>
               {(session, index) => (
-                <div
-                  class="flex items-center justify-between px-3 py-2 hover:bg-bg-elevated cursor-pointer group"
-                  classList={{
-                    "bg-accent/10": session.id === props.activeSessionId,
-                  }}
-                  onClick={() => handleSelect(session.id)}
-                >
-                  <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2">
-                      <span class="text-sm text-text">Session {index() + 1}</span>
-                      <Show when={isShaOutdated(session.headSha)}>
-                        <span class="text-warning text-xs" title="Created on older commit">
-                          (outdated)
-                        </span>
-                      </Show>
-                    </div>
-                    <div class="flex items-center gap-2 text-xs text-text-faint">
-                      <span>{session.headSha.slice(0, 7)}</span>
-                      <span>-</span>
-                      <span>{formatDate(session.createdAt)}</span>
-                    </div>
-                  </div>
-
-                  {/* Hide button */}
+                <div class="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    fullWidth
+                    class="justify-start text-left"
+                    aria-pressed={session.id === props.activeSessionId}
+                    onClick={() => {
+                      handleSelect(session.id);
+                      close();
+                    }}
+                  >
+                    <span class="flex flex-col items-start gap-0.5">
+                      <span>
+                        Session {index() + 1}
+                        {isShaOutdated(session.headSha) ? " (older commit)" : ""}
+                      </span>
+                      <span class="text-xs text-text-muted">
+                        {session.headSha.slice(0, 7)} · {formatDate(session.createdAt)}
+                      </span>
+                    </span>
+                  </Button>
                   <Show when={props.onHide && props.sessions.length > 1}>
-                    <button
-                      type="button"
+                    <IconButton
+                      label={`Hide session ${index() + 1}`}
                       onClick={(e) => handleHide(e, session.id)}
-                      class="opacity-0 group-hover:opacity-100 p-1 text-text-faint hover:text-error transition-opacity"
-                      title="Hide session"
                     >
-                      <CloseLargeIcon size={12} />
-                    </button>
+                      ×
+                    </IconButton>
                   </Show>
                 </div>
               )}
             </For>
           </div>
-
-          {/* New session button */}
-          <div class="border-t border-border">
-            <button
-              type="button"
-              onClick={handleNewSession}
-              disabled={props.disabled || props.creatingNewSession}
-              class="w-full flex items-center gap-2 px-3 py-2 text-sm text-accent hover:bg-bg-elevated transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Show when={props.creatingNewSession} fallback={<PlusIcon size={16} />}>
-                <SpinnerIcon size={16} class="animate-spin" />
-              </Show>
-              {props.creatingNewSession ? "Creating Session..." : "New Session"}
-            </button>
-          </div>
-        </div>
-      </Show>
+        )}
+      </Popover>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={handleNewSession}
+        disabled={props.disabled || props.creatingNewSession}
+      >
+        {props.creatingNewSession ? "Creating session…" : "+ New session"}
+      </Button>
     </div>
   );
 }

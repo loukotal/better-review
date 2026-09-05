@@ -18,16 +18,16 @@ const variantClasses: Record<ButtonVariant, string> = {
     "border border-border bg-bg-surface text-text-muted hover:text-text hover:border-text-faint",
   ghost: "text-text-muted hover:text-text hover:bg-bg-elevated",
   danger: "border border-error/50 text-error hover:bg-error/10",
-  success: "bg-green-600 text-white hover:bg-green-500",
-  "success-subtle": "bg-green-600/20 text-green-400 border border-green-600/50",
+  success: "bg-success-solid text-white hover:bg-success-solid/85",
+  "success-subtle": "bg-success/10 text-success border border-success/40",
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
-  xs: "px-1.5 py-0.5 text-xs",
-  sm: "px-2 py-1 text-sm",
-  md: "px-3 py-1.5 text-sm",
+  xs: "min-h-6 px-2 py-0.5 text-xs",
+  sm: "min-h-7 px-2 py-1 text-xs",
+  md: "min-h-8 px-3 py-1.5 text-sm",
   lg: "px-4 py-2 text-base",
-  icon: "p-1.5 text-sm",
+  icon: "size-8 shrink-0 p-1.5 text-sm",
 };
 
 export const Button: Component<ButtonProps> = (props) => {
@@ -36,7 +36,7 @@ export const Button: Component<ButtonProps> = (props) => {
   return (
     <button
       class={cn(
-        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap font-mono transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+        "inline-flex items-center justify-center gap-1.5 rounded-md border border-transparent whitespace-nowrap font-sans transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
         variantClasses[local.variant ?? "secondary"],
         sizeClasses[local.size ?? "md"],
         local.fullWidth && "w-full",

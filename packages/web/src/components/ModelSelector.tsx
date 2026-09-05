@@ -1,6 +1,6 @@
-import { createSignal, createEffect, For, Show, onMount, onCleanup } from "solid-js";
+import { createSignal, createEffect, For, Show, onMount } from "solid-js";
 
-import { ChevronDownFillIcon } from "../icons/chevron-down-icon";
+import { Button, TextInput, Select, Popover } from "../design-system";
 import { trpc } from "../lib/trpc";
 
 const MODEL_STORAGE_KEY = "better-review:selected-model";
@@ -101,9 +101,6 @@ export function ModelSelector(props: ModelSelectorProps) {
   const [currentModel, setCurrentModel] = createSignal<SelectedModel | null>(null);
   const [isLoading, setIsLoading] = createSignal(false);
 
-  let containerRef: HTMLDivElement | undefined;
-  let inputRef: HTMLInputElement | undefined;
-
   // Load current model on mount
   onMount(async () => {
     const savedModel = loadSavedModel();
@@ -154,29 +151,6 @@ export function ModelSelector(props: ModelSelectorProps) {
       setIsLoading(false);
     }
   });
-
-  // Close dropdown when clicking outside
-  const handleClickOutside = (e: MouseEvent) => {
-    if (containerRef && !containerRef.contains(e.target as Node)) {
-      setIsOpen(false);
-    }
-  };
-
-  onMount(() => {
-    document.addEventListener("mousedown", handleClickOutside);
-  });
-
-  onCleanup(() => {
-    document.removeEventListener("mousedown", handleClickOutside);
-  });
-
-  const handleOpen = () => {
-    if (props.disabled) return;
-    setIsOpen(true);
-    setSearchQuery("");
-    // Focus input after opening
-    setTimeout(() => inputRef?.focus(), 10);
-  };
 
   const handleSelect = async (model: ModelEntry) => {
     try {
@@ -239,138 +213,129 @@ export function ModelSelector(props: ModelSelectorProps) {
   };
 
   return (
-    <div ref={(el) => (containerRef = el)} class={`relative ${props.class ?? ""}`}>
-      {/* Current selection button */}
-      <button
-        type="button"
-        onClick={handleOpen}
+    <div class={props.class}>
+      <Popover
+        label="Choose model"
+        trigger={<span class="max-w-40 truncate">{displayText()}</span>}
+        triggerSize="sm"
+        width={340}
+        align={props.align}
         disabled={props.disabled}
-        class="flex items-center gap-1 px-1.5 py-0.5 text-xs border border-border text-text-muted hover:border-accent hover:text-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed max-w-35"
-        title={
-          currentModel()
-            ? `${currentModel()!.providerId}/${currentModel()!.modelId} • reasoning: ${
-                REASONING_EFFORT_LABELS[currentModel()!.thinkingLevel]
-              }`
-            : undefined
-        }
+        open={isOpen()}
+        onOpenChange={(open) => {
+          setIsOpen(open);
+          if (open) setSearchQuery("");
+        }}
       >
-        <span class="truncate">{displayText()}</span>
-        <ChevronDownFillIcon size={10} class="shrink-0" />
-      </button>
+        {/* Search input */}
+        <div class="p-2 border-b border-border">
+          <TextInput
+            size="sm"
+            aria-label="Search models"
+            autofocus
+            type="text"
+            value={searchQuery()}
+            onInput={(e) => setSearchQuery(e.currentTarget.value)}
+            placeholder="Search models..."
+            class="w-full px-2 py-1 text-sm bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent"
+          />
 
-      {/* Dropdown */}
-      <Show when={isOpen()}>
-        <div
-          class="absolute top-full mt-1 w-80 max-w-[calc(100vw-1rem)] bg-bg-surface border border-border shadow-lg z-50"
-          classList={{
-            "left-0": props.align !== "right",
-            "right-0": props.align === "right",
-          }}
-        >
-          {/* Search input */}
-          <div class="p-2 border-b border-border">
-            <input
-              ref={(el) => (inputRef = el)}
-              type="text"
-              value={searchQuery()}
-              onInput={(e) => setSearchQuery(e.currentTarget.value)}
-              placeholder="Search models..."
-              class="w-full px-2 py-1 text-sm bg-bg border border-border text-text placeholder:text-text-faint focus:border-accent"
-            />
-
-            <Show when={currentModel()}>
-              {(model) => (
-                <div class="mt-2 space-y-2 text-xs">
-                  <div
-                    class="text-text-faint truncate"
-                    title={`${model().providerId}/${model().modelId}`}
-                  >
-                    {model().providerId}/{model().modelId}
-                  </div>
-
-                  <Show when={model().variants.length > 0}>
-                    <label class="flex flex-col gap-1 text-text">
-                      <span>Variant</span>
-                      <select
-                        value={model().variant ?? ""}
-                        onChange={(e) => handleVariantChange(e.currentTarget.value)}
-                        class="w-full px-2 py-1 text-sm bg-bg border border-border text-text"
-                      >
-                        <option value="">Default</option>
-                        <For each={model().variants}>
-                          {(variant) => <option value={variant}>{variant}</option>}
-                        </For>
-                      </select>
-                    </label>
-                  </Show>
-
-                  <Show when={model().reasoning}>
-                    <label class="flex flex-col gap-1 text-text">
-                      <span>Reasoning effort</span>
-                      <select
-                        value={model().thinkingLevel}
-                        onChange={(e) =>
-                          handleReasoningEffortChange(e.currentTarget.value as ReasoningEffort)
-                        }
-                        class="w-full px-2 py-1 text-sm bg-bg border border-border text-text"
-                      >
-                        <For each={reasoningEffortOptions(model())}>
-                          {(effort) => (
-                            <option value={effort}>{REASONING_EFFORT_LABELS[effort]}</option>
-                          )}
-                        </For>
-                      </select>
-                    </label>
-                  </Show>
+          <Show when={currentModel()}>
+            {(model) => (
+              <div class="mt-2 space-y-2 text-xs">
+                <div
+                  class="text-text-faint truncate"
+                  title={`${model().providerId}/${model().modelId}`}
+                >
+                  {model().providerId}/{model().modelId}
                 </div>
-              )}
-            </Show>
-          </div>
 
-          {/* Results list */}
-          <div class="max-h-64 overflow-y-auto">
-            <Show when={isLoading()}>
-              <div class="px-3 py-2 text-sm text-text-faint">Searching...</div>
-            </Show>
+                <Show when={model().variants.length > 0}>
+                  <label class="flex flex-col gap-1 text-text">
+                    <span>Variant</span>
+                    <Select
+                      compact
+                      value={model().variant ?? ""}
+                      onChange={(e) => handleVariantChange(e.currentTarget.value)}
+                      class="w-full px-2 py-1 text-sm bg-bg border border-border text-text"
+                    >
+                      <option value="">Default</option>
+                      <For each={model().variants}>
+                        {(variant) => <option value={variant}>{variant}</option>}
+                      </For>
+                    </Select>
+                  </label>
+                </Show>
 
-            <Show when={!isLoading() && searchResults().length === 0}>
-              <div class="px-3 py-2 text-sm text-text-faint">
-                {connectedProvidersCount() === 0 ? "No providers connected" : "No models found"}
+                <Show when={model().reasoning}>
+                  <label class="flex flex-col gap-1 text-text">
+                    <span>Reasoning effort</span>
+                    <Select
+                      compact
+                      value={model().thinkingLevel}
+                      onChange={(e) =>
+                        handleReasoningEffortChange(e.currentTarget.value as ReasoningEffort)
+                      }
+                      class="w-full px-2 py-1 text-sm bg-bg border border-border text-text"
+                    >
+                      <For each={reasoningEffortOptions(model())}>
+                        {(effort) => (
+                          <option value={effort}>{REASONING_EFFORT_LABELS[effort]}</option>
+                        )}
+                      </For>
+                    </Select>
+                  </label>
+                </Show>
               </div>
-            </Show>
-
-            <For each={searchResults()}>
-              {(model) => {
-                const isSelected = () =>
-                  currentModel()?.providerId === model.providerId &&
-                  currentModel()?.modelId === model.modelId;
-
-                return (
-                  <button
-                    type="button"
-                    onClick={() => handleSelect(model)}
-                    class="w-full px-3 py-1.5 text-left text-sm hover:bg-bg-elevated transition-colors flex flex-col gap-0.5"
-                    classList={{ "bg-accent/10": isSelected() }}
-                  >
-                    <span class="text-text font-medium truncate">{model.modelId}</span>
-                    <span class="text-text-faint text-xs">{model.providerId}</span>
-                    <Show when={model.variants.length > 0 || model.reasoning}>
-                      <span class="text-[11px] text-text-faint truncate">
-                        {[
-                          model.reasoning ? "reasoning" : null,
-                          model.variants.length > 0 ? `${model.variants.length} variants` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" • ")}
-                      </span>
-                    </Show>
-                  </button>
-                );
-              }}
-            </For>
-          </div>
+            )}
+          </Show>
         </div>
-      </Show>
+
+        {/* Results list */}
+        <div class="max-h-64 overflow-y-auto">
+          <Show when={isLoading()}>
+            <div class="px-3 py-2 text-sm text-text-faint">Searching...</div>
+          </Show>
+
+          <Show when={!isLoading() && searchResults().length === 0}>
+            <div class="px-3 py-2 text-sm text-text-faint">
+              {connectedProvidersCount() === 0 ? "No providers connected" : "No models found"}
+            </div>
+          </Show>
+
+          <For each={searchResults()}>
+            {(model) => {
+              const isSelected = () =>
+                currentModel()?.providerId === model.providerId &&
+                currentModel()?.modelId === model.modelId;
+
+              return (
+                <Button
+                  variant="ghost"
+                  aria-pressed={isSelected()}
+                  type="button"
+                  onClick={() => handleSelect(model)}
+                  class="w-full px-3 py-1.5 text-left text-sm hover:bg-bg-elevated transition-colors flex flex-col gap-0.5"
+                  classList={{ "bg-bg-elevated": isSelected() }}
+                >
+                  <span class="text-text font-medium truncate">{model.modelId}</span>
+                  <span class="text-text-faint text-xs">{model.providerId}</span>
+                  <Show when={model.variants.length > 0 || model.reasoning}>
+                    <span class="text-[11px] text-text-faint truncate">
+                      {[
+                        model.reasoning ? "reasoning" : null,
+                        model.variants.length > 0 ? `${model.variants.length} variants` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" • ")}
+                    </span>
+                  </Show>
+                </Button>
+              );
+            }}
+          </For>
+        </div>
+      </Popover>
     </div>
   );
 }

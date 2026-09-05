@@ -30,7 +30,10 @@ export function searchDiffFiles(files: FileDiffMetadata[], query: string): DiffS
   if (!normalizedQuery) return [];
 
   const matches: DiffSearchMatch[] = [];
-  const sides: Array<{ side: DiffSearchMatch["side"]; key: "additionLines" | "deletionLines" }> = [
+  const sides: Array<{
+    side: NonNullable<DiffSearchMatch["side"]>;
+    key: "additionLines" | "deletionLines";
+  }> = [
     { side: "RIGHT", key: "additionLines" },
     { side: "LEFT", key: "deletionLines" },
   ];

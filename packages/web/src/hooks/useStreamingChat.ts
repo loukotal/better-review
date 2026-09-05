@@ -53,7 +53,9 @@ export const createConversationClient: FlueConversationClientFactory = (sessionI
 export function conversationSnapshotMessages(
   snapshot: FlueConversationSnapshot,
 ): StreamingMessage[] {
-  return snapshot.messages.map((message) => {
+  return snapshot.messages.flatMap((message): StreamingMessage[] => {
+    // System instructions are not conversation bubbles.
+    if (message.role !== "user" && message.role !== "assistant") return [];
     const text: string[] = [];
     const reasoning: string[] = [];
     const toolCalls: ToolCall[] = [];
@@ -80,15 +82,20 @@ export function conversationSnapshotMessages(
       }
     }
 
-    return {
-      id: message.id,
-      role: message.role,
-      content: text.join(""),
-      reasoning: reasoning.join("") || undefined,
-      toolCalls,
-      isStreaming: false,
-      timestamp: Date.parse(message.metadata?.timestamp ?? "") || Date.now(),
-    };
+    const rawTimestamp = message.metadata?.timestamp;
+    const timestamp = typeof rawTimestamp === "string" ? Date.parse(rawTimestamp) : NaN;
+
+    return [
+      {
+        id: message.id,
+        role: message.role,
+        content: text.join(""),
+        reasoning: reasoning.join("") || undefined,
+        toolCalls,
+        isStreaming: false,
+        timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+      },
+    ];
   });
 }
 

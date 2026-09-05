@@ -31,6 +31,7 @@ export const TextInput: Component<TextInputProps> = (props) => {
         sizeClasses[local.size ?? "md"],
         local.class,
       )}
+      aria-invalid={local.intent === "danger" || undefined}
       {...rest}
     />
   );
