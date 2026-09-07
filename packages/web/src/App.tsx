@@ -845,6 +845,7 @@ const AppContent: Component = () => {
       {/* Header Bar - hidden in focus mode */}
       <Show when={!focusMode()}>
         <AppHeader
+          hideNavigation={!!loadedPrUrl()}
           onOpenPr={() => setSwitchingPr(!switchingPr())}
           prSwitcherOpen={switchingPr()}
           actions={

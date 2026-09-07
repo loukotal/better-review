@@ -9,6 +9,7 @@ export function AppHeader(props: {
   actions?: JSX.Element;
   children?: JSX.Element;
   constrained?: boolean;
+  hideNavigation?: boolean;
   onOpenPr?: () => void;
   prSwitcherOpen?: boolean;
 }) {
@@ -29,43 +30,45 @@ export function AppHeader(props: {
               {props.actions}
             </div>
           </Show>
-          <nav aria-label="Main navigation" class="flex items-center gap-1 text-xs">
-            <A
-              href="/"
-              end
-              activeClass="bg-bg-elevated text-text"
-              inactiveClass="text-text-muted"
-              class="rounded-md px-2 py-1.5 hover:text-text"
-            >
-              Reviews
-            </A>
+          <Show when={!props.hideNavigation}>
+            <nav aria-label="Main navigation" class="flex items-center gap-1 text-xs">
+              <A
+                href="/"
+                end
+                activeClass="bg-bg-elevated text-text"
+                inactiveClass="text-text-muted"
+                class="rounded-md px-2 py-1.5 hover:text-text"
+              >
+                Reviews
+              </A>
 
-            <Show
-              when={props.onOpenPr}
-              fallback={
-                <A
-                  href="/review"
-                  activeClass="bg-bg-elevated text-text"
-                  inactiveClass="text-text-muted"
-                  class="rounded-md px-2 py-1.5 hover:text-text"
+              <Show
+                when={props.onOpenPr}
+                fallback={
+                  <A
+                    href="/review"
+                    activeClass="bg-bg-elevated text-text"
+                    inactiveClass="text-text-muted"
+                    class="rounded-md px-2 py-1.5 hover:text-text"
+                  >
+                    Open PR
+                  </A>
+                }
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={props.onOpenPr}
+                  aria-expanded={props.prSwitcherOpen}
+                  aria-controls="pr-switcher"
                 >
                   Open PR
-                </A>
-              }
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={props.onOpenPr}
-                aria-expanded={props.prSwitcherOpen}
-                aria-controls="pr-switcher"
-              >
-                Open PR
-              </Button>
-            </Show>
-            <ThemeToggle />
-          </nav>
+                </Button>
+              </Show>
+            </nav>
+          </Show>
+          <ThemeToggle />
         </div>
       </div>
       {props.children}
