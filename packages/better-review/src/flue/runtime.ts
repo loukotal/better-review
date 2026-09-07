@@ -5,6 +5,8 @@ import { sqlite, start, type Flue } from "@flue/runtime/node";
 import { createAgentRouter } from "@flue/runtime/routing";
 import { Hono } from "hono";
 
+import type { ReviewConversation } from "@better-review/shared";
+
 import { STORE_BASE_DIR } from "../store";
 import { cleanupOrphanedMicrosandboxes, shutdownMicrosandboxes } from "./microsandbox";
 import { getFlueProviders } from "./oauth-auth";
@@ -50,7 +52,9 @@ export function createFlueReviewApp(): Hono {
   return app;
 }
 
-export async function readFlueConversationHistory(instanceId: string): Promise<unknown | null> {
+export async function readFlueConversationHistory(
+  instanceId: string,
+): Promise<ReviewConversation | null> {
   const response = await createFlueReviewApp().request(
     `http://localhost/agents/pr-reviewer/${encodeURIComponent(instanceId)}`,
   );
@@ -62,5 +66,24 @@ export async function readFlueConversationHistory(instanceId: string): Promise<u
 
   return response.json();
 }
-import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+
+/** Use the same transport in-process: send returns after durable admission, not completion. */
+export async function sendServerReview(
+  sessionId: string,
+  body: string,
+  idempotencyKey: string,
+): Promise<{ submissionId: string }> {
+  const response = await createFlueReviewApp().request(
+    `http://localhost/agents/pr-reviewer/${encodeURIComponent(sessionId)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "user", body, idempotencyKey }),
+    },
+  );
+  if (!response.ok) throw new Error(`Could not start review: HTTP ${response.status}`);
+  const receipt = (await response.json()) as { submissionId?: unknown };
+  if (typeof receipt.submissionId !== "string")
+    throw new Error("Invalid review admission response");
+  return { submissionId: receipt.submissionId };
+}

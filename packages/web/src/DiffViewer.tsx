@@ -1,6 +1,7 @@
 import { parsePatchFiles, SVGSpriteSheet, Virtualizer, type FileDiffMetadata } from "@pierre/diffs";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
+import { TextInput } from "./design-system";
 import { FileDiffView } from "./diff/FileDiffView";
 import type { DiffSettings, PRComment } from "./diff/types";
 import { searchDiffFiles } from "./lib/diff-search";
@@ -199,24 +200,27 @@ export function DiffViewer(props: Props) {
     >
       <div innerHTML={SVGSpriteSheet} style="display:none" />
 
-      <div class="sticky top-0 z-20 -mt-3 mb-3 flex items-center gap-2 border-b border-border bg-bg-surface py-2">
-        <input
-          ref={(element) => {
-            searchInputRef = element;
-          }}
-          type="search"
-          value={searchQuery()}
-          onInput={(event) => setSearchQuery(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              selectSearchMatch(selectedMatch() + (event.shiftKey ? -1 : 1));
-            }
-          }}
-          placeholder="Search diff..."
-          aria-label="Search diff"
-          class="w-52 px-2 py-1 bg-bg border border-border text-xs text-text placeholder:text-text-faint focus:border-accent font-mono"
-        />
+      <div class="sticky top-0 z-20 -mt-3 mb-3 flex items-center gap-2 border-b border-border bg-bg-surface py-1 px-2">
+        <div class="w-52 max-w-full shrink-0">
+          <TextInput
+            size="sm"
+            ref={(element) => {
+              searchInputRef = element;
+            }}
+            type="search"
+            value={searchQuery()}
+            onInput={(event) => setSearchQuery(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                selectSearchMatch(selectedMatch() + (event.shiftKey ? -1 : 1));
+              }
+            }}
+            placeholder="Search diff..."
+            aria-label="Search diff"
+            class="font-mono"
+          />
+        </div>
         <Show when={searchQuery().trim()}>
           <span class="text-xs text-text-faint">
             {searchMatches().length === 0

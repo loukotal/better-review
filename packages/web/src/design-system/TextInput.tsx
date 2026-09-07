@@ -26,7 +26,7 @@ export const TextInput: Component<TextInputProps> = (props) => {
   return (
     <input
       class={cn(
-        "w-full bg-bg border text-text placeholder:text-text-faint disabled:opacity-50",
+        "w-full bg-bg rounded-md border text-text placeholder:text-text-faint disabled:opacity-50",
         intentClasses[local.intent ?? "default"],
         sizeClasses[local.size ?? "md"],
         local.class,

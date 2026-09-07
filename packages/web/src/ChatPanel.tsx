@@ -23,13 +23,14 @@ import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
 import { SessionSelector } from "./components/SessionSelector";
 import { Button, Checkbox, IconButton, PanelHeader, Textarea } from "./design-system";
 import type { DiffTheme } from "./diff/types";
-import {
-  loadConversationMessages,
-  useStreamingChat,
-  type ToolCall,
-} from "./hooks/useStreamingChat";
+import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { SpinnerIcon } from "./icons/spinner-icon";
-import { groupTranscript, reviewRequestLabel } from "./lib/chat-transcript";
+import {
+  groupTranscript,
+  reviewRequestLabel,
+  currentActivity,
+  thinkingTail,
+} from "./lib/chat-transcript";
 import { resolveFileReference } from "./lib/file-reference";
 import {
   applySafeMarkdownRenderer,
@@ -180,6 +181,8 @@ export function ChatPanel(props: ChatPanelProps) {
     ),
   );
 
+  let sessionInitializationVersion = 0;
+
   // Initialize session when PR changes
   createEffect(() => {
     const prUrl = props.prUrl;
@@ -190,6 +193,7 @@ export function ChatPanel(props: ChatPanelProps) {
     if (prUrl && prNumber && repoOwner && repoName) {
       initSession();
     } else {
+      sessionInitializationVersion++;
       setSessionId(null);
       setSessions([]);
       setCurrentHeadSha(null);
@@ -226,6 +230,8 @@ export function ChatPanel(props: ChatPanelProps) {
       return;
     }
 
+    const requestVersion = ++sessionInitializationVersion;
+    const requestPrUrl = props.prUrl;
     setInitializing(true);
     setSessionError(null);
 
@@ -240,6 +246,7 @@ export function ChatPanel(props: ChatPanelProps) {
         commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
       });
 
+      if (requestVersion !== sessionInitializationVersion || props.prUrl !== requestPrUrl) return;
       if (!data.session?.id) {
         setSessionError("Invalid response: no session ID");
         return;
@@ -257,24 +264,11 @@ export function ChatPanel(props: ChatPanelProps) {
       if (data.headSha) {
         setCurrentHeadSha(data.headSha);
       }
-
-      // If session existed, load previous messages
-      if (data.existing) {
-        await loadMessages(data.session.id);
-      }
     } catch (err) {
-      setSessionError(err instanceof Error ? err.message : "Failed to initialize chat session");
+      if (requestVersion === sessionInitializationVersion)
+        setSessionError(err instanceof Error ? err.message : "Failed to initialize chat session");
     } finally {
-      setInitializing(false);
-    }
-  }
-
-  async function loadMessages(sid: string) {
-    try {
-      chat.loadExistingMessages(await loadConversationMessages(sid));
-    } catch (err) {
-      console.error("Failed to load messages:", err);
-      chat.loadExistingMessages([]);
+      if (requestVersion === sessionInitializationVersion) setInitializing(false);
     }
   }
 
@@ -334,15 +328,7 @@ export function ChatPanel(props: ChatPanelProps) {
         sessionId: newSessionId,
       });
 
-      const data = await trpc.flueReview.messages.query({
-        sessionId: newSessionId,
-      });
-
-      // Update session ID and messages atomically
-      batch(() => {
-        setSessionId(newSessionId);
-        chat.loadExistingMessages(data.messages);
-      });
+      setSessionId(newSessionId);
     } catch (err) {
       console.error("Failed to switch session:", err);
     }
@@ -717,14 +703,24 @@ export function ChatPanel(props: ChatPanelProps) {
 
   function ReasoningBlock(reasoningProps: { content: string; streaming?: boolean }) {
     return (
-      <details class="py-1 text-text-muted">
-        <summary class="cursor-pointer select-none text-xs font-medium text-text-faint">
-          Reasoning
-        </summary>
-        <div class="mt-1 whitespace-pre-wrap text-xs leading-relaxed wrap-break-word">
-          {reasoningProps.content}
-        </div>
-      </details>
+      <div class="space-y-1">
+        <Show when={reasoningProps.streaming}>
+          <div class="border-l-2 border-accent/40 pl-3">
+            <div class="mb-1 text-xs font-medium text-text-faint">Latest thinking</div>
+            <p class="whitespace-pre-wrap text-xs leading-relaxed text-text-muted wrap-break-word">
+              {thinkingTail(reasoningProps.content)}
+            </p>
+          </div>
+        </Show>
+        <details class="py-1 text-text-muted">
+          <summary class="cursor-pointer select-none text-xs font-medium text-text-faint">
+            {reasoningProps.streaming ? "Full reasoning" : "Reasoning"}
+          </summary>
+          <div class="mt-1 whitespace-pre-wrap text-xs leading-relaxed wrap-break-word">
+            {reasoningProps.content}
+          </div>
+        </details>
+      </div>
     );
   }
 
@@ -890,10 +886,19 @@ export function ChatPanel(props: ChatPanelProps) {
 
   const transcript = createMemo(() => groupTranscript(chat.messages()));
 
+  const liveActivity = createMemo(() =>
+    currentActivity(chat.messages(), chat.activeTools(), chat.streamingReasoning()),
+  );
+  const isLiveGroup = (id: string) =>
+    chat.isStreaming() &&
+    transcript().at(-1)?.role === "assistant" &&
+    transcript().at(-1)?.id === id;
+
   function Activity(props: { tools: ToolCall[]; live?: boolean }) {
     const running = () =>
       props.live ? props.tools.filter((t) => t.status === "running" || t.status === "pending") : [];
-    const failed = () => props.tools.filter((t) => t.status === "error").length;
+    const history = () => (props.live ? props.tools.slice(0, -3) : props.tools);
+    const failed = () => history().filter((t) => t.status === "error").length;
     return (
       <Show when={props.tools.length > 0}>
         <div class="min-w-0 space-y-1">
@@ -906,18 +911,26 @@ export function ChatPanel(props: ChatPanelProps) {
               </span>
             </div>
           </Show>
-          <details class="text-xs text-text-muted">
-            <summary class="cursor-pointer select-none py-1 hover:text-text">
-              {props.tools.length} {props.tools.length === 1 ? "step" : "steps"}
-              {props.tools.every((t) => t.status === "completed") ? " completed" : " recorded"}
-              <Show when={failed() > 0}>
-                <span class="text-error"> · {failed()} failed</span>
-              </Show>
-            </summary>
-            <div class="mt-1 divide-y divide-border">
-              <For each={props.tools}>{(tool) => <ToolCallView tool={tool} />}</For>
+          <Show when={props.live}>
+            <div aria-label="Latest tool calls" class="divide-y divide-border">
+              <For each={props.tools.slice(-3)}>{(tool) => <ToolCallView tool={tool} />}</For>
             </div>
-          </details>
+          </Show>
+          <Show when={history().length > 0}>
+            <details class="text-xs text-text-muted">
+              <summary class="cursor-pointer select-none py-1 hover:text-text">
+                {history().length} {props.live ? "earlier " : ""}
+                {history().length === 1 ? "step" : "steps"}
+                {history().every((t) => t.status === "completed") ? " completed" : " recorded"}
+                <Show when={failed() > 0}>
+                  <span class="text-error"> · {failed()} failed</span>
+                </Show>
+              </summary>
+              <div class="mt-1 divide-y divide-border">
+                <For each={history()}>{(tool) => <ToolCallView tool={tool} />}</For>
+              </div>
+            </details>
+          </Show>
         </div>
       </Show>
     );
@@ -1104,14 +1117,16 @@ export function ChatPanel(props: ChatPanelProps) {
               when={group.role === "user"}
               fallback={
                 <section class="min-w-0 space-y-3 py-2" aria-label="Assistant response">
-                  <Activity tools={group.messages.flatMap((message) => message.toolCalls)} />
-                  <Show when={group.messages.some((message) => message.reasoning?.trim())}>
-                    <ReasoningBlock
-                      content={group.messages
-                        .map((message) => message.reasoning)
-                        .filter(Boolean)
-                        .join("\n\n")}
-                    />
+                  <Show when={!isLiveGroup(group.id)}>
+                    <Activity tools={group.messages.flatMap((message) => message.toolCalls)} />
+                    <Show when={group.messages.some((message) => message.reasoning?.trim())}>
+                      <ReasoningBlock
+                        content={group.messages
+                          .map((message) => message.reasoning)
+                          .filter(Boolean)
+                          .join("\n\n")}
+                      />
+                    </Show>
                   </Show>
                   <For each={group.messages.filter((message) => message.content.trim())}>
                     {(message) => (
@@ -1170,9 +1185,15 @@ export function ChatPanel(props: ChatPanelProps) {
                     : "Thinking"}
               </div>
             </Show>
-            <Activity tools={chat.activeTools()} live={chat.isStreaming()} />
-            <Show when={chat.streamingReasoning()}>
-              <ReasoningBlock content={chat.streamingReasoning()} streaming />
+            <Activity
+              tools={chat.isStreaming() ? liveActivity().tools : chat.activeTools()}
+              live={chat.isStreaming()}
+            />
+            <Show when={chat.isStreaming() ? liveActivity().reasoning : chat.streamingReasoning()}>
+              <ReasoningBlock
+                content={chat.isStreaming() ? liveActivity().reasoning : chat.streamingReasoning()}
+                streaming={chat.isStreaming()}
+              />
             </Show>
             <Show when={chat.streamingContent()}>
               <div class="text-sm text-text wrap-break-word leading-relaxed">

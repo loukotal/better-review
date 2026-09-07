@@ -11,6 +11,7 @@ export const FLUE_REVIEW_SESSIONS_NAMESPACE = "flue-review-sessions";
 
 export interface FlueReviewSession {
   runtimeVersion: 2;
+  automaticReview?: { idempotencyKey: string; prompt?: string; submissionId?: string };
   id: string;
   prUrl: string;
   owner: string;

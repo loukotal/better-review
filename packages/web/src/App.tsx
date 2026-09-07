@@ -151,6 +151,15 @@ const AppContent: Component = () => {
     query.addEventListener("change", syncLayout);
     onCleanup(() => query.removeEventListener("change", syncLayout));
   });
+  createEffect(() => {
+    if (searchParams.showChat === "1") {
+      setPanelVisibility((previous) => ({
+        ...previous,
+        chat: true,
+        ...(compactLayout() ? { files: false } : {}),
+      }));
+    }
+  });
   // Focus mode - hides header and chat, maximizes diff area
   const [focusMode, setFocusMode] = createSignal(
     localStorage.getItem(FOCUS_MODE_STORAGE_KEY) === "true",
@@ -1098,7 +1107,7 @@ const AppContent: Component = () => {
               ref={(element) => {
                 diffScrollRef = element;
               }}
-              class={`flex-1 overflow-y-auto pb-3 ${focusMode() ? "px-1" : "px-4"}`}
+              class={`flex-1 overflow-y-auto pb-3 ${focusMode() ? "px-1" : "px-2"}`}
             >
               <Show
                 when={activeDiff()}

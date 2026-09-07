@@ -2,6 +2,8 @@ import { A, useSearchParams } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 
+import type { AutomaticReviewStatus } from "@better-review/shared";
+
 import { AppHeader } from "../components/AppHeader";
 import { Alert, Badge, Button, EmptyState, LoadingState, Select } from "../design-system";
 import { SpinnerIcon } from "../icons/spinner-icon";
@@ -14,6 +16,7 @@ import {
   type SearchedPr,
   type CiStatus,
 } from "../lib/query";
+import { trpc } from "../lib/trpc";
 
 // CI status indicator component (used when status is already loaded)
 const CiStatusBadgeInner: Component<{ status: CiStatus }> = (props) => {
@@ -192,6 +195,51 @@ const PrListPage: Component = () => {
     return result;
   };
 
+  const reviewStatuses = useQuery(() => ({
+    queryKey: ["automatic-review-statuses", filteredPrs().map((pr) => pr.url)],
+    queryFn: () =>
+      trpc.flueReview.automaticStatuses.query({ prUrls: filteredPrs().map((pr) => pr.url) }),
+    enabled: filteredPrs().length > 0,
+    staleTime: 0,
+    refetchInterval: 3000,
+  }));
+  const [launching, setLaunching] = createSignal<Set<string>>(new Set());
+  const [launchErrors, setLaunchErrors] = createSignal<Record<string, string>>({});
+  const startReview = async (prUrl: string) => {
+    if (launching().has(prUrl)) return;
+    setLaunching((previous) => new Set(previous).add(prUrl));
+    setLaunchErrors((previous) => {
+      const next = { ...previous };
+      delete next[prUrl];
+      return next;
+    });
+    try {
+      let simplifiedEnglish = false;
+      try {
+        simplifiedEnglish = localStorage.getItem("better-review:use-ste100") === "true";
+      } catch {}
+      await trpc.flueReview.startAutomatic.mutate({ prUrl, simplifiedEnglish });
+      await reviewStatuses.refetch();
+    } catch (error) {
+      setLaunchErrors((previous) => ({
+        ...previous,
+        [prUrl]: error instanceof Error ? error.message : "Could not start review",
+      }));
+    } finally {
+      setLaunching((previous) => {
+        const next = new Set(previous);
+        next.delete(prUrl);
+        return next;
+      });
+    }
+  };
+  const reviewStatus = (url: string): AutomaticReviewStatus | undefined =>
+    launching().has(url)
+      ? { state: "starting" }
+      : launchErrors()[url]
+        ? { state: "failed", error: launchErrors()[url] }
+        : reviewStatuses.data?.[url];
+
   // Batch fetch CI statuses for all visible PRs (debounced)
   let ciStatusTimeout: ReturnType<typeof setTimeout> | undefined;
   createEffect(() => {
@@ -364,40 +412,91 @@ const PrListPage: Component = () => {
             <div class="border-t border-border">
               <For each={filteredPrs()}>
                 {(pr) => (
-                  <A
-                    href={`/review?prUrl=${encodeURIComponent(pr.url)}`}
-                    class="group block border-b border-border hover:bg-bg-surface transition-colors"
-                    onMouseDown={() => handleMouseDown(pr.url)}
-                  >
-                    <div class="flex min-w-0 items-center gap-3 px-2 py-2">
-                      <span class="hidden w-48 shrink-0 truncate font-mono text-xs text-text-muted sm:block lg:w-56">
-                        {pr.repository.nameWithOwner}#{pr.number}
-                      </span>
-                      <div class="flex min-w-0 flex-1 items-center gap-2">
-                        <span class="truncate text-sm text-text group-hover:text-accent">
-                          {pr.title}
+                  <div class="flex items-center gap-2 border-b border-border pr-2 hover:bg-bg-surface">
+                    <A
+                      href={`/review?prUrl=${encodeURIComponent(pr.url)}&showChat=1`}
+                      class="group block min-w-0 flex-1 transition-colors"
+                      onMouseDown={() => handleMouseDown(pr.url)}
+                    >
+                      <div class="flex min-w-0 items-center gap-3 px-2 py-2">
+                        <span class="hidden w-48 shrink-0 truncate font-mono text-xs text-text-muted sm:block lg:w-56">
+                          {pr.repository.nameWithOwner}#{pr.number}
                         </span>
-                        <Show when={pr.isDraft}>
-                          <Badge variant="neutral">Draft</Badge>
-                        </Show>
-                        <Show when={pr.myReviewState === "APPROVED"}>
-                          <Badge variant="success">Approved</Badge>
-                        </Show>
-                        <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
-                          <Badge variant="danger">Changes requested</Badge>
-                        </Show>
+                        <div class="flex min-w-0 flex-1 items-center gap-2">
+                          <span class="truncate text-sm text-text group-hover:text-accent">
+                            {pr.title}
+                          </span>
+                          <Show when={pr.isDraft}>
+                            <Badge variant="neutral">Draft</Badge>
+                          </Show>
+                          <Show when={pr.myReviewState === "APPROVED"}>
+                            <Badge variant="success">Approved</Badge>
+                          </Show>
+                          <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
+                            <Badge variant="danger">Changes requested</Badge>
+                          </Show>
+                        </div>
+                        <span class="hidden w-28 shrink-0 truncate text-xs text-text-muted md:block">
+                          @{pr.author.login}
+                        </span>
+                        <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint sm:block">
+                          {formatRelativeTime(pr.createdAt)}
+                        </span>
+                        <span class="w-4 shrink-0 text-center font-mono text-xs">
+                          <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
+                        </span>
                       </div>
-                      <span class="hidden w-28 shrink-0 truncate text-xs text-text-muted md:block">
-                        @{pr.author.login}
-                      </span>
-                      <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint sm:block">
-                        {formatRelativeTime(pr.createdAt)}
-                      </span>
-                      <span class="w-4 shrink-0 text-center font-mono text-xs">
-                        <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
-                      </span>
+                    </A>
+                    <div class="w-24 shrink-0 text-right">
+                      <Show
+                        when={reviewStatus(pr.url)}
+                        fallback={
+                          <span
+                            class="text-xs text-text-faint"
+                            title={
+                              reviewStatuses.isError
+                                ? "Could not load review status"
+                                : "Loading review status"
+                            }
+                          >
+                            {reviewStatuses.isError ? "Unavailable" : "…"}
+                          </span>
+                        }
+                      >
+                        {(status) => (
+                          <Show
+                            when={status().state === "none" || status().state === "failed"}
+                            fallback={
+                              <A
+                                class={`inline-flex items-center gap-1.5 text-xs ${status().state === "completed" ? "text-success" : "text-text-muted"}`}
+                                href={`/review?prUrl=${encodeURIComponent(pr.url)}&showChat=1`}
+                              >
+                                <Show when={status().state !== "completed"}>
+                                  <SpinnerIcon size={12} class="animate-spin text-accent" />
+                                </Show>
+                                {status().state === "completed"
+                                  ? "Review ready"
+                                  : status().state === "starting"
+                                    ? "Starting"
+                                    : "Reviewing"}
+                              </A>
+                            }
+                          >
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => void startReview(pr.url)}
+                              title={status().error ?? "Start automatic review"}
+                              aria-label={`${status().state === "failed" ? "Retry review" : "Review"} PR ${pr.number}`}
+                            >
+                              {status().state === "failed" ? "Retry review" : "Review"}
+                            </Button>
+                          </Show>
+                        )}
+                      </Show>
                     </div>
-                  </A>
+                  </div>
                 )}
               </For>
             </div>

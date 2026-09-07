@@ -150,7 +150,7 @@ function createPendingClient() {
   };
 }
 
-test("component cleanup does not report an intentional stream abort", async () => {
+test("leaving a review detaches the viewer without aborting backend work", async () => {
   const errors: string[] = [];
   const { clientFactory, started, abortCount } = createPendingClient();
   const { chat, dispose } = createRoot((dispose) => ({
@@ -171,7 +171,7 @@ test("component cleanup does not report an intentional stream abort", async () =
   assert.equal(await sending, false);
   assert.deepEqual(errors, []);
   assert.equal(chat.error(), null);
-  assert.equal(abortCount(), 1);
+  assert.equal(abortCount(), 0);
 });
 
 test("a replacement prompt does not turn the cancelled request into an error", async () => {
@@ -199,7 +199,7 @@ test("a replacement prompt does not turn the cancelled request into an error", a
   dispose();
   assert.equal(await second, false);
   assert.deepEqual(errors, []);
-  assert.equal(abortCount(), 2);
+  assert.equal(abortCount(), 1);
 });
 
 test("message completion keeps controls busy until the submission settles", async () => {
@@ -396,4 +396,59 @@ test("history parses string timestamps, preserves epoch zero, and tolerates malf
   assert.equal(messages[1]?.timestamp, 0);
   for (const message of messages.slice(2))
     assert.ok(message.timestamp >= before && message.timestamp <= after);
+});
+
+test("rejoining hydrates live tools and reasoning, then settles without duplicate messages", async () => {
+  const { conversationSnapshotState } = await import("./useStreamingChat");
+  const conversation: FlueConversationSnapshot = {
+    v: 1,
+    conversationId: "reattach",
+    offset: "1",
+    settlements: [],
+    messages: [
+      {
+        id: "user",
+        role: "user",
+        purpose: "user",
+        display: "visible",
+        submissionId: "run",
+        parts: [{ type: "text", text: "Review", state: "done" }],
+      },
+      {
+        id: "assistant",
+        role: "assistant",
+        purpose: "assistant",
+        display: "visible",
+        submissionId: "run",
+        parts: [
+          { type: "reasoning", text: "Inspecting files", state: "streaming" },
+          {
+            type: "dynamic-tool",
+            toolCallId: "tool",
+            toolName: "read",
+            state: "input-available",
+            input: { path: "index.ts" },
+          },
+        ],
+      },
+    ],
+  };
+  const active = conversationSnapshotState(conversation);
+  assert.equal(active.running, true);
+  assert.deepEqual(
+    active.messages.map((m) => m.id),
+    ["user"],
+  );
+  assert.equal(active.live?.reasoning, "Inspecting files");
+  assert.equal(active.live?.toolCalls[0]?.status, "running");
+  conversation.messages[1]!.parts = [{ type: "text", text: "One finding", state: "done" }];
+  assert.equal(conversationSnapshotState(conversation).running, true);
+  conversation.settlements.push({ submissionId: "run", outcome: "completed" });
+  const settled = conversationSnapshotState(conversation);
+  assert.equal(settled.running, false);
+  assert.equal(settled.live, undefined);
+  assert.deepEqual(
+    settled.messages.map((m) => m.id),
+    ["user", "assistant"],
+  );
 });

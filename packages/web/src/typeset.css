@@ -92,7 +92,7 @@
     }
 
     &:where(a:focus-visible) {
-      border-radius: 0.125em;
+      border-radius: var(--radius-xs);
       outline: 2px solid var(--color-border-focus);
       outline-offset: 2px;
     }

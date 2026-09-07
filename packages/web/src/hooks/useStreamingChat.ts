@@ -5,6 +5,8 @@ import {
 } from "@flue/sdk";
 import { batch, createEffect, createSignal, onCleanup } from "solid-js";
 
+import { conversationIsRunning } from "@better-review/shared";
+
 import { fetchWithApiAuth } from "../lib/apiAuth";
 
 export interface ToolCall {
@@ -51,7 +53,7 @@ export const createConversationClient: FlueConversationClientFactory = (sessionI
   });
 
 export function conversationSnapshotMessages(
-  snapshot: FlueConversationSnapshot,
+  snapshot: Pick<FlueConversationSnapshot, "messages">,
 ): StreamingMessage[] {
   return snapshot.messages.flatMap((message): StreamingMessage[] => {
     // System instructions are not conversation bubbles.
@@ -99,6 +101,16 @@ export function conversationSnapshotMessages(
   });
 }
 
+export function conversationSnapshotState(
+  conversation: Pick<FlueConversationSnapshot, "messages" | "settlements">,
+) {
+  const projected = conversationSnapshotMessages(conversation);
+  const running = conversationIsRunning(conversation);
+  const last = projected.at(-1);
+  const live = running && last?.role === "assistant" ? last : undefined;
+  return { messages: live ? projected.slice(0, -1) : projected, live, running };
+}
+
 export async function loadConversationMessages(sessionId: string): Promise<StreamingMessage[]> {
   return conversationSnapshotMessages(await createConversationClient(sessionId).history());
 }
@@ -142,6 +154,8 @@ export function useStreamingChat(
   let activePromptAbort: AbortController | null = null;
   let activeClient: FlueConversationClient | null = null;
   let activeAssistantMessageId: string | null = null;
+  let stopObservation: (() => void) | null = null;
+  let refreshObservation: (() => void) | null = null;
   let isDisposed = false;
   let isConnecting = false;
 
@@ -177,15 +191,54 @@ export function useStreamingChat(
     return client;
   }
 
-  function abortDetachedClient(client: FlueConversationClient | null) {
-    if (!client) return;
-    void client.abort().catch(() => undefined);
+  function observeConversation(sessionId: string) {
+    stopObservation?.();
+    const client = clientFactory(sessionId);
+    if (typeof client.observe !== "function") return;
+    const observation = client.observe();
+    const update = () => {
+      if (isDisposed || options.getSessionId() !== sessionId || activePromptAbort) return;
+      const snapshot = observation.getSnapshot();
+      if (snapshot.phase === "error") {
+        setError(snapshot.error?.message ?? "Could not connect to review");
+        setConnectionStatus("degraded");
+        return;
+      }
+      const conversation = snapshot.conversation;
+      if (!conversation) return;
+      const { messages, running, live } = conversationSnapshotState(conversation);
+      batch(() => {
+        setMessages(messages);
+        setStreamingContent(live?.content ?? "");
+        setStreamingReasoning(live?.reasoning ?? "");
+        setActiveTools(live?.toolCalls ?? []);
+        setIsStreaming(running);
+        setAwaitingFirstToken(running && !live);
+        markConnected();
+        const latest = conversation.settlements.at(-1);
+        if (!running && latest && latest.outcome !== "completed") {
+          setError(
+            latest.outcome === "aborted"
+              ? "Review stopped."
+              : "The last request failed. Start a review or send a message to retry.",
+          );
+        }
+      });
+    };
+    const unsubscribe = observation.subscribe(update);
+    refreshObservation = () => observation.refresh();
+    stopObservation = () => {
+      unsubscribe();
+      observation.close();
+      refreshObservation = null;
+    };
+    update();
   }
 
   async function ensureSocket(): Promise<boolean> {
     const sessionId = options.getSessionId();
     if (!sessionId || isDisposed) {
-      abortDetachedClient(cleanupSocket());
+      cleanupSocket();
       setIsConnected(false);
       setConnectionStatus("offline");
       return false;
@@ -201,7 +254,9 @@ export function useStreamingChat(
 
   createEffect(() => {
     const sessionId = options.getSessionId();
-    abortDetachedClient(cleanupSocket());
+    cleanupSocket();
+    stopObservation?.();
+    stopObservation = null;
     resetStreamingState();
     setRetryableMessage(null);
 
@@ -213,12 +268,15 @@ export function useStreamingChat(
 
     if (!isConnecting) {
       void ensureSocket();
+      observeConversation(sessionId);
     }
   });
 
   onCleanup(() => {
     isDisposed = true;
-    abortDetachedClient(cleanupSocket());
+    cleanupSocket();
+    stopObservation?.();
+    stopObservation = null;
   });
 
   function prepareAssistantMessage(requestId: string, messageId = `assistant-${requestId}`) {
@@ -438,6 +496,7 @@ export function useStreamingChat(
       finalizeMessage();
       if (activePromptAbort === promptAbort) activePromptAbort = null;
       if (activeClient === client) activeClient = null;
+      refreshObservation?.();
       return retryableMessage() === null;
     } catch (err) {
       // Cleanup, session changes, a replacement prompt, and component disposal all
@@ -495,6 +554,7 @@ export function useStreamingChat(
     setIsConnected(false);
     setConnectionStatus("reconnecting");
     await ensureSocket();
+    refreshObservation?.();
   }
 
   function clearMessages() {

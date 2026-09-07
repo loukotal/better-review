@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { StreamingMessage } from "../hooks/useStreamingChat";
-import { groupTranscript, reviewRequestLabel } from "./chat-transcript";
+import {
+  groupTranscript,
+  reviewRequestLabel,
+  currentActivity,
+  thinkingTail,
+} from "./chat-transcript";
 import {
   STRUCTURED_REVIEW_PROMPT,
   ADVERSARIAL_REVIEW_PROMPT,
@@ -57,4 +62,41 @@ test("retains reasoning-only and tool-only messages", () => {
     ],
   };
   assert.deepEqual(groupTranscript([reasoning, tool])[0]?.messages, [reasoning, tool]);
+});
+
+test("live activity survives model steps, updates tools, and stops at the latest request", () => {
+  const tool = { id: "1", callId: "1", tool: "read", status: "running" as const, input: {} };
+  const previous = {
+    ...message("a1", "assistant", ""),
+    reasoning: "Old thinking",
+    toolCalls: [tool],
+  };
+  const current = {
+    ...message("a2", "assistant", ""),
+    reasoning: "Inspecting code",
+    toolCalls: [{ ...tool, callId: "2" }],
+  };
+  const messages = [previous, message("u", "user", "Review again"), current];
+  const activity = currentActivity(messages, [{ ...tool, callId: "2", status: "completed" }], "");
+  assert.deepEqual(
+    activity.tools.map((t) => [t.callId, t.status]),
+    [["2", "completed"]],
+  );
+  assert.equal(activity.reasoning, "Inspecting code");
+  assert.equal(currentActivity(messages, [], "New thinking").reasoning, "New thinking");
+  assert.deepEqual(currentActivity([...messages, message("u2", "user", "Next")], [], ""), {
+    tools: [],
+    reasoning: "",
+  });
+});
+
+test("thinking preview follows the latest text and stays bounded", () => {
+  assert.equal(thinkingTail(" Short thought "), "Short thought");
+  const preview = thinkingTail(
+    "Opening thought. " + "Investigating code. ".repeat(40) + "Found the cause.",
+  );
+  assert.ok(preview.startsWith("…"));
+  assert.ok(preview.endsWith("Found the cause."));
+  assert.ok(preview.length <= 361);
+  assert.ok(!preview.includes("Opening thought"));
 });

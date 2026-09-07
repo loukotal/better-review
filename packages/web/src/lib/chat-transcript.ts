@@ -1,4 +1,4 @@
-import type { StreamingMessage } from "../hooks/useStreamingChat";
+import type { StreamingMessage, ToolCall } from "../hooks/useStreamingChat";
 import {
   ADVERSARIAL_REVIEW_PROMPT,
   STRUCTURED_REVIEW_PROMPT,
@@ -28,4 +28,33 @@ export function groupTranscript(messages: StreamingMessage[]) {
     else groups.push({ id: message.id, role: message.role, messages: [message] });
   }
   return groups;
+}
+
+/** Keep progress across model steps, but never carry it across user requests. */
+export function currentActivity(
+  messages: StreamingMessage[],
+  activeTools: ToolCall[],
+  reasoning: string,
+) {
+  const boundary = messages.findLastIndex((message) => message.role === "user");
+  const assistants = messages.slice(boundary + 1).filter((message) => message.role === "assistant");
+  const tools = new Map<string, ToolCall>();
+  for (const tool of [...assistants.flatMap((message) => message.toolCalls), ...activeTools]) {
+    tools.set(tool.callId, tool);
+  }
+  return {
+    tools: [...tools.values()],
+    reasoning: reasoning.trim()
+      ? reasoning
+      : (assistants.findLast((message) => message.reasoning?.trim())?.reasoning ?? ""),
+  };
+}
+
+/** A bounded tail follows new thinking instead of freezing on its opening lines. */
+export function thinkingTail(content: string, limit = 360): string {
+  const text = content.trim();
+  if (text.length <= limit) return text;
+  const tail = text.slice(-limit);
+  const boundary = tail.search(/\s/);
+  return `…${boundary >= 0 ? tail.slice(boundary) : tail}`;
 }
