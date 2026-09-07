@@ -1043,6 +1043,9 @@ const AppContent: Component = () => {
         <Show when={panelVisibility().chat && !focusMode()}>
           <ChatPanel
             prUrl={loadedPrUrl()}
+            initialSessionId={
+              typeof searchParams.sessionId === "string" ? searchParams.sessionId : undefined
+            }
             prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
             repoOwner={prInfo()?.owner ?? null}
             repoName={prInfo()?.repo ?? null}

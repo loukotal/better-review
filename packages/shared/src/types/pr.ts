@@ -69,6 +69,7 @@ export interface CiStatus {
  */
 export interface SearchedPr {
   number: number;
+  headRefOid: string;
   title: string;
   url: string;
   repository: { name: string; nameWithOwner: string };

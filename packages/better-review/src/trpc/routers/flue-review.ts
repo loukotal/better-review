@@ -167,7 +167,7 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>) {
+export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>, forceNew = false) {
   return Effect.gen(function* () {
     const gh = yield* GhService;
     const prContext = yield* PrContextService;
@@ -204,7 +204,7 @@ export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>) {
     if (current.activeSessionId) {
       const active = current.sessions.find((session) => session.id === current.activeSessionId);
       const flueSession = yield* flueSessions.get(current.activeSessionId);
-      if (active && active.headSha === headSha && isFlueV2ReviewSession(flueSession)) {
+      if (active && isFlueV2ReviewSession(flueSession)) {
         // A viewer joining running work must not reset its checkout or scope.
         const history = yield* Effect.tryPromise(() => readFlueConversationHistory(flueSession.id));
         if (
@@ -214,36 +214,44 @@ export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>) {
           const sessions = yield* visibleV2Sessions(current.sessions, flueSessions);
           return sessionPayload(flueSession, sessions, flueSession.id, true);
         }
-        const prepared = yield* checkout.prepare({
-          owner: pr.owner,
-          repo: pr.repo,
-          number: pr.number,
-          prUrl: input.prUrl,
-          baseSha,
-          headSha,
-          baseRef,
-          headRef,
-          reviewMode: reviewScope.mode,
-          commitSha: reviewScope.commitSha,
-          files: input.files,
-        });
-        const updatedSession: FlueReviewSession = {
-          ...flueSession,
-          baseSha,
-          headSha,
-          baseRef,
-          headRef,
-          reviewMode: reviewScope.mode,
-          commitSha: reviewScope.commitSha,
-          worktreePath: prepared.worktreePath,
-          repoAccess: prepared.repoAccess,
-          files: input.files,
-        };
-        yield* flueSessions.save(updatedSession);
-        yield* prContext.registerSession(flueSession.id, input.prUrl);
-        yield* prContext.setSessionScope(flueSession.id, reviewScope);
-        const sessions = yield* visibleV2Sessions(current.sessions, flueSessions);
-        return sessionPayload(updatedSession, sessions, current.activeSessionId, true);
+        if (
+          !forceNew &&
+          flueSession.headSha === headSha &&
+          flueSession.baseSha === baseSha &&
+          flueSession.reviewMode === reviewScope.mode &&
+          flueSession.commitSha === reviewScope.commitSha
+        ) {
+          const prepared = yield* checkout.prepare({
+            owner: pr.owner,
+            repo: pr.repo,
+            number: pr.number,
+            prUrl: input.prUrl,
+            baseSha,
+            headSha,
+            baseRef,
+            headRef,
+            reviewMode: reviewScope.mode,
+            commitSha: reviewScope.commitSha,
+            files: input.files,
+          });
+          const updatedSession: FlueReviewSession = {
+            ...flueSession,
+            baseSha,
+            headSha,
+            baseRef,
+            headRef,
+            reviewMode: reviewScope.mode,
+            commitSha: reviewScope.commitSha,
+            worktreePath: prepared.worktreePath,
+            repoAccess: prepared.repoAccess,
+            files: input.files,
+          };
+          yield* flueSessions.save(updatedSession);
+          yield* prContext.registerSession(flueSession.id, input.prUrl);
+          yield* prContext.setSessionScope(flueSession.id, reviewScope);
+          const sessions = yield* visibleV2Sessions(current.sessions, flueSessions);
+          return sessionPayload(updatedSession, sessions, current.activeSessionId, true);
+        }
       }
     }
 
@@ -314,11 +322,17 @@ async function automaticReviewStatus(prUrl: string): Promise<AutomaticReviewStat
   const state = reviewConversationStatus(history, session?.automaticReview?.submissionId);
   if (state === "running" || state === "completed") startErrors.delete(prUrl);
   const error = startErrors.get(prUrl);
-  return { state: error ? "failed" : state, sessionId: session?.id, ...(error ? { error } : {}) };
+  return {
+    state: error ? "failed" : state,
+    sessionId: session?.id,
+    headSha: session?.headSha,
+    ...(error ? { error } : {}),
+  };
 }
 async function startAutomaticReview(
   prUrl: string,
   simplifiedEnglish: boolean,
+  rerun: boolean,
 ): Promise<AutomaticReviewStatus> {
   return startingReviews.run(prUrl, () =>
     sessionLock.run(prUrl, async (): Promise<AutomaticReviewStatus> => {
@@ -329,20 +343,26 @@ async function startAutomaticReview(
           Effect.gen(function* () {
             const gh = yield* GhService;
             const diff = yield* gh.getDiff(prUrl);
-            return yield* getOrCreateReviewSession({
-              prUrl,
-              prNumber: pr.number,
-              repoOwner: pr.owner,
-              repoName: pr.repo,
-              files: [...parseFullDiff(diff).keys()],
-            });
+            return yield* getOrCreateReviewSession(
+              {
+                prUrl,
+                prNumber: pr.number,
+                repoOwner: pr.owner,
+                repoName: pr.repo,
+                files: [...parseFullDiff(diff).keys()],
+              },
+              rerun,
+            );
           }),
         );
-        const session = await readFlueReviewSession(data.session.id);
+        const session = await runEffect(
+          Effect.flatMap(FlueReviewSessionService, (store) => store.get(data.session.id)),
+        );
         if (!session) throw new Error("Review session not found");
         const history = await readFlueConversationHistory(session.id);
         const state = reviewConversationStatus(history, session.automaticReview?.submissionId);
-        if (state === "running" || state === "completed") return { state, sessionId: session.id };
+        if (state === "running" || state === "completed")
+          return { state, sessionId: session.id, headSha: session.headSha };
         // Persist the key before admission, so an interrupted request can safely retry.
         const idempotencyKey =
           state === "failed"
@@ -367,7 +387,7 @@ async function startAutomaticReview(
             yield* store.save(session);
           }),
         );
-        return { state: "running", sessionId: session.id };
+        return { state: "running", sessionId: session.id, headSha: session.headSha };
       } catch (error) {
         startErrors.set(prUrl, error instanceof Error ? error.message : "Could not start review");
         throw error;
@@ -378,9 +398,15 @@ async function startAutomaticReview(
 
 export const flueReviewRouter = router({
   startAutomatic: publicProcedure
-    .input(z.object({ prUrl: z.string(), simplifiedEnglish: z.boolean().default(false) }))
+    .input(
+      z.object({
+        prUrl: z.string(),
+        simplifiedEnglish: z.boolean().default(false),
+        rerun: z.boolean().default(false),
+      }),
+    )
     .mutation(({ input }) =>
-      startAutomaticReview(canonicalPrUrl(input.prUrl), input.simplifiedEnglish),
+      startAutomaticReview(canonicalPrUrl(input.prUrl), input.simplifiedEnglish, input.rerun),
     ),
   automaticStatuses: publicProcedure
     .input(z.object({ prUrls: z.array(z.string()).max(200) }))
@@ -402,6 +428,39 @@ export const flueReviewRouter = router({
         runEffect(getOrCreateReviewSession(input)),
       ),
     ),
+
+  selectSession: publicProcedure
+    .input(z.object({ prUrl: z.string(), sessionId: z.string() }))
+    .mutation(({ input }) => {
+      const prUrl = canonicalPrUrl(input.prUrl);
+      return sessionLock.run(prUrl, () =>
+        runEffect(
+          Effect.gen(function* () {
+            const prContext = yield* PrContextService;
+            const flueSessions = yield* FlueReviewSessionService;
+            const session = yield* flueSessions.get(input.sessionId);
+            if (!isFlueV2ReviewSession(session)) {
+              return yield* Effect.fail(new Error("Flue V2 review session not found"));
+            }
+            const current = yield* prContext.listSessions(prUrl);
+            if (
+              canonicalPrUrl(session.prUrl) !== prUrl ||
+              !current.sessions.some((s) => s.id === session.id)
+            ) {
+              return yield* Effect.fail(new Error("Review session not found for PR"));
+            }
+            const sessions = yield* visibleV2Sessions(current.sessions, flueSessions);
+            yield* prContext.setActiveSession(prUrl, session.id);
+            yield* prContext.registerSession(session.id, prUrl);
+            yield* prContext.setSessionScope(session.id, {
+              mode: session.reviewMode,
+              commitSha: session.commitSha,
+            });
+            return sessionPayload(session, sessions, session.id, true);
+          }),
+        ),
+      );
+    }),
 
   create: publicProcedure.input(sessionInput).mutation(({ input }) =>
     sessionLock.run(canonicalPrUrl(input.prUrl), () =>

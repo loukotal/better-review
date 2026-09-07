@@ -16,6 +16,7 @@ import {
   type SearchedPr,
   type CiStatus,
 } from "../lib/query";
+import { reviewFreshness } from "../lib/review-freshness";
 import { trpc } from "../lib/trpc";
 
 // CI status indicator component (used when status is already loaded)
@@ -205,8 +206,9 @@ const PrListPage: Component = () => {
   }));
   const [launching, setLaunching] = createSignal<Set<string>>(new Set());
   const [launchErrors, setLaunchErrors] = createSignal<Record<string, string>>({});
-  const startReview = async (prUrl: string) => {
-    if (launching().has(prUrl)) return;
+  const startReview = async (prUrl: string, rerun = false) => {
+    const state = reviewStatuses.data?.[prUrl]?.state;
+    if (launching().has(prUrl) || state === "starting" || state === "running") return;
     setLaunching((previous) => new Set(previous).add(prUrl));
     setLaunchErrors((previous) => {
       const next = { ...previous };
@@ -218,7 +220,7 @@ const PrListPage: Component = () => {
       try {
         simplifiedEnglish = localStorage.getItem("better-review:use-ste100") === "true";
       } catch {}
-      await trpc.flueReview.startAutomatic.mutate({ prUrl, simplifiedEnglish });
+      await trpc.flueReview.startAutomatic.mutate({ prUrl, simplifiedEnglish, rerun });
       await reviewStatuses.refetch();
     } catch (error) {
       setLaunchErrors((previous) => ({
@@ -447,7 +449,7 @@ const PrListPage: Component = () => {
                         </span>
                       </div>
                     </A>
-                    <div class="w-24 shrink-0 text-right">
+                    <div class="w-32 shrink-0 whitespace-nowrap text-right">
                       <Show
                         when={reviewStatus(pr.url)}
                         fallback={
@@ -467,25 +469,54 @@ const PrListPage: Component = () => {
                           <Show
                             when={status().state === "none" || status().state === "failed"}
                             fallback={
-                              <A
-                                class={`inline-flex items-center gap-1.5 text-xs ${status().state === "completed" ? "text-success" : "text-text-muted"}`}
-                                href={`/review?prUrl=${encodeURIComponent(pr.url)}&showChat=1`}
-                              >
-                                <Show when={status().state !== "completed"}>
-                                  <SpinnerIcon size={12} class="animate-spin text-accent" />
+                              <span class="flex min-h-7 items-stretch overflow-hidden rounded-md border border-border bg-bg-surface">
+                                <A
+                                  class={`inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-xs transition-colors hover:bg-bg-elevated focus-visible:outline focus-visible:outline-accent ${status().state === "completed" ? reviewFreshness(status().headSha, pr.headRefOid).className : "text-text-muted"}`}
+                                  title={
+                                    status().state === "completed"
+                                      ? reviewFreshness(status().headSha, pr.headRefOid).title
+                                      : undefined
+                                  }
+                                  href={`/review?prUrl=${encodeURIComponent(pr.url)}&showChat=1${status().sessionId ? `&sessionId=${encodeURIComponent(status().sessionId!)}` : ""}`}
+                                >
+                                  <Show when={status().state !== "completed"}>
+                                    <SpinnerIcon size={12} class="animate-spin text-accent" />
+                                  </Show>
+                                  {status().state === "completed"
+                                    ? "Review ready"
+                                    : status().state === "starting"
+                                      ? "Starting"
+                                      : "Reviewing"}
+                                </A>
+                                <Show when={status().state === "completed"}>
+                                  <button
+                                    type="button"
+                                    class="inline-flex w-7 shrink-0 items-center justify-center border-l border-border text-text-faint transition-colors hover:bg-bg-elevated hover:text-text focus-visible:outline focus-visible:outline-accent"
+                                    aria-label={`Re-review PR ${pr.number}`}
+                                    title="Re-review"
+                                    onClick={() => void startReview(pr.url, true)}
+                                  >
+                                    <svg
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      aria-hidden="true"
+                                    >
+                                      <path d="M20 7v5h-5M20 12a8 8 0 1 0-2 5" />
+                                    </svg>
+                                  </button>
                                 </Show>
-                                {status().state === "completed"
-                                  ? "Review ready"
-                                  : status().state === "starting"
-                                    ? "Starting"
-                                    : "Reviewing"}
-                              </A>
+                              </span>
                             }
                           >
                             <Button
                               type="button"
                               variant="secondary"
                               size="sm"
+                              fullWidth
                               onClick={() => void startReview(pr.url)}
                               title={status().error ?? "Start automatic review"}
                               aria-label={`${status().state === "failed" ? "Retry review" : "Review"} PR ${pr.number}`}

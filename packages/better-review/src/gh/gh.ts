@@ -174,6 +174,7 @@ const CiStatusSchema = Schema.Struct({
 
 const SearchedPrSchema = Schema.Struct({
   number: Schema.Number,
+  headRefOid: Schema.String,
   title: Schema.String,
   url: Schema.String,
   repository: RepositorySchema,
@@ -237,6 +238,7 @@ const GraphQLReviewSchema = Schema.Struct({
 
 const GraphQLPrSchema = Schema.Struct({
   number: Schema.Number,
+  headRefOid: Schema.String,
   title: Schema.String,
   url: Schema.String,
   isDraft: Schema.Boolean,
@@ -1317,6 +1319,7 @@ const ghCli: GhCli = {
       // GraphQL query to get PRs with review state, CI status, and line counts
       const prFields = `
         number
+        headRefOid
         title
         url
         isDraft
@@ -1384,6 +1387,7 @@ const ghCli: GhCli = {
       const toSearchedPr = (pr: GraphQLPr) =>
         Schema.decodeUnknownSync(SearchedPrSchema)({
           number: pr.number,
+          headRefOid: pr.headRefOid,
           title: pr.title,
           url: pr.url,
           isDraft: pr.isDraft,

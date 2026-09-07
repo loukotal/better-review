@@ -8,6 +8,7 @@ export type AutomaticReviewState = "none" | "starting" | "running" | "completed"
 export interface AutomaticReviewStatus {
   state: AutomaticReviewState;
   sessionId?: string;
+  headSha?: string;
   error?: string;
 }
 export interface ReviewConversation {

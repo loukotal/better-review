@@ -56,6 +56,7 @@ marked.setOptions({
 
 interface ChatPanelProps {
   prUrl: string | null;
+  initialSessionId?: string;
   prNumber: number | null;
   repoOwner: string | null;
   repoName: string | null;
@@ -236,15 +237,28 @@ export function ChatPanel(props: ChatPanelProps) {
     setSessionError(null);
 
     try {
-      const data = await trpc.flueReview.getOrCreateSession.mutate({
-        prUrl: props.prUrl,
-        prNumber: props.prNumber,
-        repoOwner: props.repoOwner,
-        repoName: props.repoName,
-        files: props.files,
-        reviewMode: props.reviewMode,
-        commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
-      });
+      // Explicit review links must select the saved revision, never create a new session.
+      const requestedSessionId = props.initialSessionId;
+      if (requestedSessionId) {
+        setSessionId(null);
+        setSessions([]);
+        setCurrentHeadSha(null);
+        chat.clearMessages();
+      }
+      const data = requestedSessionId
+        ? await trpc.flueReview.selectSession.mutate({
+            prUrl: requestPrUrl,
+            sessionId: requestedSessionId,
+          })
+        : await trpc.flueReview.getOrCreateSession.mutate({
+            prUrl: props.prUrl,
+            prNumber: props.prNumber,
+            repoOwner: props.repoOwner,
+            repoName: props.repoName,
+            files: props.files,
+            reviewMode: props.reviewMode,
+            commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
+          });
 
       if (requestVersion !== sessionInitializationVersion || props.prUrl !== requestPrUrl) return;
       if (!data.session?.id) {
@@ -261,7 +275,7 @@ export function ChatPanel(props: ChatPanelProps) {
       if (data.sessions) {
         setSessions(data.sessions.filter((s: StoredSession) => !s.hidden));
       }
-      if (data.headSha) {
+      if (data.headSha && !requestedSessionId) {
         setCurrentHeadSha(data.headSha);
       }
     } catch (err) {
