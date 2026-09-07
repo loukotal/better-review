@@ -63,7 +63,12 @@ interface ChatPanelProps {
   files: string[];
   theme: DiffTheme;
   aiAnnotations?: Annotation[];
-  onScrollToFile?: (file: string, line?: number) => void;
+  onScrollToFile?: (
+    file: string,
+    line?: number,
+    sessionId?: string,
+    sameRevision?: boolean,
+  ) => void;
   onApplyReviewOrder?: (files: string[]) => void;
   onAnnotationsReceived?: (annotations: Annotation[]) => void;
   reviewMode?: "full" | "commit";
@@ -113,6 +118,7 @@ export function ChatPanel(props: ChatPanelProps) {
   // Session management state
   const [sessions, setSessions] = createSignal<StoredSession[]>([]);
   const [currentHeadSha, setCurrentHeadSha] = createSignal<string | null>(null);
+  const [navigationRevision, setNavigationRevision] = createSignal<string | null>(null);
 
   // Resize state
   const [width, setWidth] = createSignal(loadSavedWidth());
@@ -267,6 +273,13 @@ export function ChatPanel(props: ChatPanelProps) {
       }
 
       setSessionId(data.session.id);
+      setNavigationRevision(
+        requestedSessionId
+          ? null
+          : props.reviewMode === "commit"
+            ? (props.commitSha ?? null)
+            : data.sessionHeadSha,
+      );
       setScopeSessionKey(
         props.reviewMode === "commit" && props.commitSha ? `commit:${props.commitSha}` : "full",
       );
@@ -343,6 +356,8 @@ export function ChatPanel(props: ChatPanelProps) {
       });
 
       setSessionId(newSessionId);
+      // Session list heads do not identify a saved commit-review scope.
+      setNavigationRevision(null);
     } catch (err) {
       console.error("Failed to switch session:", err);
     }
@@ -368,6 +383,9 @@ export function ChatPanel(props: ChatPanelProps) {
 
       batch(() => {
         setSessionId(data.session.id);
+        setNavigationRevision(
+          props.reviewMode === "commit" ? (props.commitSha ?? null) : data.sessionHeadSha,
+        );
         chat.loadExistingMessages([]); // New session has no messages
         setScopeSessionKey(
           props.reviewMode === "commit" && props.commitSha ? `commit:${props.commitSha}` : "full",
@@ -432,7 +450,12 @@ export function ChatPanel(props: ChatPanelProps) {
   // Handle file reference clicks
   const handleFileClick = (file: string, line?: number) => {
     const resolved = resolveFileReference(file, props.files);
-    if (resolved) props.onScrollToFile?.(resolved, line);
+    const sid = sessionId();
+    const reviewedHead = navigationRevision();
+    const activeHead = props.reviewMode === "commit" ? props.commitSha : currentHeadSha();
+    if (resolved && sid) {
+      props.onScrollToFile?.(resolved, line, sid, !!reviewedHead && reviewedHead === activeHead);
+    }
   };
 
   // Handle apply review order

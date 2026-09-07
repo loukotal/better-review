@@ -7,6 +7,7 @@ export function Dialog(props: {
   open: boolean;
   onClose: () => void;
   title: string;
+  wide?: boolean;
   children: JSX.Element;
 }) {
   let element!: HTMLDialogElement;
@@ -29,7 +30,7 @@ export function Dialog(props: {
         event.preventDefault();
         props.onClose();
       }}
-      class="m-auto w-[min(28rem,calc(100vw-2rem))] max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-lg border border-border bg-bg-surface p-0 text-text backdrop:bg-black/60"
+      class={`m-auto ${props.wide ? "w-[min(72rem,calc(100vw-2rem))]" : "w-[min(28rem,calc(100vw-2rem))]"} max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-lg border border-border bg-bg-surface p-0 text-text backdrop:bg-black/60`}
     >
       <PanelHeader
         title={props.title}

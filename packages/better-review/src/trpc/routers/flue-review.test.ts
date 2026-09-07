@@ -85,6 +85,76 @@ test("only versioned Flue 2 review sessions remain selectable", () => {
   assert.equal(isFlueV2ReviewSession({ runtimeVersion: 2 } as never), true);
 });
 
+test("annotation source loads unchanged files at the saved revision without checkout", async (t) => {
+  const { flueReviewRouter } = await import("./flue-review");
+  const session = {
+    runtimeVersion: 2,
+    owner: "owner",
+    repo: "repo",
+    headSha: "reviewed-head",
+    reviewMode: "full",
+    commitSha: null,
+    files: ["changed.ts"],
+  } as FlueReviewSession;
+  const calls: unknown[] = [];
+  let content: string | null = "export const untouched = true;\n";
+  const store = {
+    get: (id: string) => Effect.succeed(id === "review" ? session : null),
+  } as unknown as FlueReviewSessionService;
+  const gh = {
+    getFileContent: (input: unknown) =>
+      Effect.sync(() => {
+        calls.push(input);
+        return content;
+      }),
+  } as unknown as GhService;
+  t.mock.method(runtime, "runPromise", <A>(effect: Effect.Effect<A, unknown, unknown>) =>
+    Effect.runPromise(
+      effect.pipe(
+        Effect.provideService(FlueReviewSessionService, store),
+        Effect.provideService(GhService, gh),
+      ) as Effect.Effect<A, unknown>,
+    ),
+  );
+  const caller = flueReviewRouter.createCaller({
+    gh: null,
+    opencode: null,
+    diffCache: null,
+    prContext: null,
+  });
+  assert.deepEqual(await caller.source({ sessionId: "review", path: "src/untouched.ts" }), {
+    path: "src/untouched.ts",
+    ref: "reviewed-head",
+    content,
+  });
+  assert.deepEqual(calls, [
+    { owner: "owner", repo: "repo", path: "src/untouched.ts", ref: "reviewed-head" },
+  ]);
+  session.reviewMode = "commit";
+  session.commitSha = "reviewed-commit";
+  content = "";
+  assert.equal(
+    (await caller.source({ sessionId: "review", path: "empty.ts" })).ref,
+    "reviewed-commit",
+  );
+  content = null;
+  await assert.rejects(caller.source({ sessionId: "review", path: "missing.ts" }), /not found/);
+  await assert.rejects(caller.source({ sessionId: "missing", path: "source.ts" }), /not found/);
+  const count = calls.length;
+  for (const file of [
+    "../secret",
+    "/etc/passwd",
+    "src/../secret",
+    "src\\file",
+    "file?ref=main",
+    "file#L1",
+    "a\u0000b",
+  ]) {
+    await assert.rejects(caller.source({ sessionId: "review", path: file }));
+  }
+  assert.equal(calls.length, count);
+});
+
 test("selectSession opens a saved revision without GitHub, checkout, or conversation access", async (t) => {
   const { flueReviewRouter } = await import("./flue-review");
   const prUrl = "https://github.com/owner/repo/pull/1";

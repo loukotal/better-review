@@ -397,6 +397,46 @@ async function startAutomaticReview(
 }
 
 export const flueReviewRouter = router({
+  source: publicProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        path: z
+          .string()
+          .min(1)
+          .refine(
+            (value) =>
+              !/[\\:?#]/.test(value) &&
+              [...value].every((char) => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127) &&
+              value.split("/").every((part) => part !== "" && part !== "." && part !== ".."),
+            "Invalid repository-relative path",
+          ),
+      }),
+    )
+    .query(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const store = yield* FlueReviewSessionService;
+          const session = yield* store.get(input.sessionId);
+          if (!isFlueV2ReviewSession(session)) {
+            return yield* Effect.fail(new Error("Review session not found"));
+          }
+          const ref = session.reviewMode === "commit" ? session.commitSha : session.headSha;
+          if (!ref) return yield* Effect.fail(new Error("Missing reviewed revision"));
+          const gh = yield* GhService;
+          const content = yield* gh.getFileContent({
+            owner: session.owner,
+            repo: session.repo,
+            path: input.path.split("/").map(encodeURIComponent).join("/"),
+            ref,
+          });
+          if (content === null) {
+            return yield* Effect.fail(new Error("Source not found at the reviewed revision"));
+          }
+          return { path: input.path, ref, content };
+        }),
+      ),
+    ),
   startAutomatic: publicProcedure
     .input(
       z.object({

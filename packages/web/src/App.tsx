@@ -23,6 +23,7 @@ import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReadingDiffEmpty, ReadingDiffSummary } from "./components/ReadingDiffState";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
+import { SourceDialog } from "./components/SourceDialog";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
@@ -36,6 +37,7 @@ import {
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
+import { navigateAnnotation, type SourceTarget } from "./lib/annotation-navigation";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
 import {
@@ -121,6 +123,7 @@ const AppContent: Component = () => {
     side?: "LEFT" | "RIGHT";
   } | null>(null);
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
+  const [sourceTarget, setSourceTarget] = createSignal<SourceTarget | null>(null);
   let diffScrollRef: HTMLDivElement | undefined;
 
   // Panel visibility
@@ -262,6 +265,27 @@ const AppContent: Component = () => {
         setTimeout(() => setHighlightedLine(null), 3000);
       }
     }
+  };
+
+  const navigateChatFile = (
+    path: string,
+    line?: number,
+    sessionId?: string,
+    sameRevision = false,
+  ) => {
+    if (!sessionId) return;
+    navigateAnnotation(
+      { path, line, sessionId },
+      files(),
+      sameRevision && !loading() && !loadingCommits(),
+      {
+        diff: (path, line) => {
+          if (document.getElementById(getFileElementId(path))) scrollToFile(path, line, "RIGHT");
+          else setSourceTarget({ path, line, sessionId });
+        },
+        source: setSourceTarget,
+      },
+    );
   };
 
   // Apply review order
@@ -1040,6 +1064,9 @@ const AppContent: Component = () => {
       </Show>
 
       {/* Main content */}
+      <Show when={sourceTarget()} keyed>
+        {(target) => <SourceDialog target={target} onClose={() => setSourceTarget(null)} />}
+      </Show>
       <div class="relative flex min-w-0 flex-1 overflow-hidden">
         {/* Chat panel (left) - hidden in focus mode */}
         <Show when={panelVisibility().chat && !focusMode()}>
@@ -1058,7 +1085,7 @@ const AppContent: Component = () => {
             }
             theme={settings().theme}
             aiAnnotations={aiAnnotations()}
-            onScrollToFile={scrollToFile}
+            onScrollToFile={navigateChatFile}
             onApplyReviewOrder={applyReviewOrder}
             onAnnotationsReceived={addNewAiAnnotations}
           />
