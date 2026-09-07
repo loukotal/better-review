@@ -1,6 +1,5 @@
 import {
   FileDiff,
-  VirtualizedFileDiff,
   type Virtualizer,
   parseDiffFromFile,
   type FileDiffMetadata,
@@ -8,6 +7,8 @@ import {
   type SelectedLineRange,
   type HunkData,
   type ExpansionDirections,
+  type DiffLineAnnotation,
+  type FileDiffOptions,
 } from "@pierre/diffs";
 import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "solid-js";
 
@@ -19,6 +20,13 @@ import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CircleIcon } from "../icons/circle-icon";
 import { fetchFileContentCached } from "../lib/query";
 import type { Annotation } from "../utils/parseReviewTokens";
+import {
+  FocusableFileDiff,
+  FocusableVirtualizedFileDiff,
+  centerFocusRow,
+  focusRenderedLine,
+  focusRowSelector,
+} from "./focus-line";
 import {
   type DiffSettings,
   type PRComment,
@@ -54,6 +62,15 @@ interface FileDiffViewProps {
   onCommentDraftChange?: (hasDraft: boolean) => void;
   settings: DiffSettings;
   highlightedLine?: { line: number; side?: "LEFT" | "RIGHT" };
+  /** Change this token to focus the same highlightedLine object again. */
+  focusRequestId?: string | number;
+  /** Target was not rendered on the requested side within the bounded retry window. */
+  onFocusFailed?: (failure: {
+    fileName: string;
+    line: number;
+    side: "LEFT" | "RIGHT";
+    reason: "not-rendered";
+  }) => void;
   repoOwner?: string | null;
   repoName?: string | null;
   isRead?: boolean;
@@ -103,8 +120,12 @@ function groupCommentsIntoThreads(comments: PRComment[]) {
 
 export function FileDiffView(props: FileDiffViewProps) {
   let _containerRef: HTMLDivElement | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let instance: any;
+  let instance:
+    | FocusableFileDiff<AnnotationMetadata>
+    | FocusableVirtualizedFileDiff<AnnotationMetadata>
+    | undefined;
+  let nonVirtualized = false;
+  let cancelFocus: (() => void) | undefined;
 
   // Detect large or generated files
   const totalLines = createMemo(
@@ -169,7 +190,7 @@ export function FileDiffView(props: FileDiffViewProps) {
   const threads = createMemo(() => groupCommentsIntoThreads(props.comments));
 
   const lineAnnotations = createMemo(() => {
-    const result: { side: AnnotationSide; lineNumber: number; metadata: AnnotationMetadata }[] = [];
+    const result: DiffLineAnnotation<AnnotationMetadata>[] = [];
     const threadMap = threads();
 
     // Add threads as annotations
@@ -263,8 +284,7 @@ export function FileDiffView(props: FileDiffViewProps) {
         if (instance && _containerRef) {
           // Clean up and recreate with new settings
           // Note: fileContentLoaded is preserved since oldLines/newLines are on the file object
-          instance.cleanUp();
-          _containerRef.innerHTML = "";
+          cancelFocus?.();
           createInstance(_containerRef);
         }
       },
@@ -272,73 +292,48 @@ export function FileDiffView(props: FileDiffViewProps) {
     ),
   );
 
-  const focusLine = (target: NonNullable<FileDiffViewProps["highlightedLine"]>) => {
-    if (collapsed()) {
-      setCollapsed(false);
-      requestAnimationFrame(() => focusLine(target));
-      return;
-    }
-    if (!instance || !_containerRef) return;
-
+  const focusLine = (request: NonNullable<FileDiffViewProps["highlightedLine"]>) => {
+    const target = { ...request };
+    cancelFocus?.();
+    instance?.setSelectedLines(null);
+    setCollapsed(false);
     const side = target.side === "LEFT" ? "deletions" : "additions";
-    const lineIndex = instance.getLineIndex?.(target.line, side)?.[
-      props.settings.diffStyle === "split" ? 1 : 0
-    ];
-    const scrollContainer = props.scrollContainer;
-    if (lineIndex !== undefined && scrollContainer) {
-      const containerRect = _containerRef.getBoundingClientRect();
-      const scrollRect = scrollContainer.getBoundingClientRect();
-      const top =
-        scrollContainer.scrollTop +
-        containerRect.top -
-        scrollRect.top +
-        lineIndex * 20 -
-        scrollContainer.clientHeight / 2;
-      scrollContainer.scrollTo({ top: Math.max(0, top), behavior: "instant" });
-    }
-
-    instance.setSelectedLines({
-      start: target.line,
-      end: target.line,
-      side,
+    cancelFocus = focusRenderedLine({
+      findRow: () => {
+        const container = instance?.getFileContainer();
+        if (!container?.isConnected) return undefined;
+        const indices = instance?.getLineIndex(target.line, side);
+        if (!indices) return undefined;
+        const row = container.shadowRoot?.querySelector<HTMLElement>(
+          focusRowSelector(indices, side, target.line),
+        );
+        return row && row.getBoundingClientRect().height > 0 ? row : undefined;
+      },
+      renderAll: () => {
+        // Only a targeted file opts out of virtualization. Keep its current hunks
+        // and measure real rows, including annotations, instead of guessing offsets.
+        nonVirtualized = true;
+        if (_containerRef?.isConnected) createInstance(_containerRef);
+      },
+      center: (row) => {
+        instance?.setSelectedLines({ start: target.line, end: target.line, side });
+        if (props.scrollContainer) centerFocusRow(row, props.scrollContainer);
+        else row.scrollIntoView({ behavior: "instant", block: "center" });
+      },
+      failed: () =>
+        props.onFocusFailed?.({
+          fileName: props.file.name,
+          line: target.line,
+          side: target.side === "LEFT" ? "LEFT" : "RIGHT",
+          reason: "not-rendered",
+        }),
     });
-
-    // The virtualizer renders the target row after the scroll event.
-    setTimeout(() => {
-      const container = instance.getFileContainer?.() as HTMLElement | undefined;
-      const shadowRoot = container?.shadowRoot;
-      if (!shadowRoot) return;
-
-      const selectors = [
-        `[data-line="${target.line}"]`,
-        `[data-alt-line="${target.line}"]`,
-        `[data-new-line="${target.line}"]`,
-        `.line-new-${target.line}`,
-        `tr[data-line="${target.line}"]`,
-      ];
-
-      let lineEl: Element | null = null;
-      for (const selector of selectors) {
-        lineEl = shadowRoot.querySelector(selector);
-        if (lineEl) break;
-      }
-
-      if (lineEl) {
-        lineEl.scrollIntoView({ behavior: "instant", block: "center" });
-      } else if (side === "additions") {
-        instance.setSelectedLines({
-          start: target.line,
-          end: target.line,
-          side: "deletions",
-        });
-      }
-    }, 100);
   };
 
   const highlightSearchMatch = () => {
     const match = props.activeSearchMatch;
     const query = match?.query.trim();
-    const container = instance?.getFileContainer?.() as HTMLElement | undefined;
+    const container = instance?.getFileContainer();
     const shadowRoot = container?.shadowRoot;
     if (!shadowRoot) return;
 
@@ -404,9 +399,11 @@ export function FileDiffView(props: FileDiffViewProps) {
   // Highlight line when highlightedLine prop changes
   createEffect(
     on(
-      () => props.highlightedLine,
-      (target) => target && focusLine(target),
-      { defer: true },
+      () => [props.highlightedLine, props.focusRequestId] as const,
+      ([target]) => {
+        cancelFocus?.();
+        if (target) focusLine(target);
+      },
     ),
   );
 
@@ -529,8 +526,6 @@ export function FileDiffView(props: FileDiffViewProps) {
     // VirtualizedFileDiff keeps its initial file reference for size calculations,
     // so recreate it once the patch has been replaced with complete file contents.
     if (needsInstanceRefresh && _containerRef) {
-      instance.cleanUp();
-      _containerRef.innerHTML = "";
       createInstance(_containerRef);
     } else {
       instance.render({
@@ -619,112 +614,119 @@ export function FileDiffView(props: FileDiffViewProps) {
   };
 
   const createInstance = (el: HTMLDivElement) => {
-    instance = new VirtualizedFileDiff(
-      {
-        diffStyle: props.settings.diffStyle,
-        theme: props.settings.theme,
-        lineDiffType: props.settings.lineDiffType,
-        hunkSeparators: props.readOnly ? undefined : renderHunkSeparator,
-        disableFileHeader: true,
-        enableLineSelection: !props.readOnly,
-        unsafeCSS: getCustomCSS(),
-        onLineSelectionEnd: (range: SelectedLineRange | null) => {
-          if (props.readOnly) return;
-          if (range && range.start && range.end) {
-            // Clear any existing text selection so it doesn't block future interactions
-            window.getSelection()?.removeAllRanges();
+    const expandedHunks = new Map(instance?.getExpandedHunks());
+    instance?.cleanUp();
+    for (const dispose of disposeList.splice(0)) dispose();
+    el.innerHTML = "";
+    const options: FileDiffOptions<AnnotationMetadata> = {
+      diffStyle: props.settings.diffStyle,
+      theme: props.settings.theme,
+      lineDiffType: props.settings.lineDiffType,
+      hunkSeparators: props.readOnly ? undefined : renderHunkSeparator,
+      disableFileHeader: true,
+      enableLineSelection: !props.readOnly,
+      unsafeCSS: getCustomCSS(),
+      onLineSelectionEnd: (range: SelectedLineRange | null) => {
+        if (props.readOnly) return;
+        if (range && range.start && range.end) {
+          // Clear any existing text selection so it doesn't block future interactions
+          window.getSelection()?.removeAllRanges();
 
-            const side = range.side === "deletions" ? "LEFT" : "RIGHT";
-            const startLine = Math.min(range.start, range.end);
-            const endLine = Math.max(range.start, range.end);
-            setPendingComment({ startLine, endLine, side });
-            // Re-render to show the pending comment form
-            setTimeout(rerender, 0);
-          }
-        },
-        renderAnnotation: (annotation: { metadata: AnnotationMetadata }) => {
-          const { metadata } = annotation;
-          const div = document.createElement("div");
-
-          if (metadata.type === "thread") {
-            const { rootComment, replies } = metadata;
-            div.className = "p-2.5 my-1 mx-2 bg-bg-elevated border border-border";
-
-            // Render the CommentThread component into the div
-            const dispose = renderCommentThread(div, {
-              rootComment,
-              replies,
-              githubContext: githubContext(),
-              onEdit: async (commentId, body) => {
-                await props.onEditComment(commentId, body);
-              },
-              onDelete: async (commentId) => {
-                await props.onDeleteComment(commentId);
-              },
-              onReply: async (body) => {
-                await props.onReplyToComment(rootComment.id, body);
-              },
-              isResolved: rootComment.isResolved,
-              onResolve: rootComment.threadId
-                ? async (resolved) => {
-                    await props.onResolveThread?.(rootComment.threadId!, resolved);
-                  }
-                : undefined,
-            });
-            disposeList.push(dispose);
-          } else if (metadata.type === "ai-annotation") {
-            div.className = "my-1 mx-2";
-
-            // Render the AI annotation component into the div
-            const dispose = renderAiAnnotation(div, {
-              annotation: metadata.annotation,
-              onDismiss: props.onDismissAiAnnotation,
-              onCreateComment: (annotation) => {
-                const body = `[AI][${annotation.severity}]: ${annotation.message}`;
-                setPendingComment({
-                  startLine: annotation.line,
-                  endLine: annotation.line,
-                  side: "RIGHT",
-                  initialBody: body,
-                });
-                setTimeout(rerender, 0);
-              },
-            });
-            disposeList.push(dispose);
-          } else if (metadata.type === "pending") {
-            div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
-
-            // Render the PendingCommentForm component into the div
-            const dispose = renderPendingCommentForm(div, {
-              startLine: metadata.startLine,
-              endLine: metadata.endLine,
-              initialBody: metadata.initialBody,
-              onSubmit: async (body) => {
-                await props.onAddComment({
-                  line: metadata.endLine,
-                  side: metadata.side,
-                  body,
-                  startLine: metadata.startLine,
-                  endLine: metadata.endLine,
-                });
-                setPendingComment(null);
-                window.getSelection()?.removeAllRanges();
-              },
-              onCancel: () => {
-                setPendingComment(null);
-                setTimeout(rerender, 0);
-              },
-              onDraftChange: props.onCommentDraftChange,
-            });
-            disposeList.push(dispose);
-          }
-
-          return div;
-        },
-        onPostRender: () => highlightSearchMatch(),
+          const side = range.side === "deletions" ? "LEFT" : "RIGHT";
+          const startLine = Math.min(range.start, range.end);
+          const endLine = Math.max(range.start, range.end);
+          setPendingComment({ startLine, endLine, side });
+          // Re-render to show the pending comment form
+          setTimeout(rerender, 0);
+        }
       },
-      props.virtualizer,
-    );
+      renderAnnotation: (annotation: { metadata: AnnotationMetadata }) => {
+        const { metadata } = annotation;
+        const div = document.createElement("div");
+
+        if (metadata.type === "thread") {
+          const { rootComment, replies } = metadata;
+          div.className = "p-2.5 my-1 mx-2 bg-bg-elevated border border-border";
+
+          // Render the CommentThread component into the div
+          const dispose = renderCommentThread(div, {
+            rootComment,
+            replies,
+            githubContext: githubContext(),
+            onEdit: async (commentId, body) => {
+              await props.onEditComment(commentId, body);
+            },
+            onDelete: async (commentId) => {
+              await props.onDeleteComment(commentId);
+            },
+            onReply: async (body) => {
+              await props.onReplyToComment(rootComment.id, body);
+            },
+            isResolved: rootComment.isResolved,
+            onResolve: rootComment.threadId
+              ? async (resolved) => {
+                  await props.onResolveThread?.(rootComment.threadId!, resolved);
+                }
+              : undefined,
+          });
+          disposeList.push(dispose);
+        } else if (metadata.type === "ai-annotation") {
+          div.className = "my-1 mx-2";
+
+          // Render the AI annotation component into the div
+          const dispose = renderAiAnnotation(div, {
+            annotation: metadata.annotation,
+            onDismiss: props.onDismissAiAnnotation,
+            onCreateComment: (annotation) => {
+              const body = `[AI][${annotation.severity}]: ${annotation.message}`;
+              setPendingComment({
+                startLine: annotation.line,
+                endLine: annotation.line,
+                side: "RIGHT",
+                initialBody: body,
+              });
+              setTimeout(rerender, 0);
+            },
+          });
+          disposeList.push(dispose);
+        } else if (metadata.type === "pending") {
+          div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
+
+          // Render the PendingCommentForm component into the div
+          const dispose = renderPendingCommentForm(div, {
+            startLine: metadata.startLine,
+            endLine: metadata.endLine,
+            initialBody: metadata.initialBody,
+            onSubmit: async (body) => {
+              await props.onAddComment({
+                line: metadata.endLine,
+                side: metadata.side,
+                body,
+                startLine: metadata.startLine,
+                endLine: metadata.endLine,
+              });
+              setPendingComment(null);
+              window.getSelection()?.removeAllRanges();
+            },
+            onCancel: () => {
+              setPendingComment(null);
+              setTimeout(rerender, 0);
+            },
+            onDraftChange: props.onCommentDraftChange,
+          });
+          disposeList.push(dispose);
+        }
+
+        return div;
+      },
+      onPostRender: () => highlightSearchMatch(),
+    };
+    instance = nonVirtualized
+      ? new FocusableFileDiff(options)
+      : new FocusableVirtualizedFileDiff(options, props.virtualizer);
+    for (const [index, region] of expandedHunks) {
+      instance.getExpandedHunks().set(index, region);
+    }
 
     instance.render({
       fileDiff: currentFile(),
@@ -738,7 +740,11 @@ export function FileDiffView(props: FileDiffViewProps) {
     createInstance(el);
   };
 
-  onCleanup(() => instance?.cleanUp());
+  onCleanup(() => {
+    cancelFocus?.();
+    instance?.cleanUp();
+    for (const dispose of disposeList.splice(0)) dispose();
+  });
 
   const fileType = () => {
     switch (props.file.type) {
@@ -766,6 +772,7 @@ export function FileDiffView(props: FileDiffViewProps) {
     on(
       () => collapsed(),
       (isCollapsed, wasCollapsed) => {
+        if (isCollapsed) cancelFocus?.();
         if (isCollapsed && !wasCollapsed && headerRef) {
           // After collapsing, ensure the header is visible
           requestAnimationFrame(() => {
