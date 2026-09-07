@@ -36,7 +36,7 @@ export const Button: Component<ButtonProps> = (props) => {
   return (
     <button
       class={cn(
-        "inline-flex items-center justify-center gap-1.5 rounded-md border border-transparent whitespace-nowrap font-sans transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
+        "inline-flex items-center justify-center gap-1.5 rounded-none border border-transparent whitespace-nowrap font-sans transition-colors disabled:opacity-40 disabled:cursor-not-allowed",
         variantClasses[local.variant ?? "secondary"],
         sizeClasses[local.size ?? "md"],
         local.fullWidth && "w-full",
