@@ -2,7 +2,7 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { Effect } from "effect";
 import { z } from "zod";
 
-import { filterDiffByLineRange, isDiffCommentTargetInPatch } from "../../diff";
+import { filterDiffByLineRange } from "../../diff";
 import { GhService } from "../../gh/gh";
 import { PrCheckoutService } from "../../pr-checkout";
 import { getOrGenerateReadingDiff } from "../../reading-diff";
@@ -507,28 +507,10 @@ ${fileStats.join("\n")}`;
       runEffect(
         Effect.gen(function* () {
           const gh = yield* GhService;
-          const diffCache = yield* DiffCacheService;
-          const fileDiffs = yield* diffCache.getOrFetch(input.prUrl);
-          const fileDiff = fileDiffs.get(input.filePath);
           const side = input.side ?? "RIGHT";
           const startSide = input.startSide ?? side;
 
-          if (
-            !fileDiff ||
-            !isDiffCommentTargetInPatch(fileDiff, {
-              line: input.line,
-              side,
-              startLine: input.startLine,
-              startSide,
-            })
-          ) {
-            return yield* Effect.fail(
-              new Error(
-                `Invalid review comment target: ${input.filePath}:${input.line} is not part of the PR diff patch. This can happen after expanding unchanged context locally; add the comment on a changed/default-context line or use a PR timeline comment instead.`,
-              ),
-            );
-          }
-
+          // The cached patch omits expanded context; GitHub validates comment targets.
           const comment = yield* gh.addComment({
             prUrl: input.prUrl,
             filePath: input.filePath,

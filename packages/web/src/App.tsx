@@ -38,6 +38,7 @@ import {
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
 import { navigateAnnotation, type SourceTarget } from "./lib/annotation-navigation";
+import { savePrComment } from "./lib/comment-save";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
 import {
@@ -671,27 +672,14 @@ const AppContent: Component = () => {
     queryClient.setQueryData(queryKeys.pr.comments(url), newComments);
   };
 
-  const addComment = async ({ filePath, line, side, body }: DiffCommentDraft) => {
-    try {
-      const data = await trpc.pr.addComment.mutate({
-        prUrl: prUrl()!,
-        filePath,
-        line,
-        side,
-        body,
-      });
-      if (data.comment) {
-        const url = loadedPrUrl();
-        if (url) updateCommentsCache(url, [...comments(), data.comment]);
-      }
-      return data;
-    } catch (err) {
-      console.error("Failed to add comment:", err);
-      return {
-        error: err instanceof Error ? err.message : "Failed to add comment",
-      };
-    }
-  };
+  const addComment = (draft: DiffCommentDraft) =>
+    savePrComment(draft, {
+      loadedPrUrl,
+      mutate: (input) => trpc.pr.addComment.mutate(input),
+      onSaved: (url, data) => {
+        if (data.comment) updateCommentsCache(url, [...comments(), data.comment]);
+      },
+    });
 
   const replyToComment = async (commentId: number, body: string) => {
     try {

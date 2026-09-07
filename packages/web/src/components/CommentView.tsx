@@ -3,6 +3,7 @@ import { render } from "solid-js/web";
 
 import { Button, Textarea } from "../design-system";
 import { GitHubIcon } from "../icons/github-icon";
+import { createPendingCommentFormState } from "../lib/comment-save";
 import { parseMarkdown } from "../lib/markdown";
 
 // Shared comment data interface that works for both PRComment and IssueComment
@@ -517,8 +518,7 @@ export interface PendingCommentFormProps {
  * Form for adding a new comment on a line selection.
  */
 export const PendingCommentForm: Component<PendingCommentFormProps> = (props) => {
-  const [body, setBody] = createSignal(props.initialBody ?? "");
-  const [isSubmitting, setIsSubmitting] = createSignal(false);
+  const { body, setBody, isSubmitting, saveError, submit } = createPendingCommentFormState(props);
 
   onMount(() => props.onDraftChange?.(body().trim().length > 0));
   onCleanup(() => props.onDraftChange?.(false));
@@ -527,23 +527,6 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
     props.startLine === props.endLine
       ? `Line ${props.startLine}`
       : `Lines ${props.startLine}-${props.endLine}`;
-
-  const submit = async () => {
-    if (isSubmitting()) return;
-    const text = body().trim();
-    if (!text) return;
-
-    setIsSubmitting(true);
-    try {
-      await props.onSubmit(text);
-      setBody("");
-      props.onDraftChange?.(false);
-    } catch (err) {
-      console.error("Failed to add comment:", err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Enter" && e.metaKey) {
@@ -572,6 +555,11 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
         class="w-full min-h-20 resize-y"
         disabled={isSubmitting()}
       />
+      <Show when={saveError()}>
+        <div role="alert" class="text-sm text-error mt-2">
+          {saveError()}
+        </div>
+      </Show>
       <div class="flex gap-2 mt-2">
         <Button
           type="button"
