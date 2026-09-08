@@ -61,12 +61,22 @@ interface Props {
 export function DiffViewer(props: Props) {
   let viewerRef: HTMLDivElement | undefined;
   let searchInputRef: HTMLInputElement | undefined;
+  let toolbarRef: HTMLDivElement | undefined;
   const virtualizer = new Virtualizer();
   const [searchQuery, setSearchQuery] = createSignal("");
   const [selectedMatch, setSelectedMatch] = createSignal(-1);
+  const [toolbarHeight, setToolbarHeight] = createSignal(0);
 
   onMount(() => {
     virtualizer.setup(props.scrollContainer ?? document, viewerRef);
+
+    const toolbar = toolbarRef;
+    if (!toolbar) return;
+    const measure = () => setToolbarHeight(toolbar.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(toolbar);
+    onCleanup(() => observer.disconnect());
   });
 
   onCleanup(() => virtualizer.cleanUp());
@@ -197,10 +207,16 @@ export function DiffViewer(props: Props) {
         viewerRef = element;
       }}
       class="pt-3"
+      style={{ "--diff-toolbar-height": `${toolbarHeight()}px` }}
     >
       <div innerHTML={SVGSpriteSheet} style="display:none" />
 
-      <div class="sticky top-0 z-20 -mt-3 mb-3 flex items-center gap-2 border-b border-border bg-bg-surface py-1 px-2">
+      <div
+        ref={(element) => {
+          toolbarRef = element;
+        }}
+        class="sticky top-0 z-20 -mt-3 mb-3 flex items-center gap-2 border-b border-border bg-bg-surface py-1 px-2"
+      >
         <div class="w-52 max-w-full shrink-0">
           <TextInput
             size="sm"
@@ -278,7 +294,8 @@ export function DiffViewer(props: Props) {
             return (
               <div
                 id={getFileElementId(file.name)}
-                class="scroll-mt-12 transition-[outline,box-shadow]"
+                class="transition-[outline,box-shadow]"
+                style={{ "scroll-margin-top": "var(--diff-toolbar-height, 3rem)" }}
                 classList={{
                   "outline-2 outline-offset-2 outline-yellow-400 shadow-[0_0_0_3px_rgb(250_204_21_/_20%)]":
                     activeSearchResult()?.fileName === file.name &&

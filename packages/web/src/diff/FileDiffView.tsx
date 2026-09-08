@@ -789,7 +789,8 @@ export function FileDiffView(props: FileDiffViewProps) {
         }}
         type="button"
         onClick={() => setCollapsed(!collapsed())}
-        class="w-full flex items-center gap-2 px-3 py-1.5 bg-bg-elevated hover:bg-bg-surface text-left group sticky top-0 z-10 border border-border rounded-t-sm"
+        style={{ top: "var(--diff-toolbar-height, 0px)" }}
+        class="w-full flex items-center gap-2 px-3 py-1.5 bg-bg-elevated hover:bg-bg-surface text-left group sticky z-10 border border-border rounded-t-sm"
         classList={{ "rounded-b-sm": collapsed(), "opacity-60": props.isRead }}
       >
         {/* Collapse indicator */}
