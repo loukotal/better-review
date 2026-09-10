@@ -5,6 +5,7 @@ import { TextInput } from "./design-system";
 import { CheckIcon } from "./icons/check-icon";
 import { CircleIcon } from "./icons/circle-icon";
 import { ListOrderIcon } from "./icons/list-order-icon";
+import { hasDiffChanges, getFileDiffStats, getTotalDiffStats } from "./lib/diff-stats";
 
 interface FileTreePanelProps {
   files: FileDiffMetadata[];
@@ -85,6 +86,18 @@ function getMatchingPaths(files: FileDiffMetadata[], query: string): Set<string>
   }
 
   return matches;
+}
+
+function DiffStatBadge(props: { file: FileDiffMetadata }) {
+  const stats = () => getFileDiffStats(props.file);
+  return (
+    <Show when={hasDiffChanges(stats())}>
+      <span class="flex items-center gap-1 font-mono text-[10px] leading-none tabular-nums shrink-0">
+        <span class="text-success">+{stats().additions}</span>
+        <span class="text-error">−{stats().deletions}</span>
+      </span>
+    </Show>
+  );
 }
 
 function FileStatusIndicator(props: { type: FileDiffMetadata["type"] }) {
@@ -179,6 +192,7 @@ function TreeNodeView(props: {
             >
               {props.node.name}
             </span>
+            <DiffStatBadge file={props.node.file!} />
             <Show when={props.onToggleRead}>
               <span
                 onClick={handleToggleRead}
@@ -215,6 +229,8 @@ export function FileTreePanel(props: FileTreePanelProps) {
   const [manuallyCollapsed, setManuallyCollapsed] = createSignal<Set<string>>(new Set());
 
   const tree = createMemo(() => buildTree(props.files));
+
+  const totals = createMemo(() => getTotalDiffStats(props.files));
 
   const matchingPaths = createMemo(() => {
     const query = searchQuery().trim();
@@ -312,15 +328,23 @@ export function FileTreePanel(props: FileTreePanelProps) {
       </div>
 
       {/* Footer Stats */}
-      <div class="px-3 py-1.5 border-t border-border text-xs text-text-faint flex items-center justify-between">
-        <span>
+      <div class="px-3 py-1.5 border-t border-border text-xs text-text-faint flex items-center justify-between gap-2">
+        <span class="shrink-0">
           {props.files.length} file{props.files.length !== 1 ? "s" : ""}
         </span>
-        <Show when={props.readFiles && props.readFiles.size > 0}>
-          <span class="text-success">
-            {props.readFiles!.size}/{props.files.length} read
-          </span>
-        </Show>
+        <span class="flex items-center gap-2 min-w-0">
+          <Show when={hasDiffChanges(totals())}>
+            <span class="font-mono tabular-nums whitespace-nowrap">
+              <span class="text-success">+{totals().additions}</span>{" "}
+              <span class="text-error">−{totals().deletions}</span>
+            </span>
+          </Show>
+          <Show when={props.readFiles && props.readFiles.size > 0}>
+            <span class="text-success whitespace-nowrap">
+              {props.readFiles!.size}/{props.files.length} read
+            </span>
+          </Show>
+        </span>
       </div>
     </div>
   );

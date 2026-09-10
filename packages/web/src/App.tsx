@@ -17,6 +17,7 @@ import { ChatPanel } from "./ChatPanel";
 import { AppHeader } from "./components/AppHeader";
 import { ApproveButton } from "./components/ApproveButton";
 import { CommitNavigator } from "./components/CommitNavigator";
+import { DiffStatsBadge } from "./components/DiffStatsBadge";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
@@ -951,6 +952,7 @@ const AppContent: Component = () => {
                   repoName={prInfo()?.repo}
                 />
               </div>
+              <DiffStatsBadge files={files()} />
               <div class="flex flex-wrap items-center gap-2">
                 <ReviewModeToggle
                   mode={reviewMode()}
