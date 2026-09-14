@@ -92,14 +92,29 @@ function withStoredCredential(provider: Provider, token: string): Provider {
   };
 }
 
+function withReviewTransport(provider: Provider): Provider {
+  if (provider.id !== "openai-codex") return provider;
+
+  // Codex's automatic SSE fallback only handles failures before streaming
+  // starts. A later WebSocket drop aborts the entire review submission.
+  return {
+    ...provider,
+    stream: (model, context, options) =>
+      provider.stream(model, context, Object.assign({}, options, { transport: "sse" as const })),
+    streamSimple: (model, context, options) =>
+      provider.streamSimple(model, context, { ...options, transport: "sse" }),
+  };
+}
+
 export function getFlueProviders(): Provider[] {
   return builtinProviders().map((provider) => {
+    const reviewProvider = withReviewTransport(provider);
     const token = PI_OAUTH_PROVIDER_IDS.includes(provider.id)
       ? getAuthApiKey(provider.id)
       : undefined;
     return token && !findEnvKeys(provider.id)?.length
-      ? withStoredCredential(provider, token)
-      : provider;
+      ? withStoredCredential(reviewProvider, token)
+      : reviewProvider;
   });
 }
 
