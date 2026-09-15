@@ -4,12 +4,24 @@ import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 import type { ReviewSession, ReviewSessionStatus } from "@better-review/shared";
 
 import { AppHeader } from "../components/AppHeader";
-import { Alert, Badge, Button, EmptyState, LoadingState } from "../design-system";
+import { Alert, Badge, Button, EmptyState, LoadingState, Select } from "../design-system";
 import { SpinnerIcon } from "../icons/spinner-icon";
+import {
+  filterAgentReviewSessions,
+  isWithinAge,
+  type AgentReviewAgeFilter,
+  type AgentReviewStatusFilter,
+} from "../lib/agent-review-filters";
 import { fetchWithApiAuth } from "../lib/apiAuth";
 
 const statusFilters = ["all", "pending", "approved", "feedback", "cancelled"] as const;
-type StatusFilter = (typeof statusFilters)[number];
+
+const ageFilters: Array<{ value: AgentReviewAgeFilter; label: string }> = [
+  { value: "24h", label: "Last 24 hours" },
+  { value: "7d", label: "Last 7 days" },
+  { value: "30d", label: "Last 30 days" },
+  { value: "all", label: "All time" },
+];
 
 function statusVariant(status: ReviewSessionStatus): "accent" | "success" | "warning" | "neutral" {
   if (status === "approved") return "success";
@@ -48,18 +60,20 @@ async function fetchSessions(): Promise<ReviewSession[]> {
 
 export default function AgentReviewIndexPage() {
   const [sessions, { refetch }] = createResource(fetchSessions);
-  const [filter, setFilter] = createSignal<StatusFilter>("all");
+  const [statusFilter, setStatusFilter] = createSignal<AgentReviewStatusFilter>("pending");
+  const [ageFilter, setAgeFilter] = createSignal<AgentReviewAgeFilter>("24h");
 
-  const filteredSessions = createMemo(() => {
-    const selected = filter();
-    const items = sessions() ?? [];
-    return selected === "all" ? items : items.filter((session) => session.status === selected);
-  });
+  const filteredSessions = createMemo(() =>
+    filterAgentReviewSessions(sessions() ?? [], statusFilter(), ageFilter()),
+  );
 
-  const countFor = (status: StatusFilter) => {
-    const items = sessions() ?? [];
+  const countFor = (status: AgentReviewStatusFilter) => {
+    const items = (sessions() ?? []).filter((session) => isWithinAge(session, ageFilter()));
     return status === "all" ? items.length : items.filter((item) => item.status === status).length;
   };
+
+  const selectedAgeLabel = () =>
+    ageFilters.find(({ value }) => value === ageFilter())?.label.toLowerCase() ?? "selected period";
 
   return (
     <div class="flex h-screen flex-col bg-bg text-text">
@@ -95,29 +109,50 @@ export default function AgentReviewIndexPage() {
 
           <Show when={sessions()}>
             <div
-              class="mb-3 flex items-center gap-1 overflow-x-auto border-y border-border py-1"
-              role="group"
-              aria-label="Filter agent reviews by status"
+              class="mb-3 flex flex-col gap-2 border-y border-border py-2 sm:flex-row sm:items-center sm:justify-between"
+              aria-label="Filter agent reviews"
             >
-              <For each={statusFilters}>
-                {(status) => (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    aria-pressed={filter() === status}
-                    class={
-                      filter() === status
-                        ? "bg-bg-elevated text-text"
-                        : "text-text-muted hover:bg-bg-surface hover:text-text"
-                    }
-                    onClick={() => setFilter(status)}
-                  >
-                    <span class="capitalize">{status}</span>
-                    <span class="font-mono text-[11px] text-text-faint">{countFor(status)}</span>
-                  </Button>
-                )}
-              </For>
+              <div
+                class="flex items-center gap-1 overflow-x-auto"
+                role="group"
+                aria-label="Filter by status"
+              >
+                <For each={statusFilters}>
+                  {(status) => (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-pressed={statusFilter() === status}
+                      class={
+                        statusFilter() === status
+                          ? "bg-bg-elevated text-text"
+                          : "text-text-muted hover:bg-bg-surface hover:text-text"
+                      }
+                      onClick={() => setStatusFilter(status)}
+                    >
+                      <span class="capitalize">{status}</span>
+                      <span class="font-mono text-[11px] text-text-faint">{countFor(status)}</span>
+                    </Button>
+                  )}
+                </For>
+              </div>
+
+              <label class="flex shrink-0 items-center gap-2 text-xs font-medium text-text-muted">
+                Created
+                <Select
+                  compact
+                  aria-label="Filter by creation time"
+                  value={ageFilter()}
+                  onChange={(event) =>
+                    setAgeFilter(event.currentTarget.value as AgentReviewAgeFilter)
+                  }
+                >
+                  <For each={ageFilters}>
+                    {({ value, label }) => <option value={value}>{label}</option>}
+                  </For>
+                </Select>
+              </label>
             </div>
           </Show>
 
@@ -148,8 +183,8 @@ export default function AgentReviewIndexPage() {
 
           <Show when={sessions() && sessions()!.length > 0 && filteredSessions().length === 0}>
             <EmptyState
-              title={`No ${filter()} reviews`}
-              description="Choose another status to see more review sessions."
+              title={`No ${statusFilter() === "all" ? "agent" : statusFilter()} reviews`}
+              description={`No matching reviews were created during ${selectedAgeLabel()}. Try a different status or time range.`}
             />
           </Show>
 
