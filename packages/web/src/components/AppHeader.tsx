@@ -42,6 +42,15 @@ export function AppHeader(props: {
                 Reviews
               </A>
 
+              <A
+                href="/agent-review"
+                activeClass="bg-bg-elevated text-text"
+                inactiveClass="text-text-muted"
+                class="rounded-md px-2 py-1.5 hover:text-text"
+              >
+                Agent reviews
+              </A>
+
               <Show
                 when={props.onOpenPr}
                 fallback={
