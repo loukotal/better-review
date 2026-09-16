@@ -45,6 +45,8 @@ import {
   queryKeys,
   api,
   queryClient,
+  fetchPrCore,
+  fetchPrExtras,
   type IssueComment,
   getReviewedFiles,
   toggleReviewedFile,
@@ -613,24 +615,33 @@ const AppContent: Component = () => {
       setPrInfo(null);
       setPrStatus(null);
       setCommits([]);
+      setComments([]);
+      setIssueComments([]);
     }
+    setLoadingStatus(!cachedStatus);
+    setLoadingComments(!cachedComments);
 
-    try {
-      // Use batch endpoint to fetch all data in one request
-      // Respects cache - only fetches if data is stale or missing
-      const data = await queryClient.fetchQuery({
-        queryKey: queryKeys.pr.batch(currentPrUrl),
-        queryFn: () => api.fetchPrBatch(currentPrUrl),
-        staleTime: 5 * 60 * 1000, // 5 minutes - use cached if fresh
+    const isCurrentPr = () => prUrl() === currentPrUrl;
+
+    // Comments and status load alongside the diff but never hold up the page.
+    void fetchPrExtras(currentPrUrl)
+      .then((data) => {
+        if (!isCurrentPr()) return;
+        if (data.comments) setComments(data.comments);
+        if (data.issueComments) setIssueComments(data.issueComments);
+        if (data.status) setPrStatus(data.status);
+      })
+      .catch((err) => console.error("Failed to load PR comments and status:", err))
+      .finally(() => {
+        if (!isCurrentPr()) return;
+        setLoadingStatus(false);
+        setLoadingComments(false);
       });
 
-      // Populate individual query caches for components that use them
-      queryClient.setQueryData(queryKeys.pr.diff(currentPrUrl), data.diff);
-      queryClient.setQueryData(queryKeys.pr.info(currentPrUrl), data.info);
-      queryClient.setQueryData(queryKeys.pr.commits(currentPrUrl), data.commits);
-      queryClient.setQueryData(queryKeys.pr.comments(currentPrUrl), data.comments);
-      queryClient.setQueryData(queryKeys.pr.issueComments(currentPrUrl), data.issueComments);
-      queryClient.setQueryData(queryKeys.pr.status(currentPrUrl), data.status);
+    try {
+      // Respects cache - only fetches if data is stale or missing
+      const data = await fetchPrCore(currentPrUrl);
+      if (!isCurrentPr()) return;
 
       setDiff(data.diff);
       setLoadedPrUrl(currentPrUrl);
@@ -654,18 +665,10 @@ const AppContent: Component = () => {
           setReviewMode("commit");
         });
       }
-
-      setLoading(false);
-
-      setComments(data.comments);
-      setIssueComments(data.issueComments);
-      setPrStatus(data.status);
-      setLoadingStatus(false);
     } catch (err) {
-      setError(describePrLoadError(err));
+      if (isCurrentPr()) setError(describePrLoadError(err));
     } finally {
       setLoading(false);
-      setLoadingComments(false);
     }
   };
 

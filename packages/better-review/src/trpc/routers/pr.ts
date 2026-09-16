@@ -9,6 +9,34 @@ import { getOrGenerateReadingDiff } from "../../reading-diff";
 import { DiffCacheService, PrContextService } from "../../state";
 import { router, publicProcedure, runEffect } from "../index";
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Per-call timing and error logs for the PR page load endpoints. */
+function logPrLoad(endpoint: string, startTime: number) {
+  const timed =
+    (label: string) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(
+        Effect.tap(() =>
+          Effect.log(`[${endpoint}] ${label} completed in ${Date.now() - startTime}ms`),
+        ),
+        Effect.tapError((error) =>
+          Effect.logError(
+            `[${endpoint}] ${label} failed after ${Date.now() - startTime}ms: ${errorMessage(error)}`,
+          ),
+        ),
+      );
+
+  const optional =
+    <B>(label: string, fallback: B) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      timed(label)(effect).pipe(Effect.orElseSucceed((): A | B => fallback));
+
+  return { timed, optional };
+}
+
 export const prRouter = router({
   // =========================================================================
   // Read Operations
@@ -200,77 +228,52 @@ export const prRouter = router({
     ),
   ),
 
-  batch: publicProcedure.input(z.object({ url: z.string() })).query(({ input }) =>
+  /** Data needed to render the PR page; the page waits for this. */
+  core: publicProcedure.input(z.object({ url: z.string() })).query(({ input }) =>
     runEffect(
       Effect.gen(function* () {
-        yield* Effect.log(`[pr.batch] START url=${input.url}`);
         const startTime = Date.now();
-
+        const log = logPrLoad("pr.core", startTime);
         const gh = yield* GhService;
 
-        // Fetch all data in parallel with individual timing
-        const [diff, info, commits, comments, issueComments, status, currentUser, threads] =
-          yield* Effect.all(
-            [
-              gh
-                .getDiff(input.url)
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.log(`[pr.batch] getDiff completed in ${Date.now() - startTime}ms`),
-                  ),
-                ),
-              gh
-                .getPrInfo(input.url)
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.log(`[pr.batch] getPrInfo completed in ${Date.now() - startTime}ms`),
-                  ),
-                ),
-              gh
-                .listCommits(input.url)
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.log(`[pr.batch] listCommits completed in ${Date.now() - startTime}ms`),
-                  ),
-                ),
-              gh
-                .listComments(input.url)
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.log(`[pr.batch] listComments completed in ${Date.now() - startTime}ms`),
-                  ),
-                ),
-              gh
-                .listIssueComments(input.url)
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.log(
-                      `[pr.batch] listIssueComments completed in ${Date.now() - startTime}ms`,
-                    ),
-                  ),
-                ),
-              gh
-                .getPrStatus(input.url)
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.log(`[pr.batch] getPrStatus completed in ${Date.now() - startTime}ms`),
-                  ),
-                ),
-              gh.getCurrentUser(),
-              gh
-                .getReviewThreads(input.url)
-                .pipe(
-                  Effect.tap(() =>
-                    Effect.log(
-                      `[pr.batch] getReviewThreads completed in ${Date.now() - startTime}ms`,
-                    ),
-                  ),
-                ),
-            ],
-            { concurrency: 4 },
-          );
+        const [diff, info, commits] = yield* Effect.all(
+          [
+            gh.getDiff(input.url).pipe(log.timed("getDiff")),
+            gh.getPrInfo(input.url).pipe(log.timed("getPrInfo")),
+            gh.listCommits(input.url).pipe(log.optional("listCommits", [])),
+          ],
+          { concurrency: "unbounded" },
+        );
 
-        yield* Effect.log(`[pr.batch] DONE total=${Date.now() - startTime}ms`);
+        yield* Effect.log(`[pr.core] DONE url=${input.url} total=${Date.now() - startTime}ms`);
+        return { diff, info, commits };
+      }),
+    ),
+  ),
+
+  /**
+   * Data the page fills in after it renders. Each part fails on its own and comes back as
+   * null, so a slow or failing GitHub call does not block or break the rest.
+   */
+  extras: publicProcedure.input(z.object({ url: z.string() })).query(({ input }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const startTime = Date.now();
+        const log = logPrLoad("pr.extras", startTime);
+        const gh = yield* GhService;
+
+        const [comments, issueComments, status, currentUser, threads] = yield* Effect.all(
+          [
+            gh.listComments(input.url).pipe(log.optional("listComments", null)),
+            gh.listIssueComments(input.url).pipe(log.optional("listIssueComments", null)),
+            gh.getPrStatus(input.url).pipe(log.optional("getPrStatus", null)),
+            gh.getCurrentUser().pipe(log.optional("getCurrentUser", null)),
+            gh.getReviewThreads(input.url).pipe(log.optional("getReviewThreads", [])),
+          ],
+          { concurrency: 4 },
+        );
+
+        yield* Effect.log(`[pr.extras] DONE url=${input.url} total=${Date.now() - startTime}ms`);
 
         // Build maps from comment node_id -> isResolved and threadId
         const resolvedByNodeId = new Map<string, boolean>();
@@ -283,19 +286,18 @@ export const prRouter = router({
         }
 
         return {
-          diff,
-          info,
-          commits,
-          comments: comments.map((c) => ({
-            ...c,
-            canEdit: c.user.login === currentUser,
-            isResolved: resolvedByNodeId.get(c.node_id) ?? false,
-            threadId: threadIdByNodeId.get(c.node_id),
-          })),
-          issueComments: issueComments.map((c) => ({
-            ...c,
-            canEdit: c.user.login === currentUser,
-          })),
+          comments:
+            comments?.map((c) => ({
+              ...c,
+              canEdit: c.user.login === currentUser,
+              isResolved: resolvedByNodeId.get(c.node_id) ?? false,
+              threadId: threadIdByNodeId.get(c.node_id),
+            })) ?? null,
+          issueComments:
+            issueComments?.map((c) => ({
+              ...c,
+              canEdit: c.user.login === currentUser,
+            })) ?? null,
           status,
         };
       }),
