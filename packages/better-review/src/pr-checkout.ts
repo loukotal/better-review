@@ -470,8 +470,46 @@ async function fetchFullerReviewHistory(
   await fetchPullHeadObjects(repoGitDir, input, []);
 }
 
+/**
+ * Fetches exactly the history between each tip and the merge base, using GitHub's commit
+ * distances. `--deepen` would instead extend every existing shallow boundary in the shared
+ * cache, which downloads far more and can exceed the checkout timeout.
+ */
+async function fetchHistoryToMergeBase(
+  repoGitDir: string,
+  input: PreparePrCheckoutInput,
+): Promise<boolean> {
+  const compare = await runCommand(
+    "gh",
+    [
+      "api",
+      `repos/${input.owner}/${input.repo}/compare/${input.baseSha}...${input.headSha}`,
+      "--jq",
+      "[.ahead_by, .behind_by] | @tsv",
+    ],
+    { timeoutMs: CHECKOUT_TIMEOUT_MS },
+  );
+  if (compare.exitCode !== 0 || compare.timedOut) return false;
+
+  const [aheadBy, behindBy] = compare.stdout.trim().split("\t").map(Number);
+  if (!Number.isInteger(aheadBy) || !Number.isInteger(behindBy)) return false;
+
+  // A tip's merge base is at most as many commits away as the tip is ahead of it.
+  await fetchBaseRef(repoGitDir, input, [`--depth=${behindBy + 1}`]);
+  await runGit(repoGitDir, [
+    "fetch",
+    "--no-tags",
+    "--filter=blob:none",
+    `--depth=${aheadBy + 1}`,
+    "origin",
+    input.headSha,
+  ]);
+  return hasMergeBase(repoGitDir, input);
+}
+
 async function ensureFullPrHistory(repoGitDir: string, input: PreparePrCheckoutInput) {
   if (await hasMergeBase(repoGitDir, input)) return;
+  if (await fetchHistoryToMergeBase(repoGitDir, input)) return;
 
   if (await isShallowRepository(repoGitDir)) {
     for (let attempt = 0; attempt < REVIEW_HISTORY_DEEPEN_ATTEMPTS; attempt += 1) {
