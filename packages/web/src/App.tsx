@@ -561,10 +561,13 @@ const AppContent: Component = () => {
     e.preventDefault();
     if (!prUrl() || loading()) return;
 
-    // Cancel any in-flight queries for other PRs
-    await queryClient.cancelQueries();
-
     const currentPrUrl = prUrl();
+
+    // Cancel any in-flight queries for other PRs. Keep this PR's queries, such as the
+    // prefetch started from the PR list, so fetchQuery below joins them instead of refetching.
+    await queryClient.cancelQueries({
+      predicate: (query) => !query.queryKey.includes(currentPrUrl),
+    });
     setError(null);
     // Reset commit mode state
     setReviewMode("full");
