@@ -1,7 +1,15 @@
 import { Effect } from "effect";
 
-import { FlueReviewSessionService, isFlueV2ReviewSession } from "./flue-review-sessions";
-import { PrCheckoutService } from "./pr-checkout";
+import {
+  FlueReviewSessionService,
+  isFlueV2ReviewSession,
+  type FlueReviewSession,
+} from "./flue-review-sessions";
+import {
+  isPreparedCheckoutUsable,
+  PrCheckoutService,
+  type PreparePrCheckoutInput,
+} from "./pr-checkout";
 import { getErrorMessage } from "./response";
 import { runtime } from "./runtime";
 
@@ -22,6 +30,28 @@ export type SessionCheckoutStatus =
   | { state: "ready" }
   | { state: "failed"; error: string };
 
+function checkoutInput(session: FlueReviewSession): PreparePrCheckoutInput {
+  return {
+    owner: session.owner,
+    repo: session.repo,
+    number: session.number,
+    prUrl: session.prUrl,
+    baseSha: session.baseSha,
+    headSha: session.headSha,
+    baseRef: session.baseRef ?? "",
+    headRef: session.headRef ?? "",
+    reviewMode: session.reviewMode,
+    commitSha: session.commitSha,
+    files: session.files,
+  };
+}
+
+function readSession(sessionId: string) {
+  return runtime.runPromise(
+    Effect.flatMap(FlueReviewSessionService, (store) => store.get(sessionId)),
+  );
+}
+
 export function prepareSessionCheckout(sessionId: string): Promise<void> {
   const pending = pendingCheckouts.get(sessionId);
   if (pending) return pending;
@@ -37,19 +67,7 @@ export function prepareSessionCheckout(sessionId: string): Promise<void> {
           return yield* Effect.fail(new Error(`Review session not found: ${sessionId}`));
         }
 
-        const prepared = yield* checkout.prepare({
-          owner: session.owner,
-          repo: session.repo,
-          number: session.number,
-          prUrl: session.prUrl,
-          baseSha: session.baseSha,
-          headSha: session.headSha,
-          baseRef: session.baseRef ?? "",
-          headRef: session.headRef ?? "",
-          reviewMode: session.reviewMode,
-          commitSha: session.commitSha,
-          files: session.files,
-        });
+        const prepared = yield* checkout.prepare(checkoutInput(session));
 
         // Re-read so session updates made during the checkout, such as automatic review
         // metadata, are not overwritten.
@@ -82,33 +100,36 @@ export function prepareSessionCheckoutInBackground(sessionId: string): void {
   });
 }
 
+/**
+ * A checkout that was ready can stop working, for example when worktree cleanup removed it.
+ * Treat it as ready only when it still serves the canonical diff.
+ */
+async function isSessionCheckoutReady(session: FlueReviewSession): Promise<boolean> {
+  return Boolean(session.repoAccess) && (await isPreparedCheckoutUsable(checkoutInput(session)));
+}
+
 export async function getSessionCheckoutStatus(sessionId: string): Promise<SessionCheckoutStatus> {
   if (pendingCheckouts.has(sessionId)) return { state: "preparing" };
 
-  const session = await runtime.runPromise(
-    Effect.flatMap(FlueReviewSessionService, (store) => store.get(sessionId)),
-  );
+  const session = await readSession(sessionId);
   if (!isFlueV2ReviewSession(session)) return { state: "failed", error: "Session not found" };
-  // A failed refresh leaves the earlier checkout usable, matching ensureSessionCheckout.
-  if (session.repoAccess) return { state: "ready" };
+  if (await isSessionCheckoutReady(session)) return { state: "ready" };
 
   const error = checkoutErrors.get(sessionId);
   if (error) return { state: "failed", error };
 
-  // Nothing is running for this session (for example after a server restart), so start it.
+  // Nothing usable and nothing running (for example after a server restart), so start it.
   prepareSessionCheckoutInBackground(sessionId);
   return { state: "preparing" };
 }
 
 export async function ensureSessionCheckout(sessionId: string): Promise<void> {
   const pending = pendingCheckouts.get(sessionId);
-  if (pending) return pending;
+  if (pending) await pending;
 
-  const session = await runtime.runPromise(
-    Effect.flatMap(FlueReviewSessionService, (store) => store.get(sessionId)),
-  );
-  // A missing access record means the checkout failed or the server restarted mid-way.
-  if (isFlueV2ReviewSession(session) && !session.repoAccess) {
+  const session = await readSession(sessionId);
+  if (!isFlueV2ReviewSession(session)) return;
+  if (!(await isSessionCheckoutReady(session))) {
     await prepareSessionCheckout(sessionId);
   }
 }
