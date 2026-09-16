@@ -66,7 +66,8 @@ export type { IssueComment };
 export const queryKeys = {
   pr: {
     all: ["pr"] as const,
-    batch: (url: string) => ["pr", "batch", url] as const,
+    core: (url: string) => ["pr", "core", url] as const,
+    extras: (url: string) => ["pr", "extras", url] as const,
     diff: (url: string) => ["pr", "diff", url] as const,
     info: (url: string) => ["pr", "info", url] as const,
     commits: (url: string) => ["pr", "commits", url] as const,
@@ -273,24 +274,16 @@ export const api = {
     return result.login ?? null;
   },
 
-  async fetchPrBatch(
-    url: string,
-    _signal?: AbortSignal,
-  ): Promise<{
-    diff: string;
-    info: { owner: string; repo: string; number: string };
-    commits: PrCommit[];
-    comments: PRComment[];
-    issueComments: IssueComment[];
-    status: PrStatus;
-  }> {
-    const result = await trpc.pr.batch.query({ url });
+  async fetchPrCore(url: string, _signal?: AbortSignal): Promise<PrCoreData> {
+    const result = await trpc.pr.core.query({ url });
+    return { diff: result.diff, info: result.info, commits: [...result.commits] };
+  },
+
+  async fetchPrExtras(url: string, _signal?: AbortSignal): Promise<PrExtrasData> {
+    const result = await trpc.pr.extras.query({ url });
     return {
-      diff: result.diff,
-      info: result.info,
-      commits: [...result.commits],
-      comments: [...result.comments],
-      issueComments: [...result.issueComments] as IssueComment[],
+      comments: result.comments ? [...result.comments] : null,
+      issueComments: result.issueComments ? ([...result.issueComments] as IssueComment[]) : null,
       status: result.status,
     };
   },
@@ -298,34 +291,62 @@ export const api = {
 
 export type ReadingDiffResult = Awaited<ReturnType<typeof api.generateReadingDiff>>;
 
-// Prefetch a full PR using batch endpoint (single request)
+export interface PrCoreData {
+  diff: string;
+  info: { owner: string; repo: string; number: string };
+  commits: PrCommit[];
+}
+
+/** Parts that fail on their own are null, so callers keep whatever they already show. */
+export interface PrExtrasData {
+  comments: PRComment[] | null;
+  issueComments: IssueComment[] | null;
+  status: PrStatus | null;
+}
+
+const PR_LOAD_STALE_TIME = 5 * 60 * 1000;
+
+// Populate the per-resource caches that components read.
+function cachePrCore(url: string, data: PrCoreData): void {
+  queryClient.setQueryData(queryKeys.pr.diff(url), data.diff);
+  queryClient.setQueryData(queryKeys.pr.info(url), data.info);
+  queryClient.setQueryData(queryKeys.pr.commits(url), data.commits);
+}
+
+function cachePrExtras(url: string, data: PrExtrasData): void {
+  if (data.comments) queryClient.setQueryData(queryKeys.pr.comments(url), data.comments);
+  if (data.issueComments) {
+    queryClient.setQueryData(queryKeys.pr.issueComments(url), data.issueComments);
+  }
+  if (data.status) queryClient.setQueryData(queryKeys.pr.status(url), data.status);
+}
+
+// fetchQuery joins an in-flight request for the same PR, such as a prefetch.
+export async function fetchPrCore(url: string): Promise<PrCoreData> {
+  const data = await queryClient.fetchQuery({
+    queryKey: queryKeys.pr.core(url),
+    queryFn: () => api.fetchPrCore(url),
+    staleTime: PR_LOAD_STALE_TIME,
+  });
+  cachePrCore(url, data);
+  return data;
+}
+
+export async function fetchPrExtras(url: string): Promise<PrExtrasData> {
+  const data = await queryClient.fetchQuery({
+    queryKey: queryKeys.pr.extras(url),
+    queryFn: () => api.fetchPrExtras(url),
+    staleTime: PR_LOAD_STALE_TIME,
+  });
+  cachePrExtras(url, data);
+  return data;
+}
+
+// Prefetch a full PR (user intent to open it)
 export async function prefetchPr(url: string): Promise<void> {
-  // Check if batch is already cached
-  const existingBatch = queryClient.getQueryData(queryKeys.pr.batch(url));
-  if (existingBatch) return;
-
-  try {
-    // Use prefetchQuery so it respects staleTime and doesn't duplicate requests
-    await queryClient.prefetchQuery({
-      queryKey: queryKeys.pr.batch(url),
-      queryFn: () => api.fetchPrBatch(url),
-      staleTime: 5 * 60 * 1000, // 5 minutes
-    });
-
-    // Get the fetched data and populate individual caches
-    const data = queryClient.getQueryData<Awaited<ReturnType<typeof api.fetchPrBatch>>>(
-      queryKeys.pr.batch(url),
-    );
-    if (data) {
-      queryClient.setQueryData(queryKeys.pr.diff(url), data.diff);
-      queryClient.setQueryData(queryKeys.pr.info(url), data.info);
-      queryClient.setQueryData(queryKeys.pr.commits(url), data.commits);
-      queryClient.setQueryData(queryKeys.pr.comments(url), data.comments);
-      queryClient.setQueryData(queryKeys.pr.issueComments(url), data.issueComments);
-      queryClient.setQueryData(queryKeys.pr.status(url), data.status);
-    }
-  } catch (e) {
-    console.error("Failed to prefetch PR:", e);
+  const results = await Promise.allSettled([fetchPrCore(url), fetchPrExtras(url)]);
+  for (const result of results) {
+    if (result.status === "rejected") console.error("Failed to prefetch PR:", result.reason);
   }
 }
 

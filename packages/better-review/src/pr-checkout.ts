@@ -350,6 +350,19 @@ async function refMatchesCommit(
   return result.exitCode === 0 && result.stdout.trim() === commitSha;
 }
 
+export function preparedWorktreePath(
+  input: Pick<PreparePrCheckoutInput, "owner" | "repo" | "number" | "headSha">,
+): string {
+  return join(
+    STORE_BASE_DIR,
+    "worktrees",
+    "github",
+    safePathPart(input.owner),
+    safePathPart(input.repo),
+    `pr-${input.number}-${input.headSha.slice(0, 12)}`,
+  );
+}
+
 function localPrBranchName(input: PreparePrCheckoutInput): string {
   return safePathPart(`pr-${input.number}-${input.headRef}-${input.headSha.slice(0, 12)}`);
 }
@@ -457,8 +470,46 @@ async function fetchFullerReviewHistory(
   await fetchPullHeadObjects(repoGitDir, input, []);
 }
 
+/**
+ * Fetches exactly the history between each tip and the merge base, using GitHub's commit
+ * distances. `--deepen` would instead extend every existing shallow boundary in the shared
+ * cache, which downloads far more and can exceed the checkout timeout.
+ */
+async function fetchHistoryToMergeBase(
+  repoGitDir: string,
+  input: PreparePrCheckoutInput,
+): Promise<boolean> {
+  const compare = await runCommand(
+    "gh",
+    [
+      "api",
+      `repos/${input.owner}/${input.repo}/compare/${input.baseSha}...${input.headSha}`,
+      "--jq",
+      "[.ahead_by, .behind_by] | @tsv",
+    ],
+    { timeoutMs: CHECKOUT_TIMEOUT_MS },
+  );
+  if (compare.exitCode !== 0 || compare.timedOut) return false;
+
+  const [aheadBy, behindBy] = compare.stdout.trim().split("\t").map(Number);
+  if (!Number.isInteger(aheadBy) || !Number.isInteger(behindBy)) return false;
+
+  // A tip's merge base is at most as many commits away as the tip is ahead of it.
+  await fetchBaseRef(repoGitDir, input, [`--depth=${behindBy + 1}`]);
+  await runGit(repoGitDir, [
+    "fetch",
+    "--no-tags",
+    "--filter=blob:none",
+    `--depth=${aheadBy + 1}`,
+    "origin",
+    input.headSha,
+  ]);
+  return hasMergeBase(repoGitDir, input);
+}
+
 async function ensureFullPrHistory(repoGitDir: string, input: PreparePrCheckoutInput) {
   if (await hasMergeBase(repoGitDir, input)) return;
+  if (await fetchHistoryToMergeBase(repoGitDir, input)) return;
 
   if (await isShallowRepository(repoGitDir)) {
     for (let attempt = 0; attempt < REVIEW_HISTORY_DEEPEN_ATTEMPTS; attempt += 1) {
@@ -998,17 +1049,14 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
 
       return Effect.tryPromise({
         try: async () => {
-          const owner = safePathPart(input.owner);
-          const repo = safePathPart(input.repo);
-          const repoGitDir = join(STORE_BASE_DIR, "git-cache", "github", owner, `${repo}.git`);
-          const worktreePath = join(
+          const repoGitDir = join(
             STORE_BASE_DIR,
-            "worktrees",
+            "git-cache",
             "github",
-            owner,
-            repo,
-            `pr-${input.number}-${input.headSha.slice(0, 12)}`,
+            safePathPart(input.owner),
+            `${safePathPart(input.repo)}.git`,
           );
+          const worktreePath = preparedWorktreePath(input);
 
           return await withRepoGitQueue(repoGitDir, async (queue) => {
             trace.push({

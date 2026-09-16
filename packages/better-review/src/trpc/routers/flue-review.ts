@@ -20,8 +20,13 @@ import {
 } from "../../flue-review-sessions";
 import { readFlueConversationHistory, sendServerReview } from "../../flue/runtime";
 import { GhService } from "../../gh/gh";
-import { PrCheckoutService } from "../../pr-checkout";
+import { preparedWorktreePath } from "../../pr-checkout";
 import { ReviewLaunchCoordinator, PrSessionLock } from "../../review-launch-coordinator";
+import {
+  ensureSessionCheckout,
+  getSessionCheckoutStatus,
+  prepareSessionCheckoutInBackground,
+} from "../../session-checkout";
 import { PrContextService, parsePrUrl, type SessionReviewScope } from "../../state";
 import { router, publicProcedure, runEffect } from "../index";
 
@@ -172,7 +177,6 @@ export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>, fo
     const gh = yield* GhService;
     const prContext = yield* PrContextService;
     const flueSessions = yield* FlueReviewSessionService;
-    const checkout = yield* PrCheckoutService;
 
     const pr = parsePrUrl(input.prUrl);
     if (!pr) {
@@ -221,19 +225,6 @@ export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>, fo
           flueSession.reviewMode === reviewScope.mode &&
           flueSession.commitSha === reviewScope.commitSha
         ) {
-          const prepared = yield* checkout.prepare({
-            owner: pr.owner,
-            repo: pr.repo,
-            number: pr.number,
-            prUrl: input.prUrl,
-            baseSha,
-            headSha,
-            baseRef,
-            headRef,
-            reviewMode: reviewScope.mode,
-            commitSha: reviewScope.commitSha,
-            files: input.files,
-          });
           const updatedSession: FlueReviewSession = {
             ...flueSession,
             baseSha,
@@ -242,32 +233,19 @@ export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>, fo
             headRef,
             reviewMode: reviewScope.mode,
             commitSha: reviewScope.commitSha,
-            worktreePath: prepared.worktreePath,
-            repoAccess: prepared.repoAccess,
+            worktreePath: preparedWorktreePath({ ...pr, headSha }),
             files: input.files,
           };
           yield* flueSessions.save(updatedSession);
           yield* prContext.registerSession(flueSession.id, input.prUrl);
           yield* prContext.setSessionScope(flueSession.id, reviewScope);
+          // Refresh the checkout (it may have been cleaned up) without blocking the page.
+          prepareSessionCheckoutInBackground(updatedSession.id);
           const sessions = yield* visibleV2Sessions(current.sessions, flueSessions);
           return sessionPayload(updatedSession, sessions, current.activeSessionId, true);
         }
       }
     }
-
-    const prepared = yield* checkout.prepare({
-      owner: pr.owner,
-      repo: pr.repo,
-      number: pr.number,
-      prUrl: input.prUrl,
-      baseSha,
-      headSha,
-      baseRef,
-      headRef,
-      reviewMode: reviewScope.mode,
-      commitSha: reviewScope.commitSha,
-      files: input.files,
-    });
 
     const session = yield* flueSessions.create({
       runtimeVersion: 2,
@@ -282,13 +260,13 @@ export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>, fo
       headRef,
       reviewMode: reviewScope.mode,
       commitSha: reviewScope.commitSha,
-      worktreePath: prepared.worktreePath,
-      repoAccess: prepared.repoAccess,
+      worktreePath: preparedWorktreePath({ ...pr, headSha }),
       files: input.files,
     });
 
     const prData = yield* prContext.addSession(input.prUrl, session.id, headSha);
     yield* prContext.setSessionScope(session.id, reviewScope);
+    prepareSessionCheckoutInBackground(session.id);
 
     const sessions = yield* visibleV2Sessions(prData.sessions, flueSessions);
     return sessionPayload(session, sessions, prData.activeSessionId, false);
@@ -355,14 +333,20 @@ async function startAutomaticReview(
             );
           }),
         );
-        const session = await runEffect(
-          Effect.flatMap(FlueReviewSessionService, (store) => store.get(data.session.id)),
-        );
-        if (!session) throw new Error("Review session not found");
-        const history = await readFlueConversationHistory(session.id);
-        const state = reviewConversationStatus(history, session.automaticReview?.submissionId);
+        const readSession = () =>
+          runEffect(
+            Effect.flatMap(FlueReviewSessionService, (store) => store.get(data.session.id)),
+          );
+        const existing = await readSession();
+        if (!existing) throw new Error("Review session not found");
+        const history = await readFlueConversationHistory(existing.id);
+        const state = reviewConversationStatus(history, existing.automaticReview?.submissionId);
         if (state === "running" || state === "completed")
-          return { state, sessionId: session.id, headSha: session.headSha };
+          return { state, sessionId: existing.id, headSha: existing.headSha };
+        // Re-read after the checkout so saving review metadata keeps its access record.
+        await ensureSessionCheckout(existing.id);
+        const session = await readSession();
+        if (!session) throw new Error("Review session not found");
         // Persist the key before admission, so an interrupted request can safely retry.
         const idempotencyKey =
           state === "failed"
@@ -469,6 +453,10 @@ export const flueReviewRouter = router({
       ),
     ),
 
+  checkoutStatus: publicProcedure
+    .input(z.object({ sessionId: z.string() }))
+    .query(({ input }) => getSessionCheckoutStatus(input.sessionId)),
+
   selectSession: publicProcedure
     .input(z.object({ prUrl: z.string(), sessionId: z.string() }))
     .mutation(({ input }) => {
@@ -514,7 +502,6 @@ export const flueReviewRouter = router({
           const gh = yield* GhService;
           const prContext = yield* PrContextService;
           const flueSessions = yield* FlueReviewSessionService;
-          const checkout = yield* PrCheckoutService;
 
           const pr = parsePrUrl(input.prUrl);
           if (!pr) {
@@ -536,24 +523,6 @@ export const flueReviewRouter = router({
             `[flueReview.create] github metadata completed in ${Date.now() - metadataStartedAt}ms total=${Date.now() - startedAt}ms`,
           );
 
-          const checkoutStartedAt = Date.now();
-          const prepared = yield* checkout.prepare({
-            owner: pr.owner,
-            repo: pr.repo,
-            number: pr.number,
-            prUrl: input.prUrl,
-            baseSha,
-            headSha,
-            baseRef,
-            headRef,
-            reviewMode: reviewScope.mode,
-            commitSha: reviewScope.commitSha,
-            files: input.files,
-          });
-          yield* Effect.log(
-            `[flueReview.create] checkout.prepare completed in ${Date.now() - checkoutStartedAt}ms total=${Date.now() - startedAt}ms`,
-          );
-
           const storeStartedAt = Date.now();
           const session = yield* flueSessions.create({
             runtimeVersion: 2,
@@ -568,10 +537,10 @@ export const flueReviewRouter = router({
             headRef,
             reviewMode: reviewScope.mode,
             commitSha: reviewScope.commitSha,
-            worktreePath: prepared.worktreePath,
-            repoAccess: prepared.repoAccess,
+            worktreePath: preparedWorktreePath({ ...pr, headSha }),
             files: input.files,
           });
+          prepareSessionCheckoutInBackground(session.id);
           yield* Effect.log(
             `[flueReview.create] session store completed in ${Date.now() - storeStartedAt}ms total=${Date.now() - startedAt}ms`,
           );

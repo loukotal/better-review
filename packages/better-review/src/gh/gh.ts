@@ -193,19 +193,20 @@ const SearchedPrSchema = Schema.Struct({
 // Internal API Response Schemas
 // ============================================================================
 
-// Schema for getPrStatus API response (before transformation)
-const PrDataResponseSchema = Schema.Struct({
+// Schema for the pull request API response
+const PullRequestSchema = Schema.Struct({
   state: Schema.String,
   draft: Schema.Boolean,
   mergeable: Schema.NullOr(Schema.Boolean),
   title: Schema.String,
   body: Schema.NullOr(Schema.String),
-  author: Schema.String,
+  user: Schema.Struct({ login: Schema.String }),
   merged: Schema.Boolean,
   html_url: Schema.String,
-  head_ref: Schema.String,
-  head_sha: Schema.String,
+  head: Schema.Struct({ ref: Schema.String, sha: Schema.String }),
+  base: Schema.Struct({ ref: Schema.String, sha: Schema.String }),
 });
+type PullRequest = typeof PullRequestSchema.Type;
 
 // Schema for raw commit from listCommits API
 const RawCommitSchema = Schema.Struct({
@@ -410,6 +411,45 @@ const getPrInfo = (urlOrNumber: string) =>
     const [owner, repo] = repoInfo.split("/");
 
     return { owner, repo, number: urlOrNumber };
+  });
+
+const PULL_REQUEST_CACHE_MS = 30_000;
+const pullRequestCache = new Map<
+  string,
+  { fetchedAt: number; pullRequest: Promise<PullRequest> }
+>();
+
+const pullRequestKey = (owner: string, repo: string, number: string) =>
+  `${owner}/${repo}#${number}`.toLowerCase();
+
+const fetchPullRequest = (owner: string, repo: string, number: string) =>
+  Effect.gen(function* () {
+    const json = yield* runGh("api", `repos/${owner}/${repo}/pulls/${number}`);
+    return yield* parseJsonPreserve(PullRequestSchema)(json);
+  });
+
+// Page loads ask for the same PR several times (status, head/base SHAs, refs) within
+// seconds. Share one request and reuse it briefly instead of calling GitHub for each field.
+const getCachedPullRequest = (urlOrNumber: string, options: { fresh?: boolean } = {}) =>
+  Effect.gen(function* () {
+    const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
+    const key = pullRequestKey(owner, repo, number);
+    const cached = pullRequestCache.get(key);
+    const entry =
+      !options.fresh && cached && Date.now() - cached.fetchedAt < PULL_REQUEST_CACHE_MS
+        ? cached
+        : {
+            fetchedAt: Date.now(),
+            pullRequest: Effect.runPromise(fetchPullRequest(owner, repo, number)),
+          };
+    pullRequestCache.set(key, entry);
+    return yield* Effect.tryPromise({
+      try: () => entry.pullRequest,
+      catch: (cause) => {
+        if (pullRequestCache.get(key) === entry) pullRequestCache.delete(key);
+        return cause instanceof Error ? cause : new Error(String(cause));
+      },
+    });
   });
 
 const hasPatch = (file: PullRequestFile): file is PullRequestFile & { patch: string } =>
@@ -846,41 +886,32 @@ const ghCli: GhCli = {
 
   getPrStatus: (urlOrNumber: string) =>
     Effect.gen(function* () {
-      const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
+      const { owner, repo } = yield* getPrInfo(urlOrNumber);
 
-      // Get PR details
-      const prResult = (yield* runGh(
-        "api",
-        `repos/${owner}/${repo}/pulls/${number}`,
-        "--jq",
-        "{ state, draft, mergeable, title, body, author: .user.login, merged: .merged, html_url, head_ref: .head.ref, head_sha: .head.sha }",
-      )).trim();
-      if (!prResult) {
-        return yield* Effect.fail(new GhError({ command: "getPrStatus", cause: "PR not found" }));
-      }
-      const prData = yield* parseJsonPreserve(PrDataResponseSchema)(prResult);
+      // Status must be current, so always refetch; this also refreshes the shared PR cache.
+      const pr = yield* getCachedPullRequest(urlOrNumber, { fresh: true });
 
-      // Get check runs for the PR's head commit (using head_sha from PR data above)
+      // Get check runs for the PR's head commit
       const checksResult = yield* runGh(
         "api",
-        `repos/${owner}/${repo}/commits/${prData.head_sha}/check-runs`,
+        `repos/${owner}/${repo}/commits/${pr.head.sha}/check-runs`,
         "--jq",
         ".check_runs | map({ name, status, conclusion })",
       ).pipe(Effect.catchAll(() => Effect.succeed("[]")));
       const checks = yield* parseJsonPreserve(Schema.Array(CheckRunSchema))(checksResult);
 
       // Determine actual state (open/closed/merged)
-      const state = prData.merged ? "merged" : prData.state;
+      const state = pr.merged ? "merged" : pr.state;
 
       return Schema.decodeUnknownSync(PrStatusSchema)({
         state,
-        draft: prData.draft,
-        mergeable: prData.mergeable,
-        title: prData.title,
-        body: prData.body ?? "",
-        author: prData.author,
-        url: prData.html_url,
-        headRef: prData.head_ref,
+        draft: pr.draft,
+        mergeable: pr.mergeable,
+        title: pr.title,
+        body: pr.body ?? "",
+        author: pr.user.login,
+        url: pr.html_url,
+        headRef: pr.head.ref,
         checks,
       });
     }).pipe(
@@ -1868,59 +1899,29 @@ const ghCli: GhCli = {
     ),
 
   getHeadSha: (prUrl: string) =>
-    Effect.gen(function* () {
-      const { owner, repo, number } = yield* getPrInfo(prUrl);
-      const sha = (yield* runGh(
-        "api",
-        `repos/${owner}/${repo}/pulls/${number}`,
-        "--jq",
-        ".head.sha",
-      )).trim();
-      return sha;
-    }).pipe(
+    getCachedPullRequest(prUrl).pipe(
+      Effect.map((pr) => pr.head.sha),
       Effect.mapError((cause) => new GhError({ command: "getHeadSha", cause })),
       Effect.withSpan("GhService.getHeadSha", { attributes: { prUrl } }),
     ),
 
   getBaseSha: (prUrl: string) =>
-    Effect.gen(function* () {
-      const { owner, repo, number } = yield* getPrInfo(prUrl);
-      const sha = (yield* runGh(
-        "api",
-        `repos/${owner}/${repo}/pulls/${number}`,
-        "--jq",
-        ".base.sha",
-      )).trim();
-      return sha;
-    }).pipe(
+    getCachedPullRequest(prUrl).pipe(
+      Effect.map((pr) => pr.base.sha),
       Effect.mapError((cause) => new GhError({ command: "getBaseSha", cause })),
       Effect.withSpan("GhService.getBaseSha", { attributes: { prUrl } }),
     ),
 
   getHeadRef: (prUrl: string) =>
-    Effect.gen(function* () {
-      const { owner, repo, number } = yield* getPrInfo(prUrl);
-      return (yield* runGh(
-        "api",
-        `repos/${owner}/${repo}/pulls/${number}`,
-        "--jq",
-        ".head.ref",
-      )).trim();
-    }).pipe(
+    getCachedPullRequest(prUrl).pipe(
+      Effect.map((pr) => pr.head.ref),
       Effect.mapError((cause) => new GhError({ command: "getHeadRef", cause })),
       Effect.withSpan("GhService.getHeadRef", { attributes: { prUrl } }),
     ),
 
   getBaseRef: (prUrl: string) =>
-    Effect.gen(function* () {
-      const { owner, repo, number } = yield* getPrInfo(prUrl);
-      return (yield* runGh(
-        "api",
-        `repos/${owner}/${repo}/pulls/${number}`,
-        "--jq",
-        ".base.ref",
-      )).trim();
-    }).pipe(
+    getCachedPullRequest(prUrl).pipe(
+      Effect.map((pr) => pr.base.ref),
       Effect.mapError((cause) => new GhError({ command: "getBaseRef", cause })),
       Effect.withSpan("GhService.getBaseRef", { attributes: { prUrl } }),
     ),

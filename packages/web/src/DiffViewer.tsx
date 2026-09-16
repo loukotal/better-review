@@ -333,9 +333,7 @@ export function DiffViewer(props: Props) {
                   prUrl={props.prUrl}
                   virtualizer={virtualizer}
                   scrollContainer={props.scrollContainer}
-                  activeSearchMatch={
-                    activeSearchMatch()?.line === undefined ? undefined : activeSearchMatch()
-                  }
+                  activeSearchMatch={activeSearchMatch()}
                   readOnly={props.readOnly}
                 />
               </div>
