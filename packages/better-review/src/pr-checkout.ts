@@ -99,10 +99,9 @@ interface CheckoutTracePhase {
 }
 
 const CHECKOUT_TIMEOUT_MS = Number(process.env.BETTER_REVIEW_CHECKOUT_TIMEOUT_MS ?? 120_000);
-const REVIEW_HISTORY_DEEPEN_STEP = Number(process.env.BETTER_REVIEW_HISTORY_DEEPEN_STEP ?? 100);
-const REVIEW_HISTORY_DEEPEN_ATTEMPTS = Number(
-  process.env.BETTER_REVIEW_HISTORY_DEEPEN_ATTEMPTS ?? 5,
-);
+// Converting an old shallow cache or cloning full commit history can take longer than a
+// normal checkout step, but only happens once per repository.
+const HISTORY_TIMEOUT_MS = Number(process.env.BETTER_REVIEW_HISTORY_TIMEOUT_MS ?? 600_000);
 const GIT_LOCK_RETRY_ATTEMPTS = Number(process.env.BETTER_REVIEW_GIT_LOCK_RETRY_ATTEMPTS ?? 20);
 const GIT_LOCK_RETRY_DELAY_MS = Number(process.env.BETTER_REVIEW_GIT_LOCK_RETRY_DELAY_MS ?? 250);
 const WORKTREE_MAX_UNUSED_MS = Number(
@@ -176,11 +175,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runRequired(command: string, args: string[], cwd?: string): Promise<string> {
+async function runRequired(
+  command: string,
+  args: string[],
+  cwd?: string,
+  timeoutMs = CHECKOUT_TIMEOUT_MS,
+): Promise<string> {
   for (let attempt = 0; attempt <= GIT_LOCK_RETRY_ATTEMPTS; attempt += 1) {
-    const result = await runCommand(command, args, { cwd, timeoutMs: CHECKOUT_TIMEOUT_MS });
+    const result = await runCommand(command, args, { cwd, timeoutMs });
     if (result.timedOut) {
-      throw new Error(`${command} ${args.join(" ")} timed out after ${CHECKOUT_TIMEOUT_MS}ms`);
+      throw new Error(`${command} ${args.join(" ")} timed out after ${timeoutMs}ms`);
     }
     if (result.exitCode === 0) {
       return result.stdout;
@@ -202,8 +206,8 @@ async function runWorktreeGit(worktreePath: string, args: string[]): Promise<str
   return runRequired("git", ["-C", worktreePath, ...args]);
 }
 
-async function runGit(repoGitDir: string, args: string[]): Promise<string> {
-  return runRequired("git", ["-C", repoGitDir, ...args]);
+async function runGit(repoGitDir: string, args: string[], timeoutMs?: number): Promise<string> {
+  return runRequired("git", ["-C", repoGitDir, ...args], undefined, timeoutMs);
 }
 
 export function githubRepoRemoteUrl(owner: string, repo: string, gitProtocol: string): string {
@@ -259,17 +263,22 @@ async function ensureBareRepo(owner: string, repo: string, repoGitDir: string): 
 
   if (!(await pathExists(repoGitDir))) {
     await mkdir(join(repoGitDir, ".."), { recursive: true });
-    await runRequired("gh", [
-      "repo",
-      "clone",
-      `${owner}/${repo}`,
-      repoGitDir,
-      "--",
-      "--bare",
-      "--filter=blob:none",
-      "--no-tags",
-      "--depth=1",
-    ]);
+    // Full commit history without trees: small, and merge bases always resolve locally.
+    await runRequired(
+      "gh",
+      [
+        "repo",
+        "clone",
+        `${owner}/${repo}`,
+        repoGitDir,
+        "--",
+        "--bare",
+        "--filter=tree:0",
+        "--no-tags",
+      ],
+      undefined,
+      HISTORY_TIMEOUT_MS,
+    );
   }
 
   await runRequired("git", ["-C", repoGitDir, "remote", "set-url", "origin", remoteUrl]);
@@ -281,6 +290,7 @@ async function ensureBareRepo(owner: string, repo: string, repoGitDir: string): 
     "remote.origin.partialclonefilter",
     "blob:none",
   ]);
+  await ensureFullCommitHistory(repoGitDir);
 }
 
 function baseRemoteRef(input: PreparePrCheckoutInput): string {
@@ -295,34 +305,78 @@ function pullHeadRef(input: PreparePrCheckoutInput): string {
   return `refs/pull/${input.number}/head`;
 }
 
-async function fetchBaseRef(
-  repoGitDir: string,
-  input: PreparePrCheckoutInput,
-  historyArgs: string[] = ["--depth=1"],
-): Promise<void> {
-  await runGit(repoGitDir, [
-    "fetch",
-    "--no-tags",
-    "--filter=blob:none",
-    ...historyArgs,
-    "origin",
-    `+${input.baseSha}:${baseRemoteRef(input)}`,
-  ]);
+function reviewHeadRef(input: Pick<PreparePrCheckoutInput, "number" | "headSha">): string {
+  return `refs/better-review/pr-${input.number}-${input.headSha.slice(0, 12)}/head`;
 }
 
-async function fetchPullHeadObjects(
-  repoGitDir: string,
-  input: PreparePrCheckoutInput,
-  historyArgs: string[],
-): Promise<void> {
-  await runGit(repoGitDir, [
-    "fetch",
-    "--no-tags",
-    "--filter=blob:none",
-    ...historyArgs,
-    "origin",
-    pullHeadRef(input),
+/**
+ * Review caches are shared by every review of a repository, so they must never be shallow.
+ * A `--depth` or `--deepen` fetch rewrites the repository-wide shallow boundary, and one
+ * review's fetch could then cut the history another review needs for its merge base.
+ * Converts caches created by older versions, which cloned and fetched with `--depth`.
+ */
+export async function ensureFullCommitHistory(repoGitDir: string): Promise<void> {
+  if (!(await isShallowRepository(repoGitDir))) return;
+
+  // Commits only; trees and blobs are still fetched on demand for the commits a review uses.
+  await runGit(
+    repoGitDir,
+    ["fetch", "--no-tags", "--filter=tree:0", "--unshallow", "origin", "HEAD"],
+    HISTORY_TIMEOUT_MS,
+  );
+  if (!(await isShallowRepository(repoGitDir))) return;
+
+  // Commits that are not reachable from the default branch, such as unmerged PR heads.
+  const remaining = parseLines(await readFile(join(repoGitDir, "shallow"), "utf8"));
+  await runGit(
+    repoGitDir,
+    ["fetch", "--no-tags", "--filter=tree:0", "--unshallow", "origin", ...remaining],
+    HISTORY_TIMEOUT_MS,
+  );
+  if (await isShallowRepository(repoGitDir)) {
+    throw new Error(`Could not fetch the full commit history for ${repoGitDir}`);
+  }
+}
+
+function parseLines(value: string): string[] {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+async function hasCommit(repoGitDir: string, commitSha: string): Promise<boolean> {
+  const result = await runCommand("git", [
+    "-C",
+    repoGitDir,
+    "--no-lazy-fetch",
+    "cat-file",
+    "-e",
+    `${commitSha}^{commit}`,
   ]);
+  return result.exitCode === 0;
+}
+
+/** Points `ref` at `commitSha`, fetching `source` only when the commit is not cached yet. */
+async function ensureRefAtCommit(
+  repoGitDir: string,
+  ref: string,
+  commitSha: string,
+  source: string,
+): Promise<void> {
+  if (await refMatchesCommit(repoGitDir, ref, commitSha)) return;
+
+  if (await hasCommit(repoGitDir, commitSha)) {
+    await runGit(repoGitDir, ["update-ref", ref, commitSha]);
+  } else {
+    await runGit(repoGitDir, [
+      "fetch",
+      "--no-tags",
+      "--filter=blob:none",
+      "origin",
+      `+${source}:${ref}`,
+    ]);
+  }
 }
 
 async function getWorktreeHead(worktreePath: string): Promise<string | null> {
@@ -348,6 +402,16 @@ async function refMatchesCommit(
     `${ref}^{commit}`,
   ]);
   return result.exitCode === 0 && result.stdout.trim() === commitSha;
+}
+
+function repoGitDirFor(input: Pick<PreparePrCheckoutInput, "owner" | "repo">): string {
+  return join(
+    STORE_BASE_DIR,
+    "git-cache",
+    "github",
+    safePathPart(input.owner),
+    `${safePathPart(input.repo)}.git`,
+  );
 }
 
 export function preparedWorktreePath(
@@ -385,9 +449,13 @@ async function traceCheckoutPhase<T>(
   }
 }
 
-async function ensureBaseRef(repoGitDir: string, input: PreparePrCheckoutInput): Promise<void> {
+export async function ensureBaseRef(
+  repoGitDir: string,
+  input: PreparePrCheckoutInput,
+): Promise<void> {
+  await ensureRefAtCommit(repoGitDir, baseRemoteRef(input), input.baseSha, input.baseSha);
   if (!(await refMatchesCommit(repoGitDir, baseRemoteRef(input), input.baseSha))) {
-    await fetchBaseRef(repoGitDir, input);
+    throw new Error(`Fetched review base does not match recorded base ${input.baseSha}`);
   }
 }
 
@@ -397,25 +465,7 @@ export async function fetchPullHeadBranch(
   localBranch: string,
 ): Promise<void> {
   const localBranchRef = `refs/heads/${localBranch}`;
-  if (await refMatchesCommit(repoGitDir, localBranchRef, input.headSha)) {
-    return;
-  }
-
-  if (await refMatchesCommit(repoGitDir, input.headSha, input.headSha)) {
-    // History preparation may already have hydrated this exact head. Point the
-    // worktree branch at the recorded commit without a depth-limited fetch,
-    // which would mark the commit as shallow again and hide its merge base.
-    await runGit(repoGitDir, ["update-ref", localBranchRef, input.headSha]);
-  } else {
-    await runGit(repoGitDir, [
-      "fetch",
-      "--no-tags",
-      "--filter=blob:none",
-      "--depth=1",
-      "origin",
-      `+${pullHeadRef(input)}:${localBranchRef}`,
-    ]);
-  }
+  await ensureRefAtCommit(repoGitDir, localBranchRef, input.headSha, pullHeadRef(input));
 
   if (!(await refMatchesCommit(repoGitDir, localBranchRef, input.headSha))) {
     throw new Error(
@@ -458,69 +508,13 @@ async function isShallowRepository(repoGitDir: string): Promise<boolean> {
   return result.exitCode === 0 && result.stdout.trim() === "true";
 }
 
-async function fetchFullerReviewHistory(
-  repoGitDir: string,
-  input: PreparePrCheckoutInput,
-): Promise<void> {
-  if (await isShallowRepository(repoGitDir)) {
-    await fetchBaseRef(repoGitDir, input, ["--unshallow"]);
-  } else {
-    await fetchBaseRef(repoGitDir, input, []);
-  }
-  await fetchPullHeadObjects(repoGitDir, input, []);
-}
-
-/**
- * Fetches exactly the history between each tip and the merge base, using GitHub's commit
- * distances. `--deepen` would instead extend every existing shallow boundary in the shared
- * cache, which downloads far more and can exceed the checkout timeout.
- */
-async function fetchHistoryToMergeBase(
-  repoGitDir: string,
-  input: PreparePrCheckoutInput,
-): Promise<boolean> {
-  const compare = await runCommand(
-    "gh",
-    [
-      "api",
-      `repos/${input.owner}/${input.repo}/compare/${input.baseSha}...${input.headSha}`,
-      "--jq",
-      "[.ahead_by, .behind_by] | @tsv",
-    ],
-    { timeoutMs: CHECKOUT_TIMEOUT_MS },
-  );
-  if (compare.exitCode !== 0 || compare.timedOut) return false;
-
-  const [aheadBy, behindBy] = compare.stdout.trim().split("\t").map(Number);
-  if (!Number.isInteger(aheadBy) || !Number.isInteger(behindBy)) return false;
-
-  // A tip's merge base is at most as many commits away as the tip is ahead of it.
-  await fetchBaseRef(repoGitDir, input, [`--depth=${behindBy + 1}`]);
-  await runGit(repoGitDir, [
-    "fetch",
-    "--no-tags",
-    "--filter=blob:none",
-    `--depth=${aheadBy + 1}`,
-    "origin",
-    input.headSha,
-  ]);
-  return hasMergeBase(repoGitDir, input);
-}
-
 async function ensureFullPrHistory(repoGitDir: string, input: PreparePrCheckoutInput) {
   if (await hasMergeBase(repoGitDir, input)) return;
-  if (await fetchHistoryToMergeBase(repoGitDir, input)) return;
 
-  if (await isShallowRepository(repoGitDir)) {
-    for (let attempt = 0; attempt < REVIEW_HISTORY_DEEPEN_ATTEMPTS; attempt += 1) {
-      const deepenArgs = ["--deepen", String(REVIEW_HISTORY_DEEPEN_STEP)];
-      await fetchBaseRef(repoGitDir, input, deepenArgs);
-      await fetchPullHeadObjects(repoGitDir, input, deepenArgs);
-      if (await hasMergeBase(repoGitDir, input)) return;
-    }
-  }
-
-  await fetchFullerReviewHistory(repoGitDir, input);
+  // Only caches created before full history was required are missing it.
+  await ensureFullCommitHistory(repoGitDir);
+  await ensureBaseRef(repoGitDir, input);
+  await ensureRefAtCommit(repoGitDir, reviewHeadRef(input), input.headSha, pullHeadRef(input));
   if (await hasMergeBase(repoGitDir, input)) return;
 
   throw new Error(
@@ -532,17 +526,8 @@ async function ensureCommitReviewHistory(repoGitDir: string, input: PreparePrChe
   if (!input.commitSha) return;
   if (await hasCommitParent(repoGitDir, input.commitSha)) return;
 
-  if (await isShallowRepository(repoGitDir)) {
-    for (let attempt = 0; attempt < REVIEW_HISTORY_DEEPEN_ATTEMPTS; attempt += 1) {
-      await fetchPullHeadObjects(repoGitDir, input, [
-        "--deepen",
-        String(REVIEW_HISTORY_DEEPEN_STEP),
-      ]);
-      if (await hasCommitParent(repoGitDir, input.commitSha)) return;
-    }
-  }
-
-  await fetchFullerReviewHistory(repoGitDir, input);
+  await ensureFullCommitHistory(repoGitDir);
+  await ensureRefAtCommit(repoGitDir, reviewHeadRef(input), input.headSha, pullHeadRef(input));
   if (await hasCommitParent(repoGitDir, input.commitSha)) return;
 
   throw new Error(
@@ -580,6 +565,30 @@ export async function ensureOfflineReviewDiff(
   // has network access, then prove the same command works with lazy fetching off.
   await runGit(repoGitDir, ["diff", "--no-ext-diff", "--stat", range]);
   await runGit(repoGitDir, ["--no-lazy-fetch", "diff", "--no-ext-diff", "--stat", range]);
+}
+
+/**
+ * Cheap check, without network access, that a previously prepared checkout can still serve
+ * the reviewer: the worktree is on the reviewed head and the canonical diff resolves.
+ */
+export async function isPreparedCheckoutUsable(input: PreparePrCheckoutInput): Promise<boolean> {
+  if ((await getWorktreeHead(preparedWorktreePath(input))) !== input.headSha) return false;
+
+  const result = await runCommand(
+    "git",
+    [
+      "-C",
+      repoGitDirFor(input),
+      "--no-lazy-fetch",
+      "diff",
+      "--no-ext-diff",
+      "--stat",
+      reviewDiffRange(input),
+    ],
+    { timeoutMs: CHECKOUT_TIMEOUT_MS },
+  );
+  // --stat reads every changed file, so missing blobs fail here rather than in the sandbox.
+  return !result.timedOut && result.exitCode === 0;
 }
 
 function resolveWorktreePath(worktreePath: string, file: string): string {
@@ -1049,13 +1058,7 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
 
       return Effect.tryPromise({
         try: async () => {
-          const repoGitDir = join(
-            STORE_BASE_DIR,
-            "git-cache",
-            "github",
-            safePathPart(input.owner),
-            `${safePathPart(input.repo)}.git`,
-          );
+          const repoGitDir = repoGitDirFor(input);
           const worktreePath = preparedWorktreePath(input);
 
           return await withRepoGitQueue(repoGitDir, async (queue) => {

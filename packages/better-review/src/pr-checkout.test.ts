@@ -9,6 +9,8 @@ import { promisify } from "node:util";
 
 import {
   cleanupExpiredWorktrees,
+  ensureBaseRef,
+  ensureFullCommitHistory,
   ensureOfflineReviewDiff,
   ensureReviewHistory,
   fetchPullHeadBranch,
@@ -238,7 +240,11 @@ test("cleanupExpiredWorktrees skips worktrees with tracked local changes", async
   }
 });
 
-test("ensureReviewHistory deepens a shallow PR checkout until merge-base exists", async () => {
+async function isShallow(repoGitDir: string): Promise<boolean> {
+  return (await git(repoGitDir, ["rev-parse", "--is-shallow-repository"])) === "true";
+}
+
+test("ensureReviewHistory converts a shallow cache so the merge base resolves", async () => {
   const root = await mkdtemp(join(tmpdir(), "better-review-pr-checkout-"));
 
   try {
@@ -251,31 +257,25 @@ test("ensureReviewHistory deepens a shallow PR checkout until merge-base exists"
 
     const mergeBaseSha = await commitFile(source, "src/app.ts", "base\n", "base");
     await git(source, ["checkout", "-b", "develop"]);
-    await commitFile(source, "src/app.ts", "base\ndevelop\n", "develop");
+    const baseSha = await commitFile(source, "src/app.ts", "base\ndevelop\n", "develop");
     await git(source, ["checkout", "-b", "feature", mergeBaseSha]);
     const headSha = await commitFile(source, "src/app.ts", "base\nfeature\n", "feature");
     await git(source, ["update-ref", "refs/pull/1/head", "feature"]);
+    await git(source, ["checkout", "develop"]);
 
+    // Caches created by older versions cloned and fetched with --depth=1.
     await git(root, ["init", "--bare", cache]);
     await git(cache, ["remote", "add", "origin", source]);
-    await git(cache, [
-      "fetch",
-      "--depth=1",
-      "origin",
-      "refs/heads/develop:refs/remotes/origin/develop",
-    ]);
+    await git(cache, ["fetch", "--depth=1", "origin", "refs/heads/develop"]);
     await git(cache, ["fetch", "--depth=1", "origin", "refs/pull/1/head"]);
-
-    await assert.rejects(
-      execFileAsync("git", ["-C", cache, "merge-base", "refs/remotes/origin/develop", headSha]),
-    );
+    assert.equal(await isShallow(cache), true);
 
     const input: PreparePrCheckoutInput = {
       owner: "owner",
       repo: "repo",
       number: 1,
       prUrl: "https://github.com/owner/repo/pull/1",
-      baseSha: mergeBaseSha,
+      baseSha,
       headSha,
       baseRef: "develop",
       headRef: "feature",
@@ -286,13 +286,81 @@ test("ensureReviewHistory deepens a shallow PR checkout until merge-base exists"
 
     await ensureReviewHistory(cache, input);
 
-    const resolvedMergeBase = await git(cache, [
-      "merge-base",
-      "refs/remotes/origin/develop",
-      headSha,
-    ]);
+    assert.equal(await isShallow(cache), false);
+    assert.equal(await git(cache, ["merge-base", reviewBaseRef(input), headSha]), mergeBaseSha);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
-    assert.equal(resolvedMergeBase, mergeBaseSha);
+test("preparing one review never cuts the history another review depends on", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-shared-history-"));
+
+  try {
+    const source = join(root, "source");
+    const cache = join(root, "cache.git");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+
+    // develop: merge base -> older tip (second review's base) -> newer tip (first review's base)
+    const mergeBaseSha = await commitFile(source, "src/app.ts", "base\n", "merge base");
+    await git(source, ["checkout", "-b", "develop"]);
+    const olderBaseSha = await commitFile(source, "src/app.ts", "base\nolder\n", "older develop");
+    const newerBaseSha = await commitFile(source, "src/app.ts", "base\nnewer\n", "newer develop");
+    await git(source, ["checkout", "-b", "first-feature", mergeBaseSha]);
+    const firstHeadSha = await commitFile(source, "src/first.ts", "first\n", "first feature");
+    await git(source, ["update-ref", "refs/pull/1/head", firstHeadSha]);
+    await git(source, ["checkout", "-b", "second-feature", olderBaseSha]);
+    const secondHeadSha = await commitFile(source, "src/second.ts", "second\n", "second feature");
+    await git(source, ["update-ref", "refs/pull/2/head", secondHeadSha]);
+    await git(source, ["checkout", "develop"]);
+
+    await git(root, ["clone", "--bare", "--no-tags", source, cache]);
+    await ensureFullCommitHistory(cache);
+
+    const firstInput: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha: newerBaseSha,
+      headSha: firstHeadSha,
+      baseRef: "develop",
+      headRef: "first-feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/first.ts"],
+    };
+    const secondInput: PreparePrCheckoutInput = {
+      ...firstInput,
+      number: 2,
+      prUrl: "https://github.com/owner/repo/pull/2",
+      baseSha: olderBaseSha,
+      headSha: secondHeadSha,
+      headRef: "second-feature",
+      files: ["src/second.ts"],
+    };
+
+    await ensureBaseRef(cache, firstInput);
+    await fetchPullHeadBranch(cache, firstInput, "pr-1");
+    await ensureReviewHistory(cache, firstInput);
+
+    // The second review's base is already in the first review's history.
+    await ensureBaseRef(cache, secondInput);
+    await fetchPullHeadBranch(cache, secondInput, "pr-2");
+    await ensureReviewHistory(cache, secondInput);
+
+    assert.equal(await isShallow(cache), false);
+    assert.equal(
+      await git(cache, ["merge-base", reviewBaseRef(firstInput), firstHeadSha]),
+      mergeBaseSha,
+    );
+    assert.equal(
+      await git(cache, ["merge-base", reviewBaseRef(secondInput), secondHeadSha]),
+      olderBaseSha,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
