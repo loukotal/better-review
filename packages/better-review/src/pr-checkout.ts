@@ -350,6 +350,19 @@ async function refMatchesCommit(
   return result.exitCode === 0 && result.stdout.trim() === commitSha;
 }
 
+export function preparedWorktreePath(
+  input: Pick<PreparePrCheckoutInput, "owner" | "repo" | "number" | "headSha">,
+): string {
+  return join(
+    STORE_BASE_DIR,
+    "worktrees",
+    "github",
+    safePathPart(input.owner),
+    safePathPart(input.repo),
+    `pr-${input.number}-${input.headSha.slice(0, 12)}`,
+  );
+}
+
 function localPrBranchName(input: PreparePrCheckoutInput): string {
   return safePathPart(`pr-${input.number}-${input.headRef}-${input.headSha.slice(0, 12)}`);
 }
@@ -998,17 +1011,14 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
 
       return Effect.tryPromise({
         try: async () => {
-          const owner = safePathPart(input.owner);
-          const repo = safePathPart(input.repo);
-          const repoGitDir = join(STORE_BASE_DIR, "git-cache", "github", owner, `${repo}.git`);
-          const worktreePath = join(
+          const repoGitDir = join(
             STORE_BASE_DIR,
-            "worktrees",
+            "git-cache",
             "github",
-            owner,
-            repo,
-            `pr-${input.number}-${input.headSha.slice(0, 12)}`,
+            safePathPart(input.owner),
+            `${safePathPart(input.repo)}.git`,
           );
+          const worktreePath = preparedWorktreePath(input);
 
           return await withRepoGitQueue(repoGitDir, async (queue) => {
             trace.push({
