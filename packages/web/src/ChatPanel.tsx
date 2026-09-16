@@ -190,16 +190,30 @@ export function ChatPanel(props: ChatPanelProps) {
 
   let sessionInitializationVersion = 0;
 
-  // Initialize session when PR changes
-  createEffect(() => {
-    const prUrl = props.prUrl;
-    const prNumber = props.prNumber;
-    const repoOwner = props.repoOwner;
-    const repoName = props.repoName;
+  // Parent props are recreated when cached PR data is refreshed; compare the values so an
+  // unchanged PR does not initialize its session again.
+  const sessionTarget = createMemo(() =>
+    props.prUrl && props.prNumber && props.repoOwner && props.repoName
+      ? [
+          props.prUrl,
+          props.prNumber,
+          props.repoOwner,
+          props.repoName,
+          props.initialSessionId ?? "",
+          props.reviewMode ?? "full",
+          props.commitSha ?? "",
+        ].join("\n")
+      : null,
+  );
 
-    if (prUrl && prNumber && repoOwner && repoName) {
-      initSession();
-    } else {
+  // Initialize session when PR changes
+  createEffect(
+    on(sessionTarget, (target) => {
+      if (target) {
+        initSession();
+        return;
+      }
+
       sessionInitializationVersion++;
       setSessionId(null);
       setSessions([]);
@@ -207,8 +221,8 @@ export function ChatPanel(props: ChatPanelProps) {
       chat.clearMessages();
       setSessionError(null);
       setScopeSessionKey(null);
-    }
-  });
+    }),
+  );
 
   createEffect(() => {
     const prUrl = props.prUrl;
