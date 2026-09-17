@@ -19,6 +19,7 @@ import { CheckIcon } from "../icons/check-icon";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CircleIcon } from "../icons/circle-icon";
 import { fetchFileContentCached } from "../lib/query";
+import { formatAnnotationForComment } from "../utils/formatAnnotationForClipboard";
 import type { Annotation } from "../utils/parseReviewTokens";
 import {
   FocusableFileDiff,
@@ -678,12 +679,11 @@ export function FileDiffView(props: FileDiffViewProps) {
             annotation: metadata.annotation,
             onDismiss: props.onDismissAiAnnotation,
             onCreateComment: (annotation) => {
-              const body = `[AI][${annotation.severity}]: ${annotation.message}`;
               setPendingComment({
                 startLine: annotation.line,
                 endLine: annotation.line,
                 side: "RIGHT",
-                initialBody: body,
+                initialBody: formatAnnotationForComment(annotation),
               });
               setTimeout(rerender, 0);
             },

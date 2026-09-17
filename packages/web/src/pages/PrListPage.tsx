@@ -441,6 +441,14 @@ const PrListPage: Component = () => {
                         <span class="hidden w-28 shrink-0 truncate text-xs text-text-muted md:block">
                           @{pr.author.login}
                         </span>
+                        <span
+                          class="flex w-20 shrink-0 items-center justify-end gap-1.5 font-mono text-xs tabular-nums"
+                          title={`${pr.additions} added, ${pr.deletions} removed`}
+                          aria-label={`${pr.additions} lines added, ${pr.deletions} lines removed`}
+                        >
+                          <span class="text-success">+{pr.additions}</span>
+                          <span class="text-error">−{pr.deletions}</span>
+                        </span>
                         <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint sm:block">
                           {formatRelativeTime(pr.createdAt)}
                         </span>
