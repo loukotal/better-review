@@ -315,7 +315,7 @@ export function ModelSelector(props: ModelSelectorProps) {
                   aria-pressed={isSelected()}
                   type="button"
                   onClick={() => handleSelect(model)}
-                  class="w-full px-3 py-1.5 text-left text-sm hover:bg-bg-elevated transition-colors flex flex-col gap-0.5"
+                  class="w-full items-start px-3 py-1.5 text-left text-sm hover:bg-bg-elevated transition-colors flex flex-col gap-0.5"
                   classList={{ "bg-bg-elevated": isSelected() }}
                 >
                   <span class="text-text font-medium truncate">{model.modelId}</span>
