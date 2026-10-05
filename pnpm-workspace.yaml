@@ -1,6 +1,10 @@
 packages:
   - "packages/*"
 overrides:
+  # Flue and the app must share one provider contract and model catalog.
+  "@earendil-works/pi-ai": "1.0.3"
+  # agents uses Babel 7 core; its decorators range also admits Babel 8.
+  "agents@0.20.1>@babel/plugin-proposal-decorators": "7.29.7"
   picomatch: "4.0.4"
   rollup: "4.59.0"
   semver: "7.7.4"
