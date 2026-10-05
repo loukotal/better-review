@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import type { Provider } from "@earendil-works/pi-ai";
+import { normalizeContext, type Provider } from "@earendil-works/pi-ai";
 import { findEnvKeys } from "@earendil-works/pi-ai/compat";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
@@ -93,16 +93,26 @@ function withStoredCredential(provider: Provider, token: string): Provider {
 }
 
 function withReviewTransport(provider: Provider): Provider {
-  if (provider.id !== "openai-codex") return provider;
-
   // Codex's automatic SSE fallback only handles failures before streaming
   // starts. A later WebSocket drop aborts the entire review submission.
   return {
     ...provider,
+    // Flue 2 supplies the legacy Context shape; pi-ai 1 expects system prompts
+    // and tools folded into the transcript before entering a provider.
     stream: (model, context, options) =>
-      provider.stream(model, context, Object.assign({}, options, { transport: "sse" as const })),
+      provider.stream(
+        model,
+        normalizeContext(context),
+        provider.id === "openai-codex"
+          ? Object.assign({}, options, { transport: "sse" as const })
+          : options,
+      ),
     streamSimple: (model, context, options) =>
-      provider.streamSimple(model, context, { ...options, transport: "sse" }),
+      provider.streamSimple(
+        model,
+        normalizeContext(context),
+        provider.id === "openai-codex" ? { ...options, transport: "sse" } : options,
+      ),
   };
 }
 

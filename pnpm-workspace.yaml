@@ -12,8 +12,10 @@ cleanupUnusedCatalogs: true
 strictDepBuilds: true
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  - "@anthropic-ai/sdk@0.129.0"
   - "@earendil-works/pi-agent-core"
   - "@earendil-works/pi-ai"
+  - "@earendil-works/pi-telemetry@1.0.2"
   - "@flue/cli@2.0.3"
   - "@flue/runtime@2.0.3"
   - "@flue/sdk@2.0.3"
