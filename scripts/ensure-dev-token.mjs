@@ -3,7 +3,11 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const tokenFile = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".better-review-api-token");
+const tokenFile = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  ".better-review-api-token",
+);
 const envToken = process.env.BETTER_REVIEW_API_TOKEN?.trim();
 
 if (existsSync(tokenFile)) {

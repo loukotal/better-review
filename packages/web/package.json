@@ -15,7 +15,7 @@
     "@better-review/shared": "workspace:*",
     "@flue/sdk": "2.1.1",
     "@pierre/diffs": "1.1.22",
-    "@solidjs/router": "0.16.1",
+    "@solidjs/router": "1.0.0",
     "@tanstack/query-persist-client-core": "5.104.0",
     "@tanstack/solid-query": "5.104.0",
     "@trpc/client": "11.19.0",
@@ -33,7 +33,7 @@
     "@tailwindcss/vite": "4.3.3",
     "better-review": "workspace:*",
     "tailwindcss": "4.3.3",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "vite": "8.3.1",
     "vite-plugin-solid": "2.11.14",
     "vitefu": "1.1.3"

@@ -13,7 +13,7 @@ import {
   type SandboxDriver,
   type SandboxFactory,
 } from "@flue/runtime";
-import { isInstalled, Sandbox as MicroVm } from "microsandbox";
+import { isRuntimeInstalled, Sandbox as MicroVm, type SandboxHandle } from "microsandbox";
 
 import type { FlueReviewSession } from "../flue-review-sessions";
 import { readFlueReviewSession } from "../flue-review-sessions";
@@ -55,7 +55,7 @@ const entries = new Map<string, PoolEntry>();
 const creating = new Map<string, Promise<PoolEntry>>();
 
 function assertMicrosandboxInstalled(): void {
-  if (!isInstalled()) {
+  if (!isRuntimeInstalled()) {
     throw new Error(
       "Microsandbox runtime is not installed. Run `pnpm setup:microsandbox` once on this machine.",
     );
@@ -395,15 +395,30 @@ export async function endMicrosandboxSubmission(sandbox: FlueSandbox): Promise<v
   await (sandbox as SubmissionSandbox).endSubmission();
 }
 
-async function removeHandle(handle: Awaited<ReturnType<typeof MicroVm.list>>[number]) {
+async function removeHandle(handle: SandboxHandle) {
   await handle.killWithTimeout(5_000).catch(() => undefined);
   await handle.remove();
 }
 
+async function removeMatchingMicrosandboxes(labels: Record<string, string>): Promise<void> {
+  const handles: SandboxHandle[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await MicroVm.listWith((list) => {
+      list.labels(labels);
+      return cursor ? list.cursor(cursor) : list;
+    });
+    handles.push(...page.sandboxes);
+    cursor = page.nextCursor;
+  } while (cursor);
+
+  // Finish pagination before deleting records so cleanup cannot skip a page.
+  await Promise.all(handles.map(removeHandle));
+}
+
 export async function cleanupOrphanedMicrosandboxes(): Promise<void> {
   assertMicrosandboxInstalled();
-  const handles = await MicroVm.listWith({ labels: { [OWNER_LABEL]: "1" } });
-  await Promise.all(handles.map(removeHandle));
+  await removeMatchingMicrosandboxes({ [OWNER_LABEL]: "1" });
   entries.clear();
   creating.clear();
 }
@@ -411,10 +426,7 @@ export async function cleanupOrphanedMicrosandboxes(): Promise<void> {
 export async function removeMicrosandboxForWorktree(worktreePath: string): Promise<void> {
   const canonicalPath = await realpath(worktreePath).catch(() => path.resolve(worktreePath));
   const label = worktreeLabel(canonicalPath);
-  const handles = await MicroVm.listWith({
-    labels: { [OWNER_LABEL]: "1", [WORKTREE_LABEL]: label },
-  });
-  await Promise.all(handles.map(removeHandle));
+  await removeMatchingMicrosandboxes({ [OWNER_LABEL]: "1", [WORKTREE_LABEL]: label });
   for (const [name, entry] of entries) {
     if (worktreeLabel(entry.identity.worktreePath) === label) entries.delete(name);
   }

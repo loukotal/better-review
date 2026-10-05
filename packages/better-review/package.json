@@ -20,7 +20,7 @@
     "@trpc/server": "11.19.0",
     "effect": "3.22.2",
     "hono": "4.13.10",
-    "microsandbox": "0.6.7",
+    "microsandbox": "0.7.4",
     "superjson": "2.2.6",
     "valibot": "^1.5.0",
     "zod": "4.6.5"

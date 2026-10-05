@@ -91,7 +91,7 @@ for (const method of ["stream", "streamSimple"] as const) {
       },
     }).result();
 
-    assert.equal(result.stopReason, "stop", result.errorMessage);
+    assert.equal(result.stopReason, "stop", result.errorMessage ?? "Codex stream did not stop");
     assert.ok(result.content.some((part) => part.type === "text" && part.text === "OK"));
     assert.equal(httpRequests, 1);
     assert.equal(socketsCreated, 0);

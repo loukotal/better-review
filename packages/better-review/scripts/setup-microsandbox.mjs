@@ -1,8 +1,4 @@
-import { install, isInstalled } from "microsandbox";
+import { ensureRuntime } from "microsandbox";
 
-if (isInstalled()) {
-  console.log("Microsandbox runtime is already installed.");
-} else {
-  await install();
-  console.log("Microsandbox runtime installed.");
-}
+const runtime = await ensureRuntime();
+console.log(`Microsandbox runtime ready (${runtime.origin}): ${runtime.msbPath}`);
