@@ -10,6 +10,7 @@ import {
   type DiffLineAnnotation,
   type FileDiffOptions,
 } from "@pierre/diffs";
+import type { WorkerPoolManager } from "@pierre/diffs/worker";
 import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "solid-js";
 
 import { renderAiAnnotation } from "../components/AiAnnotationInline";
@@ -83,6 +84,7 @@ interface FileDiffViewProps {
   /** PR URL fallback for fetching full file contents (for expanding unchanged lines) */
   prUrl?: string | null;
   virtualizer: Virtualizer;
+  workerPool: WorkerPoolManager;
   scrollContainer?: HTMLElement;
   activeSearchMatch?: { line: number; side: "LEFT" | "RIGHT"; query: string };
   readOnly?: boolean;
@@ -722,8 +724,8 @@ export function FileDiffView(props: FileDiffViewProps) {
       onPostRender: () => highlightSearchMatch(),
     };
     instance = nonVirtualized
-      ? new FocusableFileDiff(options)
-      : new FocusableVirtualizedFileDiff(options, props.virtualizer);
+      ? new FocusableFileDiff(options, props.workerPool)
+      : new FocusableVirtualizedFileDiff(options, props.virtualizer, undefined, props.workerPool);
     for (const [index, region] of expandedHunks) {
       instance.getExpandedHunks().set(index, region);
     }

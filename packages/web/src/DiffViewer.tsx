@@ -1,4 +1,5 @@
 import { parsePatchFiles, SVGSpriteSheet, Virtualizer, type FileDiffMetadata } from "@pierre/diffs";
+import { WorkerPoolManager } from "@pierre/diffs/worker";
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import { TextInput } from "./design-system";
@@ -63,6 +64,21 @@ export function DiffViewer(props: Props) {
   let searchInputRef: HTMLInputElement | undefined;
   let toolbarRef: HTMLDivElement | undefined;
   const virtualizer = new Virtualizer();
+  // Share highlighting workers across files; render plain lines while they work.
+  const workerPool = new WorkerPoolManager(
+    {
+      workerFactory: () =>
+        new Worker(new URL("./diff/highlight-worker.ts", import.meta.url), { type: "module" }),
+      poolSize: Math.min(4, Math.max(1, (navigator.hardwareConcurrency ?? 2) - 1)),
+    },
+    { theme: props.settings.theme, lineDiffType: props.settings.lineDiffType },
+  );
+  createEffect(() => {
+    void workerPool.setRenderOptions({
+      theme: props.settings.theme,
+      lineDiffType: props.settings.lineDiffType,
+    });
+  });
   const [searchQuery, setSearchQuery] = createSignal("");
   const [selectedMatch, setSelectedMatch] = createSignal(-1);
   const [toolbarHeight, setToolbarHeight] = createSignal(0);
@@ -79,7 +95,10 @@ export function DiffViewer(props: Props) {
     onCleanup(() => observer.disconnect());
   });
 
-  onCleanup(() => virtualizer.cleanUp());
+  onCleanup(() => {
+    virtualizer.cleanUp();
+    workerPool.terminate();
+  });
 
   // Parse files from diff
   const parsedFiles = createMemo(() => {
@@ -303,6 +322,7 @@ export function DiffViewer(props: Props) {
                 }}
               >
                 <FileDiffView
+                  workerPool={workerPool}
                   file={file}
                   comments={commentsByFile().get(file.name) ?? []}
                   aiAnnotations={aiAnnotationsByFile().get(file.name) ?? []}
