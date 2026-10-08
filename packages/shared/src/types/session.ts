@@ -34,6 +34,7 @@ export interface ReviewSessionDiffVariant {
   description?: string;
   rawPatch: string;
   contentSource?:
+    | { kind: "working-tree"; baseSha: string }
     | { kind: "unstaged"; headSha?: string | null }
     | { kind: "staged"; headSha?: string | null }
     | { kind: "commit"; baseSha: string; headSha: string }

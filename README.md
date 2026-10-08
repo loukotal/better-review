@@ -114,6 +114,19 @@ The CLI creates or opens a browser session at `/agent-review/:sessionId`, waits 
 request for changes, and writes structured JSON to stdout. The result includes
 `feedbackMarkdown` and an `agentMessage` ready to return to the calling agent.
 
+Diff reviews default to branch commits plus staged and unstaged changes, compared with the merge
+base. Base detection prefers `origin/develop`, `develop`, then remote/local `main` and `master`.
+Without a base, the default includes only uncommitted changes. Override with `--scope` or `--base`:
+
+```sh
+better-review review --scope staged
+better-review review --scope uncommitted
+better-review review --scope branch --base origin/develop
+```
+
+Scopes: `all` (default), `uncommitted`, `unstaged`, `staged`, `last-commit`, `branch`.
+The review UI also lets you switch scopes.
+
 ### Install the local command
 
 To expose `better-review` on this machine for other repositories and plugins:

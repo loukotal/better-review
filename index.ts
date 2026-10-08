@@ -23,6 +23,8 @@ interface CliOptions {
   cwd?: string;
   repoRoot?: string;
   label?: string;
+  scope?: string;
+  base?: string;
   apiUrl: string;
   webUrl: string;
   apiToken?: string;
@@ -53,6 +55,8 @@ Options:
   --cwd <path>           Override cwd metadata
   --repo-root <path>     Override repo root metadata
   --label <text>         Label for diff payloads
+  --scope <scope>        all (default), uncommitted, unstaged, staged, last-commit, branch
+  --base <ref>           Override branch base (default: develop, main, or master)
   --api-url <url>        API base URL (default: http://127.0.0.1:3001)
   --web-url <url>        Web base URL (default: http://127.0.0.1:3000)
   --api-token <token>    API token (default: BETTER_REVIEW_API_TOKEN)
@@ -67,6 +71,8 @@ Examples:
   better-review plan < AGENT_REVIEW_PLAN.md
   better-review last --file message.md
   better-review review
+  better-review review --scope staged
+  better-review review --scope all --base origin/develop
   better-review open-session 1234-5678 --web-url http://127.0.0.1:3001`);
 }
 
@@ -197,11 +203,45 @@ async function resolveMergeBaseSha(cwd: string, left: string, right: string): Pr
   return stdout.trim();
 }
 
-async function buildDiffVariants(cwd: string): Promise<ReviewSessionDiffVariant[]> {
+async function buildDiffVariants(cwd: string, base?: string): Promise<ReviewSessionDiffVariant[]> {
   const headExists = await hasHeadCommit(cwd);
   const headSha = headExists ? await resolveCommitSha(cwd, "HEAD") : null;
+  const baseRef =
+    base ??
+    (await resolvePreferredBaseRef(cwd, [
+      "origin/develop",
+      "develop",
+      "origin/main",
+      "main",
+      "origin/master",
+      "master",
+      "origin/HEAD",
+    ]));
+  if (base && !(await gitRefExists(cwd, base))) {
+    throw new Error(`Unknown review base: ${base}`);
+  }
+  const uncommittedBaseSha = headSha ?? (await getEmptyTreeSha(cwd));
+  const baseSha =
+    headSha && baseRef ? await resolveMergeBaseSha(cwd, baseRef, headSha) : uncommittedBaseSha;
 
   const variants: ReviewSessionDiffVariant[] = [
+    {
+      id: "all",
+      label: baseRef && headSha ? `Branch + uncommitted vs ${baseRef}` : "Uncommitted changes",
+      description:
+        baseRef && headSha
+          ? `Branch commits, staged and unstaged changes from the merge base with ${baseRef}`
+          : "Staged and unstaged changes; no branch base available",
+      rawPatch: await getGitDiff(cwd, [baseSha, "--"]),
+      contentSource: { kind: "working-tree", baseSha },
+    },
+    {
+      id: "uncommitted",
+      label: "Uncommitted changes",
+      description: "Staged and unstaged changes",
+      rawPatch: await getGitDiff(cwd, [uncommittedBaseSha, "--"]),
+      contentSource: { kind: "working-tree", baseSha: uncommittedBaseSha },
+    },
     {
       id: "unstaged",
       label: "Unstaged changes",
@@ -219,18 +259,29 @@ async function buildDiffVariants(cwd: string): Promise<ReviewSessionDiffVariant[
   ];
 
   if (headExists && headSha) {
+    if (baseRef) {
+      variants.push({
+        id: "branch",
+        label: `Branch vs ${baseRef}`,
+        description: `git diff ${baseRef}...HEAD`,
+        rawPatch: await getGitDiff(cwd, [baseSha, headSha, "--"]),
+        contentSource: { kind: "git-refs", baseSha, headSha },
+      });
+    }
     const hasParent = await hasParentCommit(cwd);
-    const baseSha = hasParent ? await resolveCommitSha(cwd, "HEAD^") : await getEmptyTreeSha(cwd);
+    const parentBaseSha = hasParent
+      ? await resolveCommitSha(cwd, "HEAD^")
+      : await getEmptyTreeSha(cwd);
     const lastCommitRawPatch = hasParent
       ? await getGitDiff(cwd, ["HEAD^..HEAD"])
-      : await getGitDiff(cwd, [`${baseSha}..HEAD`]);
+      : await getGitDiff(cwd, [`${parentBaseSha}..HEAD`]);
 
     variants.push({
       id: "last-commit",
       label: "Latest commit",
       description: hasParent ? "git diff HEAD^..HEAD" : "git diff <empty-tree>..HEAD",
       rawPatch: lastCommitRawPatch,
-      contentSource: { kind: "commit", baseSha, headSha },
+      contentSource: { kind: "commit", baseSha: parentBaseSha, headSha },
     });
 
     for (const [baseName, candidates] of [
@@ -273,6 +324,7 @@ function buildPayload(
   content: string,
   label?: string,
   diffVariants?: ReviewSessionDiffVariant[],
+  selectedVariantId?: string,
 ): ReviewSessionPayload {
   if (mode === "plan") {
     return { kind: "markdown", content };
@@ -281,7 +333,7 @@ function buildPayload(
     return { kind: "message", content };
   }
 
-  const selectedVariant = diffVariants?.find((variant) => variant.rawPatch === content);
+  const selectedVariant = diffVariants?.find((variant) => variant.id === selectedVariantId);
 
   return {
     kind: "diff",
@@ -447,6 +499,23 @@ function parseArgs(argv: string[]): {
         options.label = next;
         i += 1;
         break;
+      case "--scope":
+        if (
+          !next ||
+          !["all", "uncommitted", "unstaged", "staged", "last-commit", "branch"].includes(next)
+        ) {
+          throw new Error(
+            "Invalid review scope. Use all, uncommitted, unstaged, staged, last-commit, or branch.",
+          );
+        }
+        options.scope = next;
+        i += 1;
+        break;
+      case "--base":
+        if (!next || next.startsWith("--")) throw new Error("Missing review base ref");
+        options.base = next;
+        i += 1;
+        break;
       case "--api-url":
         options.apiUrl = normalizeBaseUrl(next ?? options.apiUrl);
         i += 1;
@@ -521,18 +590,20 @@ async function handleCreateCommand(mode: ReviewMode, options: CliOptions): Promi
 
   let content: string;
   let diffVariants: ReviewSessionDiffVariant[] | undefined;
+  let selectedVariantId: string | undefined;
 
   if (mode === "diff") {
     if (options.file) {
       content = await readInput(options.file);
     } else {
-      diffVariants = await buildDiffVariants(cwd);
-      const selectedVariant = diffVariants.find((variant) => variant.rawPatch.trim().length > 0);
+      diffVariants = await buildDiffVariants(cwd, options.base);
+      const selectedVariant = diffVariants.find(
+        (variant) => variant.id === (options.scope ?? "all"),
+      );
       if (!selectedVariant) {
-        throw new Error(
-          "No diff content found for unstaged, staged, latest commit, or branch comparisons",
-        );
+        throw new Error(`Review scope ${options.scope ?? "all"} is unavailable in this repository`);
       }
+      selectedVariantId = selectedVariant.id;
       content = selectedVariant.rawPatch;
       options.label = selectedVariant.label;
     }
@@ -552,7 +623,7 @@ async function handleCreateCommand(mode: ReviewMode, options: CliOptions): Promi
     title: options.title ?? buildDefaultTitle(mode, cwd),
     cwd,
     repoRoot,
-    payload: buildPayload(mode, content, options.label, diffVariants),
+    payload: buildPayload(mode, content, options.label, diffVariants, selectedVariantId),
     returnChannel: {
       type: "stdout",
     },

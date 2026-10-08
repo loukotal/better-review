@@ -916,6 +916,15 @@ ${fileStats.join("\n")}`;
             (rangeVariant ? { kind: "git-refs" as const, ...rangeVariant } : undefined);
 
           if (repoRoot && contentSource) {
+            if (contentSource.kind === "working-tree") {
+              const [oldContent, newContent] = await Promise.all([
+                gitShowFile(repoRoot, contentSource.baseSha, prevPath ?? filePath),
+                readWorkingTreeFile(repoRoot, filePath),
+              ]);
+              if (oldContent !== null || newContent !== null) {
+                return Response.json({ oldContent, newContent, source: "local-working-tree" });
+              }
+            }
             if (contentSource.kind === "unstaged") {
               const [oldContent, newContent] = await Promise.all([
                 gitShowIndexFile(repoRoot, prevPath ?? filePath),

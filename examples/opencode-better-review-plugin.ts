@@ -4,6 +4,11 @@ import { tool, type Plugin } from "@opencode-ai/plugin";
 
 type PluginClient = Parameters<Plugin>[0]["client"];
 
+type ReviewOptions = {
+  scope?: "all" | "uncommitted" | "unstaged" | "staged" | "last-commit" | "branch";
+  base?: string;
+};
+
 type ReviewResult = {
   approved: boolean;
   feedback: string;
@@ -24,11 +29,19 @@ async function runBetterReview(
   command: "plan" | "last" | "review",
   inputText?: string,
   title?: string,
+  reviewOptions?: ReviewOptions,
 ): Promise<ReviewResult> {
-  const args = [command];
+  const args: string[] = [command];
 
   if (title?.trim()) {
     args.push("--title", title.trim());
+  }
+
+  if (command === "review") {
+    args.push("--scope", reviewOptions?.scope ?? "all");
+    if (reviewOptions?.base?.trim()) {
+      args.push("--base", reviewOptions.base.trim());
+    }
   }
 
   return await new Promise((resolve, reject) => {
@@ -219,12 +232,27 @@ export const BetterReviewPlugin: Plugin = async ({ client }) => {
 
       review_working_diff: tool({
         description:
-          "Open better-review for the current repo, let the reviewer choose the diff scope, then post the reviewed result back into the chat as a user message.",
+          "Open better-review for the current repo. By default, review branch commits against the base plus staged and unstaged changes. Override scope or base as needed, then post the reviewed result back into the chat as a user message.",
         args: {
           title: tool.schema.string().optional(),
+          scope: tool.schema
+            .enum(["all", "uncommitted", "unstaged", "staged", "last-commit", "branch"])
+            .optional()
+            .describe(
+              "Diff scope: all (default) combines branch commits against the base with staged and unstaged changes; uncommitted includes staged and unstaged changes; unstaged, staged, last-commit, or branch limits the review to that scope.",
+            ),
+          base: tool.schema
+            .string()
+            .optional()
+            .describe(
+              "Override the base Git ref for branch comparisons (all or branch scope), e.g. main or origin/main. Omit to use the CLI's detected base.",
+            ),
         },
         async execute(args, context) {
-          const result = await runBetterReview("review", undefined, args.title);
+          const result = await runBetterReview("review", undefined, args.title, {
+            scope: args.scope,
+            base: args.base,
+          });
           const submitError = await submitReviewAsUserMessage(
             client,
             context.sessionID,

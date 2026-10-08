@@ -4,12 +4,12 @@ description: Send the current git diff to better-review
 
 Use the `review_working_diff` tool to open a better-review diff session for the current repo.
 
-In the review UI, pick the scope you want to review against, such as:
+Default to branch commits vs base plus staged and unstaged changes (`scope: "all"`).
+If the user specifies a scope or base, pass those overrides to the tool.
+Available scopes: `all`, `uncommitted`, `unstaged`, `staged`, `last-commit`, `branch`.
+The review UI also lets the user switch scopes.
 
-- unstaged changes
-- staged changes
-- latest commit
-- branch vs main / develop (when available)
+Requested scope or base: $ARGUMENTS
 
 After the tool returns:
 
