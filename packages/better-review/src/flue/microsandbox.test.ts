@@ -5,6 +5,7 @@ import test from "node:test";
 import { Sandbox as MicroVm, SandboxListBuilder, type SandboxHandle } from "microsandbox";
 
 import {
+  createSubmissionSandbox,
   microsandboxName,
   microsandboxScratchRoot,
   microsandboxSubmissionScratch,
@@ -19,6 +20,49 @@ const worktree: WorktreeIdentity = {
   headSha: "abc123",
   worktreePath: "/reviews/acme/app/pr-42-abc123",
 };
+
+test("cached conversations resume a stopped shared VM before resetting scratch", async (t) => {
+  const name = microsandboxName(worktree);
+  const staleFs = {
+    exists: async () => {
+      throw new Error(`sandbox "${name}" has no agent endpoint (is it running?)`);
+    },
+  };
+  const staleVm = { name, fs: () => staleFs } as unknown as MicroVm;
+  const commands: string[] = [];
+  const resumedVm = {
+    name,
+    fs: () => ({ exists: async () => false }),
+    exec: async (command: string) => {
+      commands.push(command);
+      return { code: 0 };
+    },
+  } as unknown as MicroVm;
+  let status = "stopped";
+  t.mock.method(MicroVm, "get", async () => ({ status }));
+  const start = t.mock.method(MicroVm, "startDetached", async (requestedName: string) => {
+    assert.equal(requestedName, name);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    status = "running";
+    return resumedVm;
+  });
+  const entry = {
+    vm: staleVm,
+    identity: worktree,
+    gitRoot: "/reviews/cache/app.git",
+    conversationUids: new Map<string, number>(),
+    nextUid: 10_000,
+  };
+  const first = createSubmissionSandbox(entry, "first");
+  const second = createSubmissionSandbox(entry, "second");
+  await Promise.all([first.beginSubmission(), second.beginSubmission()]);
+  assert.equal(start.mock.callCount(), 1);
+  assert.equal(entry.vm, resumedVm);
+  assert.equal(commands.filter((command) => command === "mkdir").length, 2);
+  await first.endSubmission();
+  await first.beginSubmission();
+  assert.equal(start.mock.callCount(), 1);
+});
 
 test("conversations for one stable worktree map to the same microVM", () => {
   assert.equal(microsandboxName(worktree), microsandboxName({ ...worktree }));

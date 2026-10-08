@@ -49,6 +49,7 @@ interface PoolEntry {
   gitRoot: string;
   conversationUids: Map<string, number>;
   nextUid: number;
+  resuming?: Promise<void>;
 }
 
 const entries = new Map<string, PoolEntry>();
@@ -189,6 +190,22 @@ async function createPoolEntry(session: FlueReviewSession): Promise<PoolEntry> {
   }
 }
 
+async function ensurePoolEntryRunning(entry: PoolEntry): Promise<void> {
+  if (entry.resuming) return entry.resuming;
+  const resuming = (async () => {
+    const handle = await MicroVm.get(entry.vm.name);
+    if (handle.status === "stopped") {
+      entry.vm = await MicroVm.startDetached(entry.vm.name);
+    }
+  })();
+  entry.resuming = resuming;
+  try {
+    await resuming;
+  } finally {
+    entry.resuming = undefined;
+  }
+}
+
 function resolveGuestPath(cwd: string, value: string): string {
   return path.isAbsolute(value) ? path.normalize(value) : path.resolve(cwd, value);
 }
@@ -203,9 +220,13 @@ function toFileStat(metadata: Awaited<ReturnType<ReturnType<MicroVm["fs"]>["stat
   };
 }
 
-function createSubmissionSandbox(entry: PoolEntry, conversationId: string): SubmissionSandbox {
-  const { vm, identity } = entry;
-  const fs = vm.fs();
+export function createSubmissionSandbox(
+  entry: PoolEntry,
+  conversationId: string,
+): SubmissionSandbox {
+  const { identity } = entry;
+  let vm = entry.vm;
+  let fs = vm.fs();
   const baseScratch = microsandboxScratchRoot(conversationId);
   const uid = entry.conversationUids.get(conversationId) ?? entry.nextUid++;
   entry.conversationUids.set(conversationId, uid);
@@ -366,7 +387,12 @@ function createSubmissionSandbox(entry: PoolEntry, conversationId: string): Subm
   };
 
   const sandbox = sandboxFromDriver(driver, identity.worktreePath) as SubmissionSandbox;
-  sandbox.beginSubmission = resetScratch;
+  sandbox.beginSubmission = async () => {
+    await ensurePoolEntryRunning(entry);
+    vm = entry.vm;
+    fs = vm.fs();
+    await resetScratch();
+  };
   sandbox.endSubmission = resetScratch;
   return sandbox;
 }
