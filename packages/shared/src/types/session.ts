@@ -32,6 +32,10 @@ export interface ReviewSessionDiffVariant {
   id: string;
   label: string;
   description?: string;
+  baseRef?: string;
+  commit?: { sha: string; message: string };
+  /** Commits included in this comparison, newest first. */
+  commits?: Array<{ sha: string; message: string }>;
   rawPatch: string;
   contentSource?:
     | { kind: "working-tree"; baseSha: string }
@@ -64,6 +68,8 @@ export interface ReviewSession {
   title: string;
   cwd?: string;
   repoRoot?: string;
+  /** Branch at creation time; null denotes a detached HEAD. */
+  branch?: string | null;
   createdAt: number;
   status: ReviewSessionStatus;
   payload: ReviewSessionPayload;

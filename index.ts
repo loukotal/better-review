@@ -203,6 +203,26 @@ async function resolveMergeBaseSha(cwd: string, left: string, right: string): Pr
   return stdout.trim();
 }
 
+async function getCommitsInRange(
+  cwd: string,
+  baseSha: string,
+  headSha: string,
+): Promise<NonNullable<ReviewSessionDiffVariant["commits"]>> {
+  const { stdout, stderr, exitCode } = await runGit(cwd, [
+    "log",
+    "--format=%H%x00%B%x00",
+    `${baseSha}..${headSha}`,
+    "--",
+  ]);
+  if (exitCode !== 0) throw new Error(stderr.trim() || "git log failed");
+  const fields = stdout.split("\0");
+  const commits: NonNullable<ReviewSessionDiffVariant["commits"]> = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    commits.push({ sha: fields[index]!.trim(), message: fields[index + 1]!.trim() });
+  }
+  return commits;
+}
+
 async function buildDiffVariants(cwd: string, base?: string): Promise<ReviewSessionDiffVariant[]> {
   const headExists = await hasHeadCommit(cwd);
   const headSha = headExists ? await resolveCommitSha(cwd, "HEAD") : null;
@@ -223,6 +243,7 @@ async function buildDiffVariants(cwd: string, base?: string): Promise<ReviewSess
   const uncommittedBaseSha = headSha ?? (await getEmptyTreeSha(cwd));
   const baseSha =
     headSha && baseRef ? await resolveMergeBaseSha(cwd, baseRef, headSha) : uncommittedBaseSha;
+  const branchCommits = headSha && baseRef ? await getCommitsInRange(cwd, baseSha, headSha) : [];
 
   const variants: ReviewSessionDiffVariant[] = [
     {
@@ -234,6 +255,8 @@ async function buildDiffVariants(cwd: string, base?: string): Promise<ReviewSess
           : "Staged and unstaged changes; no branch base available",
       rawPatch: await getGitDiff(cwd, [baseSha, "--"]),
       contentSource: { kind: "working-tree", baseSha },
+      baseRef: headSha ? baseRef : undefined,
+      commits: branchCommits,
     },
     {
       id: "uncommitted",
@@ -266,6 +289,8 @@ async function buildDiffVariants(cwd: string, base?: string): Promise<ReviewSess
         description: `git diff ${baseRef}...HEAD`,
         rawPatch: await getGitDiff(cwd, [baseSha, headSha, "--"]),
         contentSource: { kind: "git-refs", baseSha, headSha },
+        baseRef,
+        commits: branchCommits,
       });
     }
     const hasParent = await hasParentCommit(cwd);
@@ -282,6 +307,10 @@ async function buildDiffVariants(cwd: string, base?: string): Promise<ReviewSess
       description: hasParent ? "git diff HEAD^..HEAD" : "git diff <empty-tree>..HEAD",
       rawPatch: lastCommitRawPatch,
       contentSource: { kind: "commit", baseSha: parentBaseSha, headSha },
+      commit: {
+        sha: headSha,
+        message: (await runGit(cwd, ["log", "-1", "--format=%B", headSha])).stdout.trim(),
+      },
     });
 
     for (const [baseName, candidates] of [
@@ -297,6 +326,8 @@ async function buildDiffVariants(cwd: string, base?: string): Promise<ReviewSess
         description: `git diff ${baseRef}...HEAD`,
         rawPatch: await getGitDiff(cwd, [`${baseRef}...HEAD`]),
         contentSource: { kind: "git-refs", baseSha: mergeBaseSha, headSha },
+        baseRef,
+        commits: await getCommitsInRange(cwd, mergeBaseSha, headSha),
       });
     }
   }
@@ -587,6 +618,9 @@ function toCliOutput(session: ReviewSession, result: ReviewSessionResult): CliRe
 async function handleCreateCommand(mode: ReviewMode, options: CliOptions): Promise<void> {
   const cwd = options.cwd ?? process.cwd();
   const repoRoot = options.repoRoot ?? (await tryGitRepoRoot(cwd));
+  const branchResult = await runGit(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const branch =
+    branchResult.exitCode === 0 ? branchResult.stdout.trim() : repoRoot ? null : undefined;
 
   let content: string;
   let diffVariants: ReviewSessionDiffVariant[] | undefined;
@@ -623,6 +657,7 @@ async function handleCreateCommand(mode: ReviewMode, options: CliOptions): Promi
     title: options.title ?? buildDefaultTitle(mode, cwd),
     cwd,
     repoRoot,
+    branch,
     payload: buildPayload(mode, content, options.label, diffVariants, selectedVariantId),
     returnChannel: {
       type: "stdout",

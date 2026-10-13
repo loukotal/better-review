@@ -24,6 +24,9 @@ const reviewSessionPayloadSchema = z.discriminatedUnion("kind", [
           id: z.string(),
           label: z.string(),
           description: z.string().optional(),
+          baseRef: z.string().optional(),
+          commit: z.object({ sha: z.string(), message: z.string() }).optional(),
+          commits: z.array(z.object({ sha: z.string(), message: z.string() })).optional(),
           rawPatch: z.string(),
         }),
       )
@@ -55,6 +58,7 @@ export const reviewSessionsRouter = router({
         title: z.string(),
         cwd: z.string().optional(),
         repoRoot: z.string().optional(),
+        branch: z.string().nullable().optional(),
         payload: reviewSessionPayloadSchema,
         returnChannel: z
           .object({

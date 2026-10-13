@@ -204,6 +204,9 @@ export default function AgentReviewIndexPage() {
                         <Badge variant={statusVariant(session.status)}>{session.status}</Badge>
                         <Badge variant="neutral">{session.mode}</Badge>
                       </div>
+                      <div class="mt-1">
+                        <AgentReviewContext session={session} />
+                      </div>
                       <div class="mt-1 flex min-w-0 items-center gap-2 text-xs text-text-faint">
                         <span class="truncate font-mono" title={session.repoRoot ?? session.cwd}>
                           {sessionScope(session)}
@@ -228,3 +231,4 @@ export default function AgentReviewIndexPage() {
     </div>
   );
 }
+import { AgentReviewContext } from "../components/AgentReviewContext";

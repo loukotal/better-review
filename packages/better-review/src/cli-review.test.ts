@@ -29,6 +29,14 @@ test("CLI defaults to branch plus working-tree changes and respects explicit sco
   await git("checkout", "-b", "feature");
   await writeFile(join(cwd, "committed.txt"), "branch change\n");
   await commit("feature change");
+  const firstFeatureSha = (await git("rev-parse", "HEAD")).stdout.trim();
+  await writeFile(join(cwd, "committed.txt"), "branch change\nsecond change\n");
+  await commit("second feature change\n\nDetails of the second change.");
+  const featureSha = (await git("rev-parse", "HEAD")).stdout.trim();
+  const expectedCommits = [
+    { sha: featureSha, message: "second feature change\n\nDetails of the second change." },
+    { sha: firstFeatureSha, message: "feature change" },
+  ];
   await git("checkout", "develop");
   await writeFile(join(cwd, "upstream-only.txt"), "not part of feature\n");
   await commit("upstream change");
@@ -78,12 +86,18 @@ test("CLI defaults to branch plus working-tree changes and respects explicit sco
     );
     const session = getCreatedSession();
     assert(session?.payload.kind === "diff");
+    assert.equal(session.branch, "feature");
     return session.payload;
   };
 
   const all = await review();
   assert.equal(all.selectedVariantId, "all");
   assert.equal(all.label, "Branch + uncommitted vs develop");
+  assert.equal(all.variants?.find((variant) => variant.id === "all")?.baseRef, "develop");
+  assert.deepEqual(all.variants?.find((variant) => variant.id === "all")?.commits, expectedCommits);
+  for (const id of ["branch", "branch-main", "branch-develop"]) {
+    assert.deepEqual(all.variants?.find((variant) => variant.id === id)?.commits, expectedCommits);
+  }
   for (const file of ["committed.txt", "staged.txt", "shared.txt"])
     assert(all.rawPatch.includes(file));
   assert(!all.rawPatch.includes("upstream-only.txt"));
@@ -97,6 +111,10 @@ test("CLI defaults to branch plus working-tree changes and respects explicit sco
   assert(staged.rawPatch.includes("staged.txt"));
   assert(!staged.rawPatch.includes("committed.txt"));
   assert(!staged.rawPatch.includes("shared.txt"));
+  assert.equal(staged.variants?.find((variant) => variant.id === "staged")?.commit, undefined);
+  for (const id of ["staged", "unstaged", "uncommitted"]) {
+    assert.equal(staged.variants?.find((variant) => variant.id === id)?.commits, undefined);
+  }
 
   const uncommitted = await review("--scope", "uncommitted");
   assert(uncommitted.rawPatch.includes("staged.txt"));
@@ -105,10 +123,23 @@ test("CLI defaults to branch plus working-tree changes and respects explicit sco
 
   const branch = await review("--scope", "branch", "--base", "main");
   assert.equal(branch.label, "Branch vs main");
+  assert.equal(branch.variants?.find((variant) => variant.id === "branch")?.baseRef, "main");
+  assert.deepEqual(
+    branch.variants?.find((variant) => variant.id === "branch")?.commits,
+    expectedCommits,
+  );
   assert(branch.rawPatch.includes("committed.txt"));
   assert(!branch.rawPatch.includes("staged.txt"));
   assert(!branch.rawPatch.includes("shared.txt"));
   await assert.rejects(review("--base", "missing-base"), /Unknown review base/);
+
+  const latest = await review("--scope", "last-commit");
+  assert.equal(latest.selectedVariantId, "last-commit");
+  assert.deepEqual(latest.variants?.find((variant) => variant.id === "last-commit")?.commit, {
+    sha: featureSha,
+    message: "second feature change\n\nDetails of the second change.",
+  });
+  assert(!latest.rawPatch.includes("staged.txt"));
 
   const unborn = await mkdtemp(join(tmpdir(), "better-review-unborn-"));
   t.after(() => rm(unborn, { recursive: true, force: true }));
@@ -119,4 +150,9 @@ test("CLI defaults to branch plus working-tree changes and respects explicit sco
   assert.equal(initial.selectedVariantId, "all");
   assert.equal(initial.label, "Uncommitted changes");
   assert(initial.rawPatch.includes("new.txt"));
+  assert.deepEqual(initial.variants?.find((variant) => variant.id === "all")?.commits, []);
+  assert.equal(
+    initial.variants?.find((variant) => variant.id === "last-commit"),
+    undefined,
+  );
 });

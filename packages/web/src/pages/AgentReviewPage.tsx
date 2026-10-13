@@ -16,10 +16,12 @@ import {
 
 import type {
   ReviewSession,
+  ReviewSessionDiffVariant,
   ReviewSessionAnnotation,
   ReviewSessionResult,
 } from "@better-review/shared";
 
+import { AgentReviewContext } from "../components/AgentReviewContext";
 import { AppHeader } from "../components/AppHeader";
 import {
   Badge,
@@ -40,6 +42,7 @@ import {
   type DiffSettings,
 } from "../DiffViewer";
 import { FileTreePanel } from "../FileTreePanel";
+import { getVariantCommits } from "../lib/agent-review-context";
 import { fetchWithApiAuth } from "../lib/apiAuth";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "../lib/diff-settings";
 import { parseMarkdown } from "../lib/markdown";
@@ -507,7 +510,7 @@ export default function AgentReviewPage() {
     return value.payload.variants ?? [];
   });
 
-  const selectedDiffVariant = createMemo(() => {
+  const selectedDiffVariant = createMemo<ReviewSessionDiffVariant | null>(() => {
     const value = session();
     if (!value || value.payload.kind !== "diff") return null;
 
@@ -929,17 +932,24 @@ export default function AgentReviewPage() {
             <Show when={!focusMode()}>
               <AppHeader>
                 <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
-                  <div class="flex flex-1 items-center gap-3 min-w-0">
-                    <h1
-                      class="text-sm font-medium text-text truncate"
-                      title={loadedSession().title}
-                    >
-                      {loadedSession().title}
-                    </h1>
-                    <Badge variant={statusVariant(loadedSession().status)}>
-                      {loadedSession().status}
-                    </Badge>
-                    <Badge variant="neutral">{loadedSession().mode}</Badge>
+                  <div class="flex-1 min-w-0 space-y-1">
+                    <div class="flex items-center gap-3 min-w-0">
+                      <h1
+                        class="text-sm font-medium text-text truncate"
+                        title={loadedSession().title}
+                      >
+                        {loadedSession().title}
+                      </h1>
+                      <Badge variant={statusVariant(loadedSession().status)}>
+                        {loadedSession().status}
+                      </Badge>
+                      <Badge variant="neutral">{loadedSession().mode}</Badge>
+                    </div>
+                    <AgentReviewContext
+                      session={loadedSession()}
+                      variant={selectedDiffVariant()}
+                      hideDiffContext={Boolean(rangeBaseSha())}
+                    />
                   </div>
                   <div class="flex flex-wrap items-center justify-end gap-3 text-xs text-text-faint flex-shrink-0">
                     <div class="flex items-center gap-1 border-r border-border pr-3">
@@ -1011,6 +1021,48 @@ export default function AgentReviewPage() {
                         </Show>
                       </div>
                       <dl class="space-y-3 text-sm">
+                        <Show when={loadedSession().branch !== undefined}>
+                          <div>
+                            <dt class="text-text-muted">Branch at creation</dt>
+                            <dd class="break-all font-mono text-xs">
+                              {loadedSession().branch ?? "Detached HEAD"}
+                            </dd>
+                          </div>
+                        </Show>
+                        <Show when={!rangeBaseSha() && selectedDiffVariant()}>
+                          {(variant) => (
+                            <>
+                              <div>
+                                <dt class="text-text-muted">Review scope</dt>
+                                <dd>{variant().label}</dd>
+                                <Show when={variant().description}>
+                                  {(description) => (
+                                    <dd class="text-xs text-text-faint">{description()}</dd>
+                                  )}
+                                </Show>
+                              </div>
+                              <Show when={getVariantCommits(variant()).length > 0}>
+                                <div>
+                                  <dt class="text-text-muted">
+                                    Commits ({getVariantCommits(variant()).length})
+                                  </dt>
+                                  <dd class="max-h-64 overflow-y-auto space-y-3 mt-1">
+                                    <For each={getVariantCommits(variant())}>
+                                      {(commit) => (
+                                        <div>
+                                          <p class="break-all font-mono text-xs">{commit.sha}</p>
+                                          <p class="mt-1 whitespace-pre-wrap break-words">
+                                            {commit.message}
+                                          </p>
+                                        </div>
+                                      )}
+                                    </For>
+                                  </dd>
+                                </div>
+                              </Show>
+                            </>
+                          )}
+                        </Show>
                         <div>
                           <dt class="text-text-muted">Created</dt>
                           <dd>{formatTimestamp(loadedSession().createdAt)}</dd>

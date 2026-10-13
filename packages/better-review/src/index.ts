@@ -765,6 +765,7 @@ ${fileStats.join("\n")}`;
           title?: string;
           cwd?: string;
           repoRoot?: string;
+          branch?: string | null;
           payload?:
             | { kind: "markdown"; content: string }
             | { kind: "message"; content: string }
@@ -777,6 +778,9 @@ ${fileStats.join("\n")}`;
                   id: string;
                   label: string;
                   description?: string;
+                  baseRef?: string;
+                  commit?: { sha: string; message: string };
+                  commits?: Array<{ sha: string; message: string }>;
                   rawPatch: string;
                 }>;
               };
@@ -794,6 +798,7 @@ ${fileStats.join("\n")}`;
             title: body.title,
             cwd: body.cwd,
             repoRoot: body.repoRoot,
+            branch: body.branch,
             payload: body.payload,
             returnChannel: body.returnChannel,
           }),
