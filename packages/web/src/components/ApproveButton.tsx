@@ -4,6 +4,8 @@ import { usePrContext } from "../context/PrContext";
 import { Alert, Button, Field, Popover, Textarea } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
 import { SpinnerIcon } from "../icons/spinner-icon";
+import { submitPrReview } from "../lib/pr-review-action";
+import { refreshPrListAfterReview } from "../lib/query";
 import { trpc } from "../lib/trpc";
 
 export function ApproveButton() {
@@ -27,7 +29,10 @@ export function ApproveButton() {
     setSubmitting(true);
     setError(null);
     try {
-      await trpc.pr.approve.mutate({ prUrl: url, body: comment().trim() || undefined });
+      await submitPrReview(
+        () => trpc.pr.approve.mutate({ prUrl: url, body: comment().trim() || undefined }),
+        refreshPrListAfterReview,
+      );
       if (prUrl() === url) {
         setOpen(false);
         setComment("");

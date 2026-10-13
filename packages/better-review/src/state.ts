@@ -531,118 +531,129 @@ interface PrListCacheData {
   fetchedAt: number;
 }
 
-const makePrListCacheService = Effect.gen(function* () {
-  const cache = yield* Ref.make<PrListCacheData | null>(null);
-  const refreshing = yield* Ref.make(false);
-  const gh = yield* GhService;
+export const createPrListCacheServiceApi = (gh: Pick<GhServiceApi, "searchReviewRequested">) =>
+  Effect.gen(function* () {
+    const cache = yield* Ref.make<PrListCacheData | null>(null);
+    const refreshLock = yield* Effect.makeSemaphore(1);
 
-  /**
-   * Fetch fresh PR list from GitHub and update the cache.
-   * Returns the fresh data. Deduplicates concurrent fetches.
-   */
-  const refresh = Effect.gen(function* () {
-    // Skip if already refreshing (dedup concurrent calls)
-    const isRefreshing = yield* Ref.get(refreshing);
-    if (isRefreshing) {
-      yield* Effect.log("[pr-list-cache] Refresh already in progress, skipping");
-      return yield* Ref.get(cache);
-    }
+    /**
+     * Fetch fresh PR list from GitHub and update the cache.
+     * Returns the fresh data.
+     */
+    const fetchFresh = Effect.gen(function* () {
+      const startTime = Date.now();
 
-    yield* Ref.set(refreshing, true);
-    const startTime = Date.now();
+      const result = yield* Effect.gen(function* () {
+        yield* Effect.log("[pr-list-cache] Refreshing PR list...");
+        const prs = yield* gh.searchReviewRequested();
+        const data: PrListCacheData = { prs, fetchedAt: Date.now() };
+        yield* Ref.set(cache, data);
+        yield* Effect.log(
+          `[pr-list-cache] Refreshed ${prs.length} PRs in ${Date.now() - startTime}ms`,
+        );
+        return data;
+      });
 
-    const result = yield* Effect.gen(function* () {
-      yield* Effect.log("[pr-list-cache] Refreshing PR list...");
-      const prs = yield* gh.searchReviewRequested();
-      const data: PrListCacheData = { prs, fetchedAt: Date.now() };
-      yield* Ref.set(cache, data);
-      yield* Effect.log(
-        `[pr-list-cache] Refreshed ${prs.length} PRs in ${Date.now() - startTime}ms`,
+      return result;
+    });
+
+    // Concurrent ordinary refreshes wait for fresh data rather than returning the old cache.
+    const refresh = Effect.gen(function* () {
+      const previous = yield* Ref.get(cache);
+      return yield* refreshLock.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* Ref.get(cache);
+          if (current && current !== previous) return current;
+          return yield* fetchFresh;
+        }),
       );
-      return data;
-    }).pipe(Effect.ensuring(Ref.set(refreshing, false)));
+    });
 
-    return result;
+    return {
+      /**
+       * Get cached PR list. Returns null if never fetched.
+       */
+      get: Ref.get(cache),
+
+      /**
+       * Force a refresh of the PR list cache. Returns the fresh data.
+       */
+      refresh,
+      // Reviews may complete while an earlier search is in progress. Always fetch again after it.
+      forceRefresh: refreshLock.withPermits(1)(fetchFresh),
+
+      /**
+       * Get cached data immediately, and trigger a background refresh only when stale.
+       * This is the primary method for the tRPC endpoint — returns fast with cached
+       * data, while kicking off a fresh fetch when needed.
+       */
+      getAndRefresh: Effect.gen(function* () {
+        const cached = yield* Ref.get(cache);
+
+        if (!cached) {
+          return null;
+        }
+
+        const isStale = Date.now() - cached.fetchedAt > PR_LIST_REFRESH_INTERVAL_MS;
+        if (!isStale) {
+          return cached;
+        }
+
+        // Only refresh stale cache entries so frequent list reads stay cheap.
+        yield* refresh.pipe(
+          Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background refresh failed: ${e}`)),
+          Effect.forkDaemon,
+        );
+
+        return cached;
+      }),
+
+      /**
+       * Check if the cache is stale (older than the refresh interval).
+       */
+      isStale: Effect.gen(function* () {
+        const data = yield* Ref.get(cache);
+        if (!data) return true;
+        return Date.now() - data.fetchedAt > PR_LIST_REFRESH_INTERVAL_MS;
+      }),
+
+      /**
+       * Get the age of the cache in ms. Returns null if never fetched.
+       */
+      age: Effect.gen(function* () {
+        const data = yield* Ref.get(cache);
+        if (!data) return null;
+        return Date.now() - data.fetchedAt;
+      }),
+
+      /**
+       * Background refresh loop. Run as a forked fiber.
+       * Refreshes every 15 minutes.
+       */
+      backgroundLoop: Effect.gen(function* () {
+        yield* Effect.log(
+          `[pr-list-cache] Starting background refresh loop (interval: ${PR_LIST_REFRESH_INTERVAL_MS / 1000}s)`,
+        );
+
+        // Initial fetch on startup
+        yield* refresh.pipe(
+          Effect.catchAll((e) => Effect.log(`[pr-list-cache] Initial fetch failed: ${e}`)),
+        );
+
+        // Loop: sleep then refresh
+        while (true) {
+          yield* Effect.sleep(PR_LIST_REFRESH_INTERVAL_MS);
+          yield* refresh.pipe(
+            Effect.catchAll((e) => Effect.log(`[pr-list-cache] Periodic refresh failed: ${e}`)),
+          );
+        }
+      }),
+    };
   });
 
-  return {
-    /**
-     * Get cached PR list. Returns null if never fetched.
-     */
-    get: Ref.get(cache),
-
-    /**
-     * Force a refresh of the PR list cache. Returns the fresh data.
-     */
-    refresh,
-
-    /**
-     * Get cached data immediately, and trigger a background refresh only when stale.
-     * This is the primary method for the tRPC endpoint — returns fast with cached
-     * data, while kicking off a fresh fetch when needed.
-     */
-    getAndRefresh: Effect.gen(function* () {
-      const cached = yield* Ref.get(cache);
-
-      if (!cached) {
-        return null;
-      }
-
-      const isStale = Date.now() - cached.fetchedAt > PR_LIST_REFRESH_INTERVAL_MS;
-      if (!isStale) {
-        return cached;
-      }
-
-      // Only refresh stale cache entries so frequent list reads stay cheap.
-      yield* refresh.pipe(
-        Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background refresh failed: ${e}`)),
-        Effect.forkDaemon,
-      );
-
-      return cached;
-    }),
-
-    /**
-     * Check if the cache is stale (older than the refresh interval).
-     */
-    isStale: Effect.gen(function* () {
-      const data = yield* Ref.get(cache);
-      if (!data) return true;
-      return Date.now() - data.fetchedAt > PR_LIST_REFRESH_INTERVAL_MS;
-    }),
-
-    /**
-     * Get the age of the cache in ms. Returns null if never fetched.
-     */
-    age: Effect.gen(function* () {
-      const data = yield* Ref.get(cache);
-      if (!data) return null;
-      return Date.now() - data.fetchedAt;
-    }),
-
-    /**
-     * Background refresh loop. Run as a forked fiber.
-     * Refreshes every 15 minutes.
-     */
-    backgroundLoop: Effect.gen(function* () {
-      yield* Effect.log(
-        `[pr-list-cache] Starting background refresh loop (interval: ${PR_LIST_REFRESH_INTERVAL_MS / 1000}s)`,
-      );
-
-      // Initial fetch on startup
-      yield* refresh.pipe(
-        Effect.catchAll((e) => Effect.log(`[pr-list-cache] Initial fetch failed: ${e}`)),
-      );
-
-      // Loop: sleep then refresh
-      while (true) {
-        yield* Effect.sleep(PR_LIST_REFRESH_INTERVAL_MS);
-        yield* refresh.pipe(
-          Effect.catchAll((e) => Effect.log(`[pr-list-cache] Periodic refresh failed: ${e}`)),
-        );
-      }
-    }),
-  };
+const makePrListCacheService = Effect.gen(function* () {
+  const gh = yield* GhService;
+  return yield* createPrListCacheServiceApi(gh);
 });
 
 export class PrListCacheService extends Effect.Service<PrListCacheService>()("PrListCacheService", {

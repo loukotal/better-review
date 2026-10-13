@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { Effect } from "effect";
 
 import type { GhServiceApi } from "./gh/gh";
-import { createDiffCacheServiceApi } from "./state";
+import { createDiffCacheServiceApi, createPrListCacheServiceApi } from "./state";
 import { StoreService, StoreServiceLive } from "./store";
 
 const FULL_DIFF = `diff --git a/src/example.ts b/src/example.ts
@@ -72,4 +72,56 @@ test("store treats missing files and namespaces as empty", async () => {
       yield* store.delete(namespace, key);
     }).pipe(Effect.provide(StoreServiceLive)),
   );
+});
+
+test("a post-review refresh waits for an older search and then fetches fresh review state", async () => {
+  const started = Promise.withResolvers<void>();
+  const oldSearch = Promise.withResolvers<void>();
+  let calls = 0;
+  const cache = await Effect.runPromise(
+    createPrListCacheServiceApi({
+      searchReviewRequested: () =>
+        Effect.promise(async () => {
+          calls += 1;
+          if (calls === 1) {
+            started.resolve();
+            await oldSearch.promise;
+          }
+          return [];
+        }),
+    }),
+  );
+  const background = Effect.runPromise(cache.refresh);
+  await started.promise;
+  const afterReview = Effect.runPromise(cache.forceRefresh);
+  oldSearch.resolve();
+  const [oldResult, freshResult] = await Promise.all([background, afterReview]);
+  assert.equal(calls, 2, "The pre-review search cannot satisfy a post-review refresh");
+  assert.notEqual(freshResult, oldResult);
+  assert.equal(await Effect.runPromise(cache.get), freshResult);
+});
+
+test("ordinary concurrent list refreshes share fresh results instead of returning stale data", async () => {
+  const started = Promise.withResolvers<void>();
+  const search = Promise.withResolvers<void>();
+  let calls = 0;
+  const cache = await Effect.runPromise(
+    createPrListCacheServiceApi({
+      searchReviewRequested: () =>
+        Effect.promise(async () => {
+          calls += 1;
+          started.resolve();
+          await search.promise;
+          return [];
+        }),
+    }),
+  );
+  const first = Effect.runPromise(cache.refresh);
+  await started.promise;
+  const second = Effect.runPromise(cache.refresh);
+  search.resolve();
+  const [one, two] = await Promise.all([first, second]);
+  assert.equal(calls, 1);
+  assert.equal(one, two);
+  assert.notEqual(two, null);
 });

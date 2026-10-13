@@ -59,6 +59,18 @@ export function restoreCache(): void {
   });
 }
 
+/** Refresh the server cache as well as the UI; invalidation alone can return old server data. */
+export async function refreshPrListAfterReview(): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: queryKeys.prs.list });
+  try {
+    const fresh = await api.refreshPrList();
+    queryClient.setQueryData(queryKeys.prs.list, fresh);
+  } catch (error) {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.prs.list, refetchType: "none" });
+    throw error;
+  }
+}
+
 // Re-export types from shared
 export type { IssueComment };
 

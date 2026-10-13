@@ -46,7 +46,7 @@ export const prsRouter = router({
         const startTime = Date.now();
 
         const prListCache = yield* PrListCacheService;
-        const data = yield* prListCache.refresh;
+        const data = yield* prListCache.forceRefresh;
 
         yield* Effect.log(
           `[prs.refresh] DONE total=${Date.now() - startTime}ms, count=${data?.prs.length ?? 0}`,

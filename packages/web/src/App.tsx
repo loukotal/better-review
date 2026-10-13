@@ -41,10 +41,12 @@ import { navigateAnnotation, type SourceTarget } from "./lib/annotation-navigati
 import { savePrComment } from "./lib/comment-save";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
+import { submitPrReview } from "./lib/pr-review-action";
 import {
   queryKeys,
   api,
   queryClient,
+  refreshPrListAfterReview,
   fetchPrCore,
   fetchPrExtras,
   type IssueComment,
@@ -681,7 +683,8 @@ const AppContent: Component = () => {
   const addComment = (draft: DiffCommentDraft) =>
     savePrComment(draft, {
       loadedPrUrl,
-      mutate: (input) => trpc.pr.addComment.mutate(input),
+      mutate: (input) =>
+        submitPrReview(() => trpc.pr.addComment.mutate(input), refreshPrListAfterReview),
       onSaved: (url, data) => {
         if (data.comment) updateCommentsCache(url, [...comments(), data.comment]);
       },
