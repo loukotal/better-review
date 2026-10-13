@@ -213,6 +213,7 @@ export function formatDiffFeedbackForAgent(result: ReviewSessionResult): string 
 }
 
 export function exportReviewFeedback(result: ReviewSessionResult): string {
+  if (result.cancelled) return result.feedback.trim() || "Review cancelled without a verdict.";
   if (result.mode === "plan") return exportPlanFeedback(result);
   if (result.mode === "message") return exportMessageFeedback(result);
   return exportDiffFeedback(result);
@@ -222,6 +223,15 @@ export function formatReviewFeedbackForAgent(
   session: Pick<ReviewSession, "mode" | "title">,
   result: ReviewSessionResult,
 ): string {
+  if (result.cancelled) {
+    return [
+      "REVIEW CANCELLED — NO VERDICT WAS SUBMITTED.",
+      "",
+      exportReviewFeedback(result),
+      "",
+      "Do not treat this as approval or rejection. Ask the user whether to request another review.",
+    ].join("\n");
+  }
   if (session.mode === "plan") return formatPlanFeedbackForAgent(session, result);
   if (session.mode === "message") return formatMessageFeedbackForAgent(result);
   return formatDiffFeedbackForAgent(result);

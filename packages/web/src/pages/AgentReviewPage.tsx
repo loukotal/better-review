@@ -47,6 +47,7 @@ import { fetchWithApiAuth } from "../lib/apiAuth";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "../lib/diff-settings";
 import { parseMarkdown } from "../lib/markdown";
 import { getReviewedFiles, toggleReviewedFile } from "../lib/query";
+import { startReviewPresence } from "../lib/review-presence";
 import { uiTheme } from "../lib/theme";
 import { annotationInlineCommentId, appendAnnotationReply } from "../review-annotations";
 
@@ -817,6 +818,12 @@ export default function AgentReviewPage() {
       setSubmitting(false);
     }
   };
+
+  createEffect(() => {
+    const activeSession = session();
+    if (!activeSession || activeSession.status !== "pending") return;
+    onCleanup(startReviewPresence(activeSession.id));
+  });
 
   const requestSubmit = (approved: boolean) => {
     if (draftCommentFiles().size > 0) {

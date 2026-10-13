@@ -1047,13 +1047,28 @@ ${fileStats.join("\n")}`;
         const sessionId = parts[2];
         const resource = parts[3];
 
-        if (!sessionId || resource !== "result") {
+        if (!sessionId || (resource !== "result" && resource !== "presence")) {
           return Response.json({ error: "Not found" }, { status: 404 });
         }
 
         const session = await runtime.runPromise(reviewSessions.getSession(sessionId));
         if (!session) {
           return Response.json({ error: "Session not found" }, { status: 404 });
+        }
+
+        if (resource === "presence") {
+          const body = (await req.json()) as { viewerId?: unknown; active?: unknown };
+          if (
+            typeof body.viewerId !== "string" ||
+            !/^[a-zA-Z0-9-]{1,80}$/.test(body.viewerId) ||
+            typeof body.active !== "boolean"
+          ) {
+            return Response.json({ error: "Invalid review presence" }, { status: 400 });
+          }
+          await runtime.runPromise(
+            reviewSessions.updatePresence(sessionId, body.viewerId, body.active),
+          );
+          return Response.json({ ok: true });
         }
 
         const body = (await req.json()) as {

@@ -96,6 +96,8 @@ export interface ReviewSessionResult {
   sessionId: string;
   mode: ReviewSessionMode;
   approved: boolean;
+  /** The review ended without a verdict (for example, its tab was closed). */
+  cancelled?: boolean;
   feedback: string;
   annotations: ReviewSessionAnnotation[];
   submittedAt: number;
