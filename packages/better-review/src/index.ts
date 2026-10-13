@@ -13,6 +13,7 @@ import type { ReviewSessionAnnotation } from "@better-review/shared";
 import { isGitHubAssetId } from "@better-review/shared/github-asset";
 
 import { ReviewSessionService } from "./agent-sessions";
+import { createAppUpdateChecker } from "./app-update";
 import { runCommand } from "./command";
 import { corsMiddleware, getCorsHeaders, withCors } from "./cors";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
@@ -34,6 +35,7 @@ const currentDir = fileURLToPath(new URL(".", import.meta.url));
 const staticDir = path.resolve(currentDir, "../../web/dist");
 const repoRoot = path.resolve(currentDir, "../../..");
 const devTokenFile = path.join(repoRoot, ".better-review-api-token");
+const checkAppUpdate = createAppUpdateChecker(repoRoot);
 
 function readDevTokenFile(): string | null {
   if (!existsSync(devTokenFile)) return null;
@@ -747,6 +749,10 @@ ${fileStats.join("\n")}`;
     GET: () => Response.json({ ok: true }),
   },
 
+  "/api/app/update-status": {
+    GET: async () => Response.json(await checkAppUpdate()),
+  },
+
   "/api/sessions": {
     GET: async (req: Request) => {
       try {
@@ -1134,6 +1140,12 @@ const main = Effect.gen(function* () {
   const actualPort =
     typeof address === "object" && address ? address.port : (process.env.API_PORT ?? 3001);
   yield* Effect.log(`API server running at http://${host}:${actualPort}`);
+
+  // Warm the same daily cache once at startup without delaying the server or scheduling a loop.
+  yield* Effect.tryPromise(() => checkAppUpdate()).pipe(
+    Effect.catchAll(() => Effect.void),
+    Effect.forkScoped,
+  );
 
   yield* Effect.addFinalizer(() =>
     Effect.promise(async () => {
