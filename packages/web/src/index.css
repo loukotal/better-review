@@ -3,6 +3,42 @@
 @import "tailwindcss";
 @import "./typeset.css";
 
+/* A tiny, deliberately impatient update nudge. No JS timers or layout movement. */
+.app-update-nudge {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 18%, transparent);
+  animation: app-update-wiggle 5s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes app-update-wiggle {
+  0%,
+  28%,
+  100% {
+    transform: rotate(0);
+  }
+  4%,
+  12% {
+    transform: rotate(-5deg);
+  }
+  8%,
+  16% {
+    transform: rotate(5deg);
+  }
+  20% {
+    transform: rotate(-2deg);
+  }
+}
+
+button[aria-expanded="true"] .app-update-nudge {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-update-nudge {
+    animation: none;
+  }
+}
+
 @theme {
   /* Corner style: change only this value (0px = square, 4px = current, 8px = softer).
      All rounded corner sizes scale with it; rounded-full stays circular. */

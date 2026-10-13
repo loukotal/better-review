@@ -7,9 +7,18 @@ import { Popover } from "../design-system";
 import { fetchWithApiAuth } from "../lib/apiAuth";
 
 export function AppUpdateNotice() {
+  const fakeUpdate =
+    import.meta.env.DEV && new URLSearchParams(window.location.search).get("fakeUpdate") === "1";
   const status = useQuery(() => ({
-    queryKey: ["app", "update-status"],
+    queryKey: fakeUpdate ? ["app", "update-status", "preview"] : ["app", "update-status"],
     queryFn: async (): Promise<AppUpdateStatus> => {
+      if (fakeUpdate) {
+        return {
+          updateAvailable: true,
+          currentRevision: "1234567890abcdef1234567890abcdef12345678",
+          latestRevision: "abcdef1234567890abcdef1234567890abcdef12",
+        };
+      }
       const response = await fetchWithApiAuth("/api/app/update-status");
       if (!response.ok) throw new Error("Update check failed");
       return response.json();
@@ -30,12 +39,18 @@ export function AppUpdateNotice() {
         width={340}
         triggerSize="sm"
         trigger={
-          <span class="rounded border border-accent/30 bg-accent/10 px-2 py-0.5 text-xs text-accent">
-            Update available
+          <span class="app-update-nudge inline-flex items-center gap-2 rounded-md border border-accent-bright bg-accent px-2.5 py-1 text-xs font-semibold text-accent-text">
+            <span>Pls update</span>
+            <span aria-hidden="true" class="text-base leading-none">
+              🙏
+            </span>
           </span>
         }
       >
         <div class="space-y-3 text-sm">
+          <Show when={fakeUpdate}>
+            <p class="text-xs text-accent">Development preview — this update is simulated.</p>
+          </Show>
           <p>
             A newer revision is available on <code>origin/main</code>.
           </p>
