@@ -12,7 +12,7 @@ import { router, publicProcedure } from "../index";
 
 export const modelsRouter = router({
   /**
-   * Search Flue/pi-ai models by provider, model ID, or display name.
+   * Search Pi models by provider, model ID, or display name.
    */
   search: publicProcedure.input(z.object({ q: z.string().optional() })).query(({ input }) => {
     return searchModels(input.q ?? "");
@@ -24,7 +24,7 @@ export const modelsRouter = router({
   current: publicProcedure.query(() => getSelectedModel()),
 
   /**
-   * Set the current model for new Flue prompts.
+   * Set the current model for new review prompts.
    */
   setCurrent: publicProcedure
     .input(

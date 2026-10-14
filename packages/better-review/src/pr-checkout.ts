@@ -13,7 +13,7 @@ import { join, resolve, sep } from "node:path";
 import { Data, Effect, Schedule } from "effect";
 
 import { runCommand } from "./command";
-import { removeMicrosandboxForWorktree } from "./flue/microsandbox";
+import { removeMicrosandboxForWorktree } from "./review/microsandbox";
 import { STORE_BASE_DIR } from "./store";
 
 class CheckoutError extends Data.TaggedError("CheckoutError")<{

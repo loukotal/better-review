@@ -68,6 +68,7 @@ interface ChatPanelProps {
     line?: number,
     sessionId?: string,
     sameRevision?: boolean,
+    ref?: string,
   ) => void;
   onApplyReviewOrder?: (files: string[]) => void;
   onAnnotationsReceived?: (annotations: Annotation[]) => void;
@@ -171,7 +172,7 @@ export function ChatPanel(props: ChatPanelProps) {
           ) {
             allAnnotations.length = 0;
           }
-          if (msg.role === "assistant") {
+          if (msg.role === "assistant" && (!msg.revision || msg.revision === chat.revision())) {
             const parsed = parseReviewTokens(msg.content);
             allAnnotations.push(...parsed.annotations);
           }
@@ -272,11 +273,11 @@ export function ChatPanel(props: ChatPanelProps) {
         chat.clearMessages();
       }
       const data = requestedSessionId
-        ? await trpc.flueReview.selectSession.mutate({
+        ? await trpc.prReview.selectSession.mutate({
             prUrl: requestPrUrl,
             sessionId: requestedSessionId,
           })
-        : await trpc.flueReview.getOrCreateSession.mutate({
+        : await trpc.prReview.getOrCreateSession.mutate({
             prUrl: props.prUrl,
             prNumber: props.prNumber,
             repoOwner: props.repoOwner,
@@ -372,7 +373,7 @@ export function ChatPanel(props: ChatPanelProps) {
     setPullingLatest(true);
     setPullNotice(null);
     try {
-      const result = await trpc.flueReview.pullLatest.mutate({ sessionId: sid, prUrl });
+      const result = await trpc.prReview.pullLatest.mutate({ sessionId: sid, prUrl });
       if (sessionId() !== sid || props.prUrl !== prUrl) return;
       if (!result.changed) {
         setPullNotice("Already at the latest PR revision.");
@@ -383,7 +384,6 @@ export function ChatPanel(props: ChatPanelProps) {
       );
       // The page diff and older transcript annotations can still reference the old revision.
       setNavigationRevision(null);
-      await chat.sendMessage(result.prompt, { reviewMode: "full" });
     } catch (error) {
       setPullNotice(error instanceof Error ? error.message : "Could not pull latest changes");
     } finally {
@@ -396,7 +396,7 @@ export function ChatPanel(props: ChatPanelProps) {
     if (creatingNewSession() || pullingLatest()) return;
 
     try {
-      await trpc.flueReview.switch.mutate({
+      await trpc.prReview.switch.mutate({
         prUrl: props.prUrl,
         sessionId: newSessionId,
       });
@@ -415,7 +415,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
     setCreatingNewSession(true);
     try {
-      const data = await trpc.flueReview.create.mutate({
+      const data = await trpc.prReview.create.mutate({
         prUrl: props.prUrl,
         prNumber: props.prNumber,
         repoOwner: props.repoOwner,
@@ -454,7 +454,7 @@ export function ChatPanel(props: ChatPanelProps) {
     if (creatingNewSession() || pullingLatest()) return;
 
     try {
-      const data = await trpc.flueReview.hide.mutate({
+      const data = await trpc.prReview.hide.mutate({
         prUrl: props.prUrl,
         sessionId: hiddenSessionId,
       });
@@ -494,13 +494,19 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   // Handle file reference clicks
-  const handleFileClick = (file: string, line?: number) => {
+  const handleFileClick = (file: string, line?: number, ref?: string) => {
     const resolved = resolveFileReference(file, props.files);
     const sid = sessionId();
-    const reviewedHead = navigationRevision();
+    const reviewedHead = ref ?? navigationRevision();
     const activeHead = props.reviewMode === "commit" ? props.commitSha : currentHeadSha();
     if (resolved && sid) {
-      props.onScrollToFile?.(resolved, line, sid, !!reviewedHead && reviewedHead === activeHead);
+      props.onScrollToFile?.(
+        resolved,
+        line,
+        sid,
+        !!reviewedHead && reviewedHead === activeHead,
+        ref,
+      );
     }
   };
 
@@ -696,7 +702,11 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   // Render a message segment
-  function MessageSegmentView(segmentProps: { segment: MessageSegment; streaming?: boolean }) {
+  function MessageSegmentView(segmentProps: {
+    segment: MessageSegment;
+    streaming?: boolean;
+    revision?: string;
+  }) {
     return (
       <Switch>
         <Match when={segmentProps.segment.type === "text"}>
@@ -725,7 +735,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 }
               ).line
             }
-            onClick={handleFileClick}
+            onClick={(file, line) => handleFileClick(file, line, segmentProps.revision)}
           />
         </Match>
         <Match when={segmentProps.segment.type === "annotation"}>
@@ -738,7 +748,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 }
               ).annotation
             }
-            onNavigate={handleFileClick}
+            onNavigate={(file, line) => handleFileClick(file, line, segmentProps.revision)}
           />
         </Match>
         <Match when={segmentProps.segment.type === "review-order"}>
@@ -753,7 +763,7 @@ export function ChatPanel(props: ChatPanelProps) {
             }
             currentFiles={props.files}
             onApplyOrder={handleApplyOrder}
-            onFileClick={(file) => handleFileClick(file)}
+            onFileClick={(file) => handleFileClick(file, undefined, segmentProps.revision)}
           />
         </Match>
       </Switch>
@@ -765,6 +775,7 @@ export function ChatPanel(props: ChatPanelProps) {
     role: "user" | "assistant";
     content: string;
     streaming?: boolean;
+    revision?: string;
   }) {
     if (contentProps.role === "user") {
       return <span class="whitespace-pre-wrap">{contentProps.content}</span>;
@@ -779,7 +790,13 @@ export function ChatPanel(props: ChatPanelProps) {
 
     return (
       <For each={parsed.segments}>
-        {(segment) => <MessageSegmentView segment={segment} streaming={contentProps.streaming} />}
+        {(segment) => (
+          <MessageSegmentView
+            segment={segment}
+            streaming={contentProps.streaming}
+            revision={contentProps.revision}
+          />
+        )}
       </For>
     );
   }
@@ -1097,6 +1114,13 @@ export function ChatPanel(props: ChatPanelProps) {
             >
               {pullingLatest() ? "Pulling latest…" : "Pull latest & continue"}
             </Button>
+            <Button
+              size="sm"
+              onClick={() => void chat.compact()}
+              disabled={chat.isStreaming() || chat.compacting() || pullingLatest()}
+            >
+              {chat.compacting() ? "Compacting context…" : "Compact context"}
+            </Button>
             <Show when={pullNotice()}>
               <p class="text-xs text-text-muted mt-1">{pullNotice()}</p>
             </Show>
@@ -1228,7 +1252,11 @@ export function ChatPanel(props: ChatPanelProps) {
                   <For each={group.messages.filter((message) => message.content.trim())}>
                     {(message) => (
                       <div class="text-sm text-text wrap-break-word leading-relaxed">
-                        <MessageContent role="assistant" content={message.content} />
+                        <MessageContent
+                          role="assistant"
+                          content={message.content}
+                          revision={message.revision}
+                        />
                       </div>
                     )}
                   </For>
@@ -1294,7 +1322,12 @@ export function ChatPanel(props: ChatPanelProps) {
             </Show>
             <Show when={chat.streamingContent()}>
               <div class="text-sm text-text wrap-break-word leading-relaxed">
-                <MessageContent role="assistant" content={chat.streamingContent()} streaming />
+                <MessageContent
+                  role="assistant"
+                  content={chat.streamingContent()}
+                  revision={chat.streamingRevision()}
+                  streaming
+                />
               </div>
             </Show>
           </section>

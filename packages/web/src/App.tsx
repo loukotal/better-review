@@ -277,16 +277,17 @@ const AppContent: Component = () => {
     line?: number,
     sessionId?: string,
     sameRevision = false,
+    ref?: string,
   ) => {
     if (!sessionId) return;
     navigateAnnotation(
-      { path, line, sessionId },
+      { path, line, sessionId, ref },
       files(),
       sameRevision && !loading() && !loadingCommits(),
       {
         diff: (path, line) => {
           if (document.getElementById(getFileElementId(path))) scrollToFile(path, line, "RIGHT");
-          else setSourceTarget({ path, line, sessionId });
+          else setSourceTarget({ path, line, sessionId, ref });
         },
         source: setSourceTarget,
       },

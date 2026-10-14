@@ -7,7 +7,12 @@ import { trpc } from "../lib/trpc";
 export function SourceDialog(props: { target: SourceTarget; onClose: () => void }) {
   const [source, { refetch }] = createResource(
     () => props.target,
-    (target) => trpc.flueReview.source.query({ sessionId: target.sessionId, path: target.path }),
+    (target) =>
+      trpc.prReview.source.query({
+        sessionId: target.sessionId,
+        path: target.path,
+        ref: target.ref,
+      }),
   );
   // Catch resource errors here so the dialog stays open and offers retry.
   const data = () => (source.error ? undefined : source());

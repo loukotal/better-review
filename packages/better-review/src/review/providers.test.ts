@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { normalizeContext } from "@earendil-works/pi-ai";
 
-import { getFlueProviders } from "./oauth-auth";
+import { getReviewProviders } from "./providers";
 
 for (const method of ["stream", "streamSimple"] as const) {
   test(`Codex ${method} completes over SSE when WebSockets would drop mid-response`, async (t) => {
@@ -41,7 +41,7 @@ for (const method of ["stream", "streamSimple"] as const) {
       globalThis.WebSocket = originalWebSocket;
     });
 
-    const provider = getFlueProviders().find((candidate) => candidate.id === "openai-codex")!;
+    const provider = getReviewProviders().find((candidate) => candidate.id === "openai-codex")!;
     const model = provider.getModels().find((candidate) => candidate.id === "gpt-5.6-sol")!;
     const token = `test.${Buffer.from(
       JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } }),
@@ -51,7 +51,7 @@ for (const method of ["stream", "streamSimple"] as const) {
       ...normalizeContext({
         messages: [{ role: "user", content: "Reply with OK.", timestamp: 0 }],
       }),
-      systemPrompt: "Preserve this legacy Flue system prompt.",
+      systemPrompt: "Preserve this system prompt.",
     };
     const result = await provider[method](model, context, {
       apiKey: token,

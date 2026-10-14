@@ -125,7 +125,7 @@ test("worktree cleanup traverses all sandbox pages before removing matches", asy
     async (configure: Parameters<typeof MicroVm.listWith>[0]) => {
       const options = configure(new SandboxListBuilder()).toNapi();
       assert.deepEqual(options.labels, {
-        "better-review.flue-v2": "1",
+        "better-review.pi-durable": "1",
         "better-review.worktree": label,
       });
       assert.ok(!events.some((event) => event.startsWith("remove:")));

@@ -8,12 +8,11 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
-    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test": "node --conditions=browser --import tsx --test \"src/**/*.test.ts\"",
     "serve": "vite preview"
   },
   "dependencies": {
     "@better-review/shared": "workspace:*",
-    "@flue/sdk": "2.1.1",
     "@pierre/diffs": "1.1.22",
     "@solidjs/router": "1.0.0",
     "@tanstack/query-persist-client-core": "5.104.0",

@@ -4,6 +4,7 @@ export interface SourceTarget {
   sessionId: string;
   path: string;
   line?: number;
+  ref?: string;
 }
 
 export function navigateAnnotation(

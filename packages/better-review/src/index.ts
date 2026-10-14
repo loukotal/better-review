@@ -17,10 +17,10 @@ import { createAppUpdateChecker } from "./app-update";
 import { runCommand } from "./command";
 import { corsMiddleware, getCorsHeaders, withCors } from "./cors";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
-import { createFlueReviewApp, startFlueReviewRuntime, stopFlueReviewRuntime } from "./flue/runtime";
 import { GhService, type PrStatus } from "./gh/gh";
 import { PrCheckoutService } from "./pr-checkout";
 import { getErrorMessage } from "./response";
+import { createReviewApp, startReviewRuntime, stopReviewRuntime } from "./review/runtime";
 import { runtime } from "./runtime";
 import { DiffCacheService, PrContextService, PrListCacheService } from "./state";
 import { createContext } from "./trpc/context";
@@ -341,16 +341,16 @@ function registerRoutes(app: Hono, routes: Record<string, unknown>): void {
 function createApp(routes: Record<string, unknown>): Hono {
   const app = new Hono();
 
-  // Flue is mounted as a Hono sub-app rather than through createRoutes, so CORS
+  // Review streaming is mounted as a Hono sub-app rather than through createRoutes, so CORS
   // must run at the parent-app boundary to cover its streaming endpoints too.
   app.use("*", corsMiddleware);
-  app.use("/flue/*", async (context, next) => {
+  app.use("/api/review/*", async (context, next) => {
     const authError = requireApiAuth(context.req.raw);
     if (authError) return authError;
     await next();
   });
   registerRoutes(app, routes);
-  app.route("/flue", createFlueReviewApp());
+  app.route("/api/review", createReviewApp());
 
   app.notFound((c) => {
     if (isProduction) {
@@ -1116,7 +1116,8 @@ const main = Effect.gen(function* () {
   const reviewSessions = yield* ReviewSessionService;
   const checkout = yield* PrCheckoutService;
 
-  yield* Effect.tryPromise(() => startFlueReviewRuntime());
+  yield* Effect.tryPromise(() => startReviewRuntime());
+  yield* Effect.addFinalizer(() => Effect.promise(stopReviewRuntime));
 
   // Start the PR list background refresh loop (fetches every 15 min)
   yield* prListCache.backgroundLoop.pipe(
@@ -1151,11 +1152,22 @@ const main = Effect.gen(function* () {
       console.log("[Shutdown] Stopping server...");
       clearInterval(stallChecker);
       server.close();
-      await stopFlueReviewRuntime();
     }),
   );
 
   yield* Effect.never;
 });
 
-await runtime.runPromise(Effect.scoped(main));
+const shutdown = new AbortController();
+const requestShutdown = () => shutdown.abort();
+process.once("SIGINT", requestShutdown);
+process.once("SIGTERM", requestShutdown);
+try {
+  await runtime.runPromise(Effect.scoped(main), { signal: shutdown.signal });
+} catch (error) {
+  if (!shutdown.signal.aborted) throw error;
+} finally {
+  process.removeListener("SIGINT", requestShutdown);
+  process.removeListener("SIGTERM", requestShutdown);
+  await runtime.dispose();
+}

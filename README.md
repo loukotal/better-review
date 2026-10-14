@@ -183,8 +183,23 @@ pnpm lint
 pnpm format:check
 ```
 
-Persistent application data lives under `~/.local/share/better-review` by default. This includes
-the Flue 2 database, prepared worktrees, repository caches, and generated Reading-view reports.
+PR reviews run on Pi Durable through the normal `pnpm dev` / `pnpm start` workflow. The chat keeps
+one conversation across PR revisions: **Pull latest & continue** updates the checkout and
+revalidates earlier findings. Historical annotations open source at their original revision.
+Closing a tab does not cancel a review; reconnecting restores committed progress. Interrupted
+work resumes after the API restarts. **Compact context** summarizes older context while keeping
+the full transcript in storage; automatic compaction is also enabled.
+
+Persistent application data lives under `~/.local/share/better-review` by default. Pi conversations
+use one SQLite database per review in `pi-reviews/`; prepared worktrees, repository caches, and
+generated Reading-view reports also live under this directory. `BETTER_REVIEW_DATABASE_DIR`
+overrides the conversation directory. A process lock prevents two API instances from owning the
+same databases.
+
+Existing review links and session IDs continue to work. On first open, the old conversation log
+is imported read-only into Pi, including user messages, findings, tool observations and outcomes.
+The old database is retained as a backup. An interrupted request from the retired runtime is
+marked stopped; send a follow-up to continue it. No separate migration command is needed.
 
 ## License
 
@@ -192,6 +207,6 @@ Licensed under the [MIT License](./LICENSE).
 
 ## Acknowledgements
 
-Built with [Flue](https://flueframework.com/),
+Built with [Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable),
 [OpenCode](https://opencode.ai/), [Effect](https://effect.website/),
 [Diffs](https://diffs.com/), and [Solid](https://www.solidjs.com/).

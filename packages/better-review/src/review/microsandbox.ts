@@ -2,23 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
-import {
-  createBashTool,
-  createGlobTool,
-  createGrepTool,
-  createReadTool,
-  sandboxFromDriver,
-  type FileStat,
-  type Sandbox as FlueSandbox,
-  type SandboxDriver,
-  type SandboxFactory,
-} from "@flue/runtime";
 import { isRuntimeInstalled, Sandbox as MicroVm, type SandboxHandle } from "microsandbox";
 
-import { readFlueReviewSession } from "../flue-review-sessions";
 import { STORE_BASE_DIR } from "../store";
 
-const OWNER_LABEL = "better-review.flue-v2";
+const OWNER_LABEL = "better-review.pi-durable";
 const WORKTREE_LABEL = "better-review.worktree";
 // Immutable multi-platform index for alpine/git:v2.49.1.
 const DEFAULT_IMAGE =
@@ -29,7 +17,28 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_VM_MAX_DURATION_SECONDS = 6 * 60 * 60;
 const DEFAULT_VM_IDLE_TIMEOUT_SECONDS = 60 * 60;
 
-interface SubmissionSandbox extends FlueSandbox {
+interface FileStat {
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+  size: number;
+  mtime?: unknown;
+}
+
+export interface SubmissionSandbox {
+  cwd: string;
+  exec(
+    command: string,
+    options?: { cwd?: string; timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  readFile(path: string): Promise<string>;
+  readFileBuffer(path: string): Promise<Uint8Array>;
+  writeFile(path: string, content: string | Uint8Array): Promise<void>;
+  stat(path: string): Promise<FileStat>;
+  readdir(path: string): Promise<string[]>;
+  exists(path: string): Promise<boolean>;
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
   beginSubmission(): Promise<void>;
   endSubmission(): Promise<void>;
 }
@@ -77,7 +86,7 @@ export function microsandboxIdentity(identity: WorktreeIdentity): string {
 }
 
 export function microsandboxName(identity: WorktreeIdentity): string {
-  return `better-review-v2-${hash(microsandboxIdentity(identity)).slice(0, 32)}`;
+  return `better-review-pi-${hash(microsandboxIdentity(identity)).slice(0, 32)}`;
 }
 
 function worktreeLabel(worktreePath: string): string {
@@ -305,8 +314,9 @@ export function createSubmissionSandbox(
     return lifecycle;
   };
 
-  const driver: SandboxDriver = {
+  const driver: Omit<SubmissionSandbox, "cwd" | "beginSubmission" | "endSubmission"> = {
     async exec(command, options = {}) {
+      options.signal?.throwIfAborted();
       const timeoutMs = Math.min(
         options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
         DEFAULT_COMMAND_TIMEOUT_MS,
@@ -341,7 +351,8 @@ export function createSubmissionSandbox(
       activeExecutions.add(execution);
 
       const abort = () => void execution.kill().catch(() => undefined);
-      options.signal?.addEventListener("abort", abort, { once: true });
+      if (options.signal?.aborted) abort();
+      else options.signal?.addEventListener("abort", abort, { once: true });
       try {
         const output = await execution.collect();
         return {
@@ -386,48 +397,27 @@ export function createSubmissionSandbox(
     },
   };
 
-  const sandbox = sandboxFromDriver(driver, identity.worktreePath) as SubmissionSandbox;
-  sandbox.beginSubmission = async () => {
-    await ensurePoolEntryRunning(entry);
-    vm = entry.vm;
-    fs = vm.fs();
-    await resetScratch();
+  const sandbox: SubmissionSandbox = {
+    ...driver,
+    cwd: identity.worktreePath,
+    beginSubmission: async () => {
+      await ensurePoolEntryRunning(entry);
+      vm = entry.vm;
+      fs = vm.fs();
+      await resetScratch();
+    },
+    endSubmission: resetScratch,
   };
-  sandbox.endSubmission = resetScratch;
   return sandbox;
 }
-
-export const microsandboxFactory: SandboxFactory = {
-  async createSandbox({ id }) {
-    const session = await readFlueReviewSession(id);
-    if (!session || session.runtimeVersion !== 2) {
-      throw new Error(`Flue 2 review session not found: ${id}`);
-    }
-    return createSubmissionSandbox(await createPoolEntry(session), id);
-  },
-  tools: (sandbox) => [
-    createReadTool(sandbox),
-    createBashTool(sandbox),
-    createGrepTool(sandbox),
-    createGlobTool(sandbox),
-  ],
-};
 
 /** Reuse the checkout sandbox with a separate runtime's conversation and lifecycle. */
 export async function createReviewMicrosandbox(
   identity: WorktreeIdentity,
   conversationId: string,
-  owner: string,
+  owner = "1",
 ): Promise<SubmissionSandbox> {
   return createSubmissionSandbox(await createPoolEntry(identity, owner), conversationId);
-}
-
-export async function beginMicrosandboxSubmission(sandbox: FlueSandbox): Promise<void> {
-  await (sandbox as SubmissionSandbox).beginSubmission();
-}
-
-export async function endMicrosandboxSubmission(sandbox: FlueSandbox): Promise<void> {
-  await (sandbox as SubmissionSandbox).endSubmission();
 }
 
 async function removeHandle(handle: SandboxHandle) {

@@ -1,454 +1,179 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ConversationStreamChunk, FlueConversationSnapshot } from "@flue/sdk";
-import { createRoot } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 
-type UseStreamingChat = typeof import("./useStreamingChat").useStreamingChat;
-type CreateConversationClient = typeof import("./useStreamingChat").createConversationClient;
+import type { ReviewSnapshot } from "@better-review/shared";
 
-type FlueClientFactory = NonNullable<Parameters<UseStreamingChat>[1]>;
-type FlueClient = ReturnType<FlueClientFactory>;
+import type { ReviewClient } from "../lib/review-client";
+import {
+  conversationSnapshotMessages,
+  conversationSnapshotState,
+  useStreamingChat,
+} from "./useStreamingChat";
 
-let conversationSnapshotMessages: typeof import("./useStreamingChat").conversationSnapshotMessages;
-let useStreamingChat: UseStreamingChat;
-let createConversationClient: CreateConversationClient;
-
-test.before(async () => {
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: { location: { origin: "http://localhost" } },
-  });
-  ({ createConversationClient, useStreamingChat, conversationSnapshotMessages } =
-    await import("./useStreamingChat"));
+const empty = (): ReviewSnapshot => ({
+  sessionId: "review",
+  messages: [],
+  settlements: [],
+  running: false,
+  compacting: false,
 });
-
-test("retries a failed prompt without duplicating the user message", async () => {
-  const sentMessages: string[] = [];
-  let attempt = 0;
-  const client = {
-    async send(input: { message: { body: string } }) {
-      sentMessages.push(input.message.body);
-      attempt += 1;
-      return {
-        submissionId: `submission-${attempt}`,
-        offset: String(attempt),
-        streamUrl: "http://localhost/stream",
+function mockClient() {
+  let snapshot = empty();
+  let publish: (value: ReviewSnapshot) => void = () => {};
+  const keys: string[] = [];
+  let fail = false;
+  let aborts = 0;
+  const client: ReviewClient = {
+    history: async () => snapshot,
+    send: async (_body, key) => {
+      keys.push(key);
+      if (fail) throw new Error("Connection lost");
+      return { submissionId: "submission" };
+    },
+    abort: async () => {
+      aborts++;
+    },
+    compact: async () => {},
+    observe: (listener) => {
+      publish = listener;
+      return () => {
+        publish = () => {};
       };
     },
-    async wait(
-      sent: { submissionId: string },
-      options?: { onEvent?: (event: ConversationStreamChunk) => void | Promise<void> },
-    ) {
-      await options?.onEvent?.({
-        type: "submission-settled",
-        conversationId: "session-1",
-        submissionId: sent.submissionId,
-        outcome: attempt === 1 ? "failed" : "completed",
-        error: attempt === 1 ? { message: "Upstream failed" } : undefined,
-        position: { batch: attempt, index: 0 },
-      } as ConversationStreamChunk);
-    },
-    async abort() {},
-  } as unknown as FlueClient;
-  const clientFactory = (() => client) as FlueClientFactory;
-
-  const { chat, dispose } = createRoot((dispose) => ({
-    chat: useStreamingChat({ getSessionId: () => "session-1" }, clientFactory),
-    dispose,
-  }));
-
-  assert.equal(await chat.sendMessage("Review this PR"), false);
-  assert.equal(chat.retryableMessage(), "Review this PR");
-
-  assert.equal(await chat.retry(), true);
-  assert.deepEqual(sentMessages, ["Review this PR", "Review this PR"]);
-  assert.equal(chat.messages().filter((message) => message.role === "user").length, 1);
-  assert.equal(chat.retryableMessage(), null);
-  dispose();
-});
-
-test("the default Flue client uses Better Review's authenticated fetch", async () => {
-  const originalFetch = globalThis.fetch;
-  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
-  const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-  let called = false;
-
-  Object.defineProperty(globalThis, "document", {
-    configurable: true,
-    value: { cookie: "" },
-  });
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => (key === "better-review.apiToken" ? "test-token" : null),
-      removeItem: () => undefined,
-      setItem: () => undefined,
-    },
-  });
-  globalThis.fetch = async (_input, init) => {
-    called = true;
-    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer test-token");
-    throw new Error("stop after auth assertion");
   };
-
-  try {
-    await assert.rejects(
-      createConversationClient("session-auth").send({
-        message: { kind: "user", body: "test" },
-      }),
-      /stop after auth assertion/,
-    );
-    assert.equal(called, true);
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
-    else delete (globalThis as { document?: unknown }).document;
-    if (originalLocalStorage) {
-      Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-    } else {
-      delete (globalThis as { localStorage?: unknown }).localStorage;
-    }
-  }
-});
-
-function createPendingClient() {
-  let abortCount = 0;
-  let waitStarted!: () => void;
-  const started = new Promise<void>((resolve) => {
-    waitStarted = resolve;
-  });
-
-  const client = {
-    async send() {
-      return {
-        submissionId: "submission-1",
-        offset: "0",
-        streamUrl: "http://localhost/stream",
-      };
-    },
-    async wait(_sent: unknown, options?: { signal?: AbortSignal }) {
-      waitStarted();
-      return new Promise((_resolve, reject) => {
-        const signal = options?.signal;
-        if (!signal) return;
-        const rejectAbort = () =>
-          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-        if (signal.aborted) rejectAbort();
-        else signal.addEventListener("abort", rejectAbort, { once: true });
-      });
-    },
-    async abort() {
-      abortCount += 1;
-    },
-  } as unknown as FlueClient;
-
   return {
-    clientFactory: (() => client) as FlueClientFactory,
-    started,
-    abortCount: () => abortCount,
+    client,
+    keys,
+    fail: () => {
+      fail = true;
+    },
+    recover: () => {
+      fail = false;
+    },
+    aborts: () => aborts,
+    publish(value: ReviewSnapshot) {
+      snapshot = value;
+      publish(value);
+    },
   };
 }
 
-test("leaving a review detaches the viewer without aborting backend work", async () => {
-  const errors: string[] = [];
-  const { clientFactory, started, abortCount } = createPendingClient();
+test("imported aborted requests show a readable stopped status instead of legacy error JSON", () => {
+  const mock = mockClient();
   const { chat, dispose } = createRoot((dispose) => ({
-    chat: useStreamingChat(
-      {
-        getSessionId: () => "session-1",
-        onError: (error) => errors.push(error),
-      },
-      clientFactory,
-    ),
+    chat: useStreamingChat({ getSessionId: () => "review" }, () => mock.client),
     dispose,
   }));
-
-  const sending = chat.sendMessage("Review this PR");
-  await started;
-  dispose();
-
-  assert.equal(await sending, false);
-  assert.deepEqual(errors, []);
-  assert.equal(chat.error(), null);
-  assert.equal(abortCount(), 0);
+  try {
+    mock.publish({
+      ...empty(),
+      settlements: [
+        {
+          submissionId: "old",
+          outcome: "aborted",
+          error:
+            '{"name":"FlueError","message":"Submission was aborted.","type":"submission_aborted","details":"The operation was stopped before it produced a completed response."}',
+        },
+      ],
+    });
+    assert.equal(chat.error(), "Review stopped before completion. Send a follow-up to continue.");
+    assert.equal(chat.isStreaming(), false);
+    mock.publish({ ...empty(), settlements: [{ submissionId: "new", outcome: "completed" }] });
+    assert.equal(chat.error(), null);
+  } finally {
+    dispose();
+  }
 });
 
-test("a replacement prompt does not turn the cancelled request into an error", async () => {
-  const errors: string[] = [];
-  const { clientFactory, started, abortCount } = createPendingClient();
+test("a lost admission response retries the same durable request key", async () => {
+  const mock = mockClient();
+  mock.fail();
   const { chat, dispose } = createRoot((dispose) => ({
-    chat: useStreamingChat(
-      {
-        getSessionId: () => "session-1",
-        onError: (error) => errors.push(error),
-      },
-      clientFactory,
-    ),
+    chat: useStreamingChat({ getSessionId: () => "review" }, () => mock.client),
     dispose,
   }));
-
-  const first = chat.sendMessage("First prompt");
-  await started;
-  const second = chat.sendMessage("Replacement prompt");
-
-  assert.equal(await first, false);
-  assert.deepEqual(errors, []);
-  assert.equal(abortCount(), 1);
-
-  dispose();
-  assert.equal(await second, false);
-  assert.deepEqual(errors, []);
-  assert.equal(abortCount(), 1);
-});
-
-test("message completion keeps controls busy until the submission settles", async () => {
-  let emitEvent: ((event: ConversationStreamChunk) => void | Promise<void>) | undefined;
-  let markWaitStarted!: () => void;
-  const waitStarted = new Promise<void>((resolve) => {
-    markWaitStarted = resolve;
-  });
-  let settle!: () => void;
-  const settled = new Promise<void>((resolve) => {
-    settle = resolve;
-  });
-  const client = {
-    async send() {
-      return {
-        submissionId: "submission-1",
-        offset: "0",
-        streamUrl: "http://localhost/stream",
-      };
-    },
-    async wait(
-      _sent: unknown,
-      options?: { onEvent?: (event: ConversationStreamChunk) => void | Promise<void> },
-    ) {
-      emitEvent = options?.onEvent;
-      markWaitStarted();
-      await settled;
-    },
-  } as unknown as FlueClient;
-  const clientFactory = (() => client) as FlueClientFactory;
-  const { chat, dispose } = createRoot((dispose) => ({
-    chat: useStreamingChat({ getSessionId: () => "session-1" }, clientFactory),
-    dispose,
-  }));
-
-  const sending = chat.sendMessage("Review this PR");
-  await waitStarted;
-  assert.ok(emitEvent);
-  await emitEvent({
-    type: "message-started",
-    submissionId: "submission-1",
-    messageId: "message-1",
-  } as ConversationStreamChunk);
-  await emitEvent({
-    type: "message-completed",
-    messageId: "message-1",
-  } as ConversationStreamChunk);
-
-  assert.equal(chat.isStreaming(), true);
-  settle();
-  assert.equal(await sending, true);
-  assert.equal(chat.isStreaming(), false);
+  assert.equal(await chat.sendMessage("Review"), false);
+  mock.recover();
+  const retried = chat.retry();
+  await Promise.resolve();
+  mock.publish({ ...empty(), settlements: [{ submissionId: "submission", outcome: "completed" }] });
+  assert.equal(await retried, true);
+  assert.equal(mock.keys[0], mock.keys[1]);
   dispose();
 });
 
-test("Flue 2 events render text, reasoning, and completed tool calls", async () => {
-  const client = {
-    async send() {
-      return {
-        submissionId: "submission-1",
-        offset: "0",
-        streamUrl: "http://localhost/stream",
-      };
-    },
-    async wait(
-      _sent: unknown,
-      options?: { onEvent?: (event: ConversationStreamChunk) => void | Promise<void> },
-    ) {
-      const emit = options?.onEvent;
-      assert.ok(emit);
-      await emit({
-        type: "message-started",
-        submissionId: "submission-1",
-        messageId: "message-1",
-      } as ConversationStreamChunk);
-      await emit({
-        type: "message-delta",
-        messageId: "message-1",
-        kind: "reasoning",
-        delta: "Inspecting",
-      } as ConversationStreamChunk);
-      await emit({
-        type: "message-delta",
-        messageId: "message-1",
-        kind: "text",
-        delta: "One finding",
-      } as ConversationStreamChunk);
-      await emit({
-        type: "tool-input",
-        messageId: "message-1",
-        toolCallId: "tool-1",
-        toolName: "read",
-        input: { path: "src/index.ts" },
-      } as ConversationStreamChunk);
-      await emit({
-        type: "tool-output",
-        messageId: "message-1",
-        toolCallId: "tool-1",
-        output: "file contents",
-      } as unknown as ConversationStreamChunk);
-      await emit({ type: "message-completed", messageId: "message-1" } as ConversationStreamChunk);
-      await emit({
-        type: "submission-settled",
-        submissionId: "submission-1",
-        outcome: "completed",
-      } as ConversationStreamChunk);
-    },
-  } as unknown as FlueClient;
+test("unmounting detaches observation without aborting durable work", async () => {
+  const mock = mockClient();
   const { chat, dispose } = createRoot((dispose) => ({
-    chat: useStreamingChat(
-      { getSessionId: () => "session-1" },
-      (() => client) as FlueClientFactory,
-    ),
+    chat: useStreamingChat({ getSessionId: () => "review" }, () => mock.client),
     dispose,
   }));
-
-  assert.equal(await chat.sendMessage("Review this PR"), true);
-  const assistant = chat.messages().find((message) => message.role === "assistant");
-  assert.equal(assistant?.content, "One finding");
-  assert.equal(assistant?.reasoning, "Inspecting");
-  assert.deepEqual(assistant?.toolCalls, [
-    {
-      id: "tool-1",
-      callId: "tool-1",
-      tool: "read",
-      title: "read",
-      status: "completed",
-      input: { path: "src/index.ts" },
-      output: "file contents",
-    },
-  ]);
+  const sent = chat.sendMessage("Review");
+  await Promise.resolve();
   dispose();
+  assert.equal(await sent, false);
+  assert.equal(mock.aborts(), 0);
 });
 
-test("history excludes system messages while preserving conversation roles and order", () => {
-  const snapshot: FlueConversationSnapshot = {
-    v: 1,
-    conversationId: "session-1",
-    offset: "0",
-    settlements: [],
-    messages: [
-      {
-        id: "system",
-        role: "system",
-        purpose: "dispatch",
-        display: "hidden",
-        parts: [{ type: "text", state: "done", text: "Internal dispatch" }],
-      },
-      {
-        id: "user",
-        role: "user",
-        purpose: "user",
-        display: "visible",
-        parts: [{ type: "text", state: "done", text: "Review this" }],
-      },
-      {
-        id: "assistant",
-        role: "assistant",
-        purpose: "assistant",
-        display: "visible",
-        parts: [{ type: "text", state: "done", text: "One finding" }],
-      },
-    ],
-  };
-  assert.deepEqual(
-    conversationSnapshotMessages(snapshot).map(({ id, role, content }) => ({ id, role, content })),
-    [
-      { id: "user", role: "user", content: "Review this" },
-      { id: "assistant", role: "assistant", content: "One finding" },
-    ],
-  );
-});
-
-test("history parses string timestamps, preserves epoch zero, and tolerates malformed metadata", () => {
-  const before = Date.now();
-  const timestamps = ["2026-09-05T10:00:00Z", "1970-01-01T00:00:00Z", undefined, {}, "invalid"];
-  const snapshot: FlueConversationSnapshot = {
-    v: 1,
-    conversationId: "session-1",
-    offset: "0",
-    settlements: [],
-    messages: timestamps.map((timestamp, index) => ({
-      id: String(index),
-      role: "assistant",
-      purpose: "assistant",
-      display: "visible",
-      parts: [],
-      metadata: { timestamp },
-    })),
-  };
-  const messages = conversationSnapshotMessages(snapshot);
-  const after = Date.now();
-  assert.equal(messages[0]?.timestamp, Date.parse("2026-09-05T10:00:00Z"));
-  assert.equal(messages[1]?.timestamp, 0);
-  for (const message of messages.slice(2))
-    assert.ok(message.timestamp >= before && message.timestamp <= after);
-});
-
-test("rejoining hydrates live tools and reasoning, then settles without duplicate messages", async () => {
-  const { conversationSnapshotState } = await import("./useStreamingChat");
-  const conversation: FlueConversationSnapshot = {
-    v: 1,
-    conversationId: "reattach",
-    offset: "1",
-    settlements: [],
+test("remote snapshots hydrate reasoning/tools and final settlement without duplicate messages", () => {
+  const snapshot: ReviewSnapshot = {
+    ...empty(),
+    running: true,
     messages: [
       {
         id: "user",
         role: "user",
-        purpose: "user",
-        display: "visible",
-        submissionId: "run",
-        parts: [{ type: "text", text: "Review", state: "done" }],
+        parts: [{ type: "text", text: "Review" }],
+        metadata: { timestamp: "1970-01-01T00:00:00Z", revision: "A" },
       },
       {
         id: "assistant",
         role: "assistant",
-        purpose: "assistant",
-        display: "visible",
-        submissionId: "run",
         parts: [
-          { type: "reasoning", text: "Inspecting files", state: "streaming" },
+          { type: "reasoning", text: "Inspecting" },
           {
             type: "dynamic-tool",
-            toolCallId: "tool",
+            toolCallId: "read-1",
             toolName: "read",
+            input: { path: "source.ts" },
             state: "input-available",
-            input: { path: "index.ts" },
           },
         ],
+        metadata: { timestamp: "2026-10-14T12:00:00Z", revision: "A" },
       },
     ],
   };
-  const active = conversationSnapshotState(conversation);
-  assert.equal(active.running, true);
-  assert.deepEqual(
-    active.messages.map((m) => m.id),
-    ["user"],
-  );
-  assert.equal(active.live?.reasoning, "Inspecting files");
-  assert.equal(active.live?.toolCalls[0]?.status, "running");
-  conversation.messages[1]!.parts = [{ type: "text", text: "One finding", state: "done" }];
-  assert.equal(conversationSnapshotState(conversation).running, true);
-  conversation.settlements.push({ submissionId: "run", outcome: "completed" });
-  const settled = conversationSnapshotState(conversation);
-  assert.equal(settled.running, false);
-  assert.equal(settled.live, undefined);
-  assert.deepEqual(
-    settled.messages.map((m) => m.id),
-    ["user", "assistant"],
-  );
+  const live = conversationSnapshotState(snapshot);
+  assert.equal(live.messages.length, 1);
+  assert.equal(live.live?.reasoning, "Inspecting");
+  assert.equal(live.live?.toolCalls[0]?.status, "running");
+  snapshot.running = false;
+  const messages = conversationSnapshotMessages(snapshot);
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0]?.timestamp, 0);
+  assert.equal(messages[1]?.revision, "A");
+});
+
+test("late responses from a previously selected session cannot replace the current chat", async () => {
+  const first = mockClient();
+  const second = mockClient();
+  const { chat, setId, dispose } = createRoot((dispose) => {
+    const [id, setId] = createSignal("first");
+    return {
+      chat: useStreamingChat({ getSessionId: id }, (id) =>
+        id === "first" ? first.client : second.client,
+      ),
+      setId,
+      dispose,
+    };
+  });
+  const sent = chat.sendMessage("Old review");
+  setId("second");
+  assert.equal(await sent, false);
+  first.publish({ ...empty(), running: true });
+  assert.equal(chat.isStreaming(), false);
+  assert.equal(first.aborts(), 0);
+  dispose();
 });
