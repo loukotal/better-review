@@ -15,7 +15,6 @@ import {
 } from "@flue/runtime";
 import { isRuntimeInstalled, Sandbox as MicroVm, type SandboxHandle } from "microsandbox";
 
-import type { FlueReviewSession } from "../flue-review-sessions";
 import { readFlueReviewSession } from "../flue-review-sessions";
 import { STORE_BASE_DIR } from "../store";
 
@@ -120,7 +119,7 @@ async function linkedGitRoot(worktreePath: string): Promise<string> {
   return root;
 }
 
-async function createPoolEntry(session: FlueReviewSession): Promise<PoolEntry> {
+async function createPoolEntry(session: WorktreeIdentity, owner = "1"): Promise<PoolEntry> {
   assertMicrosandboxInstalled();
   const identity: WorktreeIdentity = {
     owner: session.owner,
@@ -129,7 +128,7 @@ async function createPoolEntry(session: FlueReviewSession): Promise<PoolEntry> {
     headSha: session.headSha,
     worktreePath: await realpath(session.worktreePath),
   };
-  const name = microsandboxName(identity);
+  const name = microsandboxName(identity) + (owner === "1" ? "" : `-${hash(owner).slice(0, 8)}`);
   const existing = entries.get(name);
   if (existing) return existing;
 
@@ -161,7 +160,7 @@ async function createPoolEntry(session: FlueReviewSession): Promise<PoolEntry> {
       .detached(true)
       .workdir(identity.worktreePath)
       .labels({
-        [OWNER_LABEL]: "1",
+        [OWNER_LABEL]: owner,
         [WORKTREE_LABEL]: worktreeLabel(identity.worktreePath),
       })
       .volume(identity.worktreePath, (mount) =>
@@ -286,7 +285,7 @@ export function createSubmissionSandbox(
           if (output.code !== 0) throw new Error(output.stderr());
         }
         scratch = microsandboxSubmissionScratch(conversationId, randomUUID());
-        const output = await vm.exec("mkdir", ["-p", "--", scratch]);
+        const output = await vm.exec("mkdir", ["-p", "--", scratch, `${baseScratch}/pids`]);
         if (output.code !== 0) throw new Error(output.stderr());
         const gitConfig = `${baseScratch}/gitconfig`;
         const configureGit = await vm.exec("git", [
@@ -318,12 +317,13 @@ export function createSubmissionSandbox(
       const mkdirOutput = await vm.exec("mkdir", ["-p", "--", pidDirectory]);
       if (mkdirOutput.code !== 0) throw new Error(mkdirOutput.stderr());
       const pidFile = `${pidDirectory}/${randomUUID()}`;
-      const execution = await vm.execStreamWith("setsid", (builder) =>
+      // BusyBox setsid lacks --wait and forks when it is the process-group leader.
+      // Launch it as a child of a waiting shell so it can exec and preserve exit status.
+      const execution = await vm.execStreamWith("/bin/sh", (builder) =>
         builder
           .args([
-            "/bin/sh",
             "-c",
-            'echo "$$" > "$1"; exec /bin/sh -lc "$2"',
+            'setsid /bin/sh -c \'echo "$$" > "$1"; exec /bin/sh -lc "$2"\' better-review "$1" "$2" & wait "$!"',
             "better-review",
             pidFile,
             command,
@@ -413,6 +413,15 @@ export const microsandboxFactory: SandboxFactory = {
   ],
 };
 
+/** Reuse the checkout sandbox with a separate runtime's conversation and lifecycle. */
+export async function createReviewMicrosandbox(
+  identity: WorktreeIdentity,
+  conversationId: string,
+  owner: string,
+): Promise<SubmissionSandbox> {
+  return createSubmissionSandbox(await createPoolEntry(identity, owner), conversationId);
+}
+
 export async function beginMicrosandboxSubmission(sandbox: FlueSandbox): Promise<void> {
   await (sandbox as SubmissionSandbox).beginSubmission();
 }
@@ -442,9 +451,9 @@ async function removeMatchingMicrosandboxes(labels: Record<string, string>): Pro
   await Promise.all(handles.map(removeHandle));
 }
 
-export async function cleanupOrphanedMicrosandboxes(): Promise<void> {
+export async function cleanupOrphanedMicrosandboxes(owner = "1"): Promise<void> {
   assertMicrosandboxInstalled();
-  await removeMatchingMicrosandboxes({ [OWNER_LABEL]: "1" });
+  await removeMatchingMicrosandboxes({ [OWNER_LABEL]: owner });
   entries.clear();
   creating.clear();
 }

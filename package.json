@@ -8,6 +8,7 @@
   "type": "module",
   "module": "index.ts",
   "scripts": {
+    "prototype:pi": "pnpm --filter @better-review/pi-durable-prototype start",
     "ensure:dev-token": "node scripts/ensure-dev-token.mjs",
     "setup:microsandbox": "pnpm --filter better-review setup:microsandbox",
     "wait:api": "node scripts/wait-for-api.mjs",
