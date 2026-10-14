@@ -31,7 +31,7 @@ export const opencodeRouter = router({
         const opencode = yield* OpencodeService;
         yield* Effect.tryPromise(() => opencode.client.global.health());
         return { healthy: true };
-      }).pipe(Effect.catchAll((e) => Effect.succeed({ healthy: false, error: String(e) }))),
+      }).pipe(Effect.catch((e) => Effect.succeed({ healthy: false, error: String(e) }))),
     ),
   ),
 
@@ -316,13 +316,6 @@ export const opencodeRouter = router({
         activeSseByClientId.set(input.clientId, { subscriptionId, cancel: cancelSubscription });
       }
 
-      // Get the runtime and subscribe to events
-      const effectRuntime = await opencodeRuntime.runtime().catch((error) => {
-        throw new Error(
-          `[SSE] Failed to acquire Effect runtime: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-
       const { stream, getState, getSubscriberCount } = await opencodeRuntime
         .runPromise(
           Effect.gen(function* () {
@@ -370,7 +363,7 @@ export const opencodeRouter = router({
 
       // Convert Effect Stream to async iterable using our runtime
       // This properly handles cleanup when the iterator is returned
-      const asyncIterable = Stream.toAsyncIterableRuntime(stream, effectRuntime);
+      const asyncIterable = await opencodeRuntime.runPromise(Stream.toAsyncIterableEffect(stream));
       const iterator = asyncIterable[Symbol.asyncIterator]();
 
       try {

@@ -1007,10 +1007,10 @@ ${fileStats.join("\n")}`;
                 [
                   gh
                     .getFileContent({ owner, repo, path: oldPath, ref: oldRef })
-                    .pipe(Effect.catchAll(() => Effect.succeed(null))),
+                    .pipe(Effect.catch(() => Effect.succeed(null))),
                   gh
                     .getFileContent({ owner, repo, path: filePath, ref: newRef })
-                    .pipe(Effect.catchAll(() => Effect.succeed(null))),
+                    .pipe(Effect.catch(() => Effect.succeed(null))),
                 ],
                 { concurrency: 2 },
               ),
@@ -1121,11 +1121,11 @@ const main = Effect.gen(function* () {
 
   // Start the PR list background refresh loop (fetches every 15 min)
   yield* prListCache.backgroundLoop.pipe(
-    Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
+    Effect.catch((e) => Effect.log(`[pr-list-cache] Background loop exited: ${e}`)),
     Effect.forkScoped,
   );
   yield* checkout.backgroundCleanupLoop.pipe(
-    Effect.catchAll((e) => Effect.log(`[worktree-cleanup] Background loop exited: ${e}`)),
+    Effect.catch((e) => Effect.log(`[worktree-cleanup] Background loop exited: ${e}`)),
     Effect.forkScoped,
   );
 
@@ -1143,7 +1143,7 @@ const main = Effect.gen(function* () {
 
   // Warm the same daily cache once at startup without delaying the server or scheduling a loop.
   yield* Effect.tryPromise(() => checkAppUpdate()).pipe(
-    Effect.catchAll(() => Effect.void),
+    Effect.catch(() => Effect.void),
     Effect.forkScoped,
   );
 

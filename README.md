@@ -177,6 +177,21 @@ rename them as desired.
 
 ## Development
 
+Review sandboxes share VMs by checkout, with at most four distinct checkout VMs by default.
+Idle VMs expire after five minutes; active submissions hold leases and cannot be evicted.
+Use `BETTER_REVIEW_MICROSANDBOX_POOL_SIZE` and
+`BETTER_REVIEW_MICROSANDBOX_IDLE_TIMEOUT_SECONDS` to adjust these limits.
+Tool output is bounded while draining the command stream, and line-range reads happen inside the VM.
+Chat streams share a cached projection and send ordered patches, with full snapshots on reconnect.
+
+Set `BETTER_REVIEW_METRICS=1` to log timings and byte counts, or inspect the authenticated
+`/api/review/metrics` endpoint for process-local aggregates (including recent p95 timings).
+Run the real VM integration/measurement check with:
+
+```sh
+BETTER_REVIEW_SANDBOX_TEST=1 node --import tsx --test packages/better-review/src/review/microsandbox.integration.test.ts
+```
+
 ```sh
 pnpm test
 pnpm lint

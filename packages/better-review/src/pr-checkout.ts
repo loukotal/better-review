@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
-import { Data, Effect, Schedule } from "effect";
+import { Context, Data, Effect, Layer, Schedule } from "effect";
 
 import { runCommand } from "./command";
 import { removeMicrosandboxForWorktree } from "./review/microsandbox";
@@ -1010,128 +1010,109 @@ function formatCheckoutTrace(trace: CheckoutTracePhase[]): string {
   return trace.map((phase) => `${phase.name}=${phase.elapsedMs}ms@${phase.totalMs}ms`).join(" ");
 }
 
-export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCheckoutService", {
-  effect: Effect.succeed({
-    cleanupExpiredWorktrees: (
-      options?: WorktreeCleanupOptions,
-    ): Effect.Effect<WorktreeCleanupResult, CheckoutError> =>
-      Effect.tryPromise({
-        try: () => cleanupExpiredWorktrees(options),
-        catch: (cause) => new CheckoutError({ command: "cleanupExpiredWorktrees", cause }),
-      }).pipe(
-        Effect.withSpan("PrCheckoutService.cleanupExpiredWorktrees", {
-          attributes: {
-            maxUnusedMs: options?.maxUnusedMs ?? WORKTREE_MAX_UNUSED_MS,
-          },
-        }),
+const makePrCheckoutService = Effect.succeed({
+  cleanupExpiredWorktrees: (
+    options?: WorktreeCleanupOptions,
+  ): Effect.Effect<WorktreeCleanupResult, CheckoutError> =>
+    Effect.tryPromise({
+      try: () => cleanupExpiredWorktrees(options),
+      catch: (cause) => new CheckoutError({ command: "cleanupExpiredWorktrees", cause }),
+    }).pipe(
+      Effect.withSpan("PrCheckoutService.cleanupExpiredWorktrees", {
+        attributes: {
+          maxUnusedMs: options?.maxUnusedMs ?? WORKTREE_MAX_UNUSED_MS,
+        },
+      }),
+    ),
+
+  backgroundCleanupLoop: Effect.gen(function* () {
+    yield* Effect.log(
+      `[worktree-cleanup] Starting background cleanup loop (maxUnused=${Math.round(WORKTREE_MAX_UNUSED_MS / (24 * 60 * 60 * 1000))}d interval=${Math.round(WORKTREE_CLEANUP_INTERVAL_MS / 1000)}s)`,
+    );
+
+    const runCleanup = Effect.tryPromise(() => cleanupExpiredWorktrees()).pipe(
+      Effect.tap((result) =>
+        Effect.log(
+          `[worktree-cleanup] DONE scanned=${result.scanned} removed=${result.removed} skipped=${result.skipped} errors=${result.errors.length}`,
+        ),
       ),
+      Effect.tap((result) =>
+        result.errors.length > 0
+          ? Effect.log(
+              `[worktree-cleanup] Errors: ${result.errors
+                .map((error) => `${error.worktreePath}: ${error.message}`)
+                .join("; ")}`,
+            )
+          : Effect.void,
+      ),
+      Effect.catch((error) => Effect.log(`[worktree-cleanup] Failed: ${String(error)}`)),
+    );
 
-    backgroundCleanupLoop: Effect.gen(function* () {
-      yield* Effect.log(
-        `[worktree-cleanup] Starting background cleanup loop (maxUnused=${Math.round(WORKTREE_MAX_UNUSED_MS / (24 * 60 * 60 * 1000))}d interval=${Math.round(WORKTREE_CLEANUP_INTERVAL_MS / 1000)}s)`,
-      );
+    yield* runCleanup.pipe(Effect.repeat(Schedule.spaced(WORKTREE_CLEANUP_INTERVAL_MS)));
+  }),
 
-      const runCleanup = Effect.tryPromise(() => cleanupExpiredWorktrees()).pipe(
-        Effect.tap((result) =>
-          Effect.log(
-            `[worktree-cleanup] DONE scanned=${result.scanned} removed=${result.removed} skipped=${result.skipped} errors=${result.errors.length}`,
-          ),
-        ),
-        Effect.tap((result) =>
-          result.errors.length > 0
-            ? Effect.log(
-                `[worktree-cleanup] Errors: ${result.errors
-                  .map((error) => `${error.worktreePath}: ${error.message}`)
-                  .join("; ")}`,
-              )
-            : Effect.void,
-        ),
-        Effect.catchAll((error) => Effect.log(`[worktree-cleanup] Failed: ${String(error)}`)),
-      );
+  prepare: (input: PreparePrCheckoutInput): Effect.Effect<PreparedPrCheckout, CheckoutError> => {
+    const startedAt = Date.now();
+    const trace: CheckoutTracePhase[] = [];
 
-      yield* runCleanup.pipe(Effect.repeat(Schedule.spaced(WORKTREE_CLEANUP_INTERVAL_MS)));
-    }),
+    return Effect.tryPromise({
+      try: async () => {
+        const repoGitDir = repoGitDirFor(input);
+        const worktreePath = preparedWorktreePath(input);
 
-    prepare: (input: PreparePrCheckoutInput): Effect.Effect<PreparedPrCheckout, CheckoutError> => {
-      const startedAt = Date.now();
-      const trace: CheckoutTracePhase[] = [];
+        return await withRepoGitQueue(repoGitDir, async (queue) => {
+          trace.push({
+            name: queue.queued ? "queue.wait" : "queue.ready",
+            elapsedMs: queue.waitedMs,
+            totalMs: Date.now() - startedAt,
+          });
+          await traceCheckoutPhase(trace, startedAt, "ensureBareRepo", () =>
+            ensureBareRepo(input.owner, input.repo, repoGitDir),
+          );
+          const localBranch = localPrBranchName(input);
 
-      return Effect.tryPromise({
-        try: async () => {
-          const repoGitDir = repoGitDirFor(input);
-          const worktreePath = preparedWorktreePath(input);
+          await traceCheckoutPhase(trace, startedAt, "ensureBaseRef", () =>
+            ensureBaseRef(repoGitDir, input),
+          );
+          await traceCheckoutPhase(trace, startedAt, "fetchPullHeadBranch", () =>
+            fetchPullHeadBranch(repoGitDir, input, localBranch),
+          );
+          await traceCheckoutPhase(trace, startedAt, "ensureReviewHistory", () =>
+            ensureReviewHistory(repoGitDir, input),
+          );
+          await traceCheckoutPhase(trace, startedAt, "ensureOfflineReviewDiff", () =>
+            ensureOfflineReviewDiff(repoGitDir, input),
+          );
 
-          return await withRepoGitQueue(repoGitDir, async (queue) => {
-            trace.push({
-              name: queue.queued ? "queue.wait" : "queue.ready",
-              elapsedMs: queue.waitedMs,
-              totalMs: Date.now() - startedAt,
-            });
-            await traceCheckoutPhase(trace, startedAt, "ensureBareRepo", () =>
-              ensureBareRepo(input.owner, input.repo, repoGitDir),
+          const currentHead = await traceCheckoutPhase(trace, startedAt, "getWorktreeHead", () =>
+            getWorktreeHead(worktreePath),
+          );
+          if (currentHead === input.headSha) {
+            const prepared = await traceCheckoutPhase(
+              trace,
+              startedAt,
+              "readPreparedCheckout",
+              () => readPreparedCheckout(worktreePath, input),
             );
-            const localBranch = localPrBranchName(input);
-
-            await traceCheckoutPhase(trace, startedAt, "ensureBaseRef", () =>
-              ensureBaseRef(repoGitDir, input),
-            );
-            await traceCheckoutPhase(trace, startedAt, "fetchPullHeadBranch", () =>
-              fetchPullHeadBranch(repoGitDir, input, localBranch),
-            );
-            await traceCheckoutPhase(trace, startedAt, "ensureReviewHistory", () =>
-              ensureReviewHistory(repoGitDir, input),
-            );
-            await traceCheckoutPhase(trace, startedAt, "ensureOfflineReviewDiff", () =>
-              ensureOfflineReviewDiff(repoGitDir, input),
-            );
-
-            const currentHead = await traceCheckoutPhase(trace, startedAt, "getWorktreeHead", () =>
-              getWorktreeHead(worktreePath),
-            );
-            if (currentHead === input.headSha) {
-              const prepared = await traceCheckoutPhase(
-                trace,
-                startedAt,
-                "readPreparedCheckout",
-                () => readPreparedCheckout(worktreePath, input),
+            if (prepared) {
+              await traceCheckoutPhase(trace, startedAt, "writePrContext", () =>
+                writePrContext(input, worktreePath, prepared.repoAccess),
               );
-              if (prepared) {
-                await traceCheckoutPhase(trace, startedAt, "writePrContext", () =>
-                  writePrContext(input, worktreePath, prepared.repoAccess),
-                );
-                trace.push({
-                  name: "preparedWorktreeCache.hit",
-                  elapsedMs: 0,
-                  totalMs: Date.now() - startedAt,
-                });
-                return prepared;
-              }
               trace.push({
-                name: "preparedWorktreeCache.miss",
+                name: "preparedWorktreeCache.hit",
                 elapsedMs: 0,
                 totalMs: Date.now() - startedAt,
               });
+              return prepared;
             }
+            trace.push({
+              name: "preparedWorktreeCache.miss",
+              elapsedMs: 0,
+              totalMs: Date.now() - startedAt,
+            });
+          }
 
-            if (currentHead === input.headSha) {
-              const repoAccess = await traceCheckoutPhase(
-                trace,
-                startedAt,
-                "verifyWorktreeAccess",
-                () => verifyWorktreeAccess(worktreePath, input),
-              );
-              await traceCheckoutPhase(trace, startedAt, "writePrContext", () =>
-                writePrContext(input, worktreePath, repoAccess),
-              );
-              return { worktreePath, repoAccess };
-            }
-
-            await traceCheckoutPhase(trace, startedAt, "createWorktreeParent", () =>
-              mkdir(join(worktreePath, ".."), { recursive: true }),
-            );
-            await traceCheckoutPhase(trace, startedAt, "addWorktree", () =>
-              runGit(repoGitDir, ["worktree", "add", worktreePath, localBranch]),
-            );
+          if (currentHead === input.headSha) {
             const repoAccess = await traceCheckoutPhase(
               trace,
               startedAt,
@@ -1142,33 +1123,54 @@ export class PrCheckoutService extends Effect.Service<PrCheckoutService>()("PrCh
               writePrContext(input, worktreePath, repoAccess),
             );
             return { worktreePath, repoAccess };
-          });
-        },
-        catch: (cause) => new CheckoutError({ command: "preparePrCheckout", cause }),
-      }).pipe(
-        Effect.tap(() =>
-          Effect.log(
-            `[pr-checkout.prepare] DONE ${input.owner}/${input.repo}#${input.number} head=${input.headSha.slice(0, 12)} total=${Date.now() - startedAt}ms ${formatCheckoutTrace(trace)}`,
-          ),
-        ),
-        Effect.tapError((error) =>
-          Effect.log(
-            `[pr-checkout.prepare] ERROR ${input.owner}/${input.repo}#${input.number} head=${input.headSha.slice(0, 12)} total=${Date.now() - startedAt}ms ${formatCheckoutTrace(trace)} error=${String(error)}`,
-          ),
-        ),
-        Effect.withSpan("PrCheckoutService.prepare", {
-          attributes: {
-            owner: input.owner,
-            repo: input.repo,
-            number: input.number,
-            headSha: input.headSha,
-            baseSha: input.baseSha,
-            reviewMode: input.reviewMode,
-          },
-        }),
-      );
-    },
-  }),
-}) {}
+          }
 
-export const PrCheckoutServiceLive = PrCheckoutService.Default;
+          await traceCheckoutPhase(trace, startedAt, "createWorktreeParent", () =>
+            mkdir(join(worktreePath, ".."), { recursive: true }),
+          );
+          await traceCheckoutPhase(trace, startedAt, "addWorktree", () =>
+            runGit(repoGitDir, ["worktree", "add", worktreePath, localBranch]),
+          );
+          const repoAccess = await traceCheckoutPhase(
+            trace,
+            startedAt,
+            "verifyWorktreeAccess",
+            () => verifyWorktreeAccess(worktreePath, input),
+          );
+          await traceCheckoutPhase(trace, startedAt, "writePrContext", () =>
+            writePrContext(input, worktreePath, repoAccess),
+          );
+          return { worktreePath, repoAccess };
+        });
+      },
+      catch: (cause) => new CheckoutError({ command: "preparePrCheckout", cause }),
+    }).pipe(
+      Effect.tap(() =>
+        Effect.log(
+          `[pr-checkout.prepare] DONE ${input.owner}/${input.repo}#${input.number} head=${input.headSha.slice(0, 12)} total=${Date.now() - startedAt}ms ${formatCheckoutTrace(trace)}`,
+        ),
+      ),
+      Effect.tapError((error) =>
+        Effect.log(
+          `[pr-checkout.prepare] ERROR ${input.owner}/${input.repo}#${input.number} head=${input.headSha.slice(0, 12)} total=${Date.now() - startedAt}ms ${formatCheckoutTrace(trace)} error=${String(error)}`,
+        ),
+      ),
+      Effect.withSpan("PrCheckoutService.prepare", {
+        attributes: {
+          owner: input.owner,
+          repo: input.repo,
+          number: input.number,
+          headSha: input.headSha,
+          baseSha: input.baseSha,
+          reviewMode: input.reviewMode,
+        },
+      }),
+    );
+  },
+});
+
+export type PrCheckoutService = Effect.Success<typeof makePrCheckoutService>;
+export const PrCheckoutService = Context.Service<PrCheckoutService>(
+  "better-review/PrCheckoutService",
+);
+export const PrCheckoutServiceLive = Layer.effect(PrCheckoutService, makePrCheckoutService);

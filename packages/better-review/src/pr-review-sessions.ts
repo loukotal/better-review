@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 import type { RepoAccessCheck } from "./pr-checkout";
 import { STORE_BASE_DIR, StoreService, StoreServiceLive } from "./store";
@@ -64,51 +64,49 @@ export function isPrReviewSession(
   return session?.runtimeVersion === 2 || session?.runtimeVersion === 3;
 }
 
-export class PrReviewSessionService extends Effect.Service<PrReviewSessionService>()(
-  "PrReviewSessionService",
-  {
-    effect: Effect.gen(function* () {
-      const store = yield* StoreService;
+const makePrReviewSessionService = Effect.gen(function* () {
+  const store = yield* StoreService;
 
-      const get = (id: string) =>
-        Effect.gen(function* () {
-          const key = validateSessionId(id);
-          return (
-            (yield* store.get<PrReviewSession>(PR_REVIEW_SESSIONS_NAMESPACE, key)) ??
-            (yield* store.get<PrReviewSession>(LEGACY_NAMESPACE, key))
-          );
-        });
+  const get = (id: string) =>
+    Effect.gen(function* () {
+      const key = validateSessionId(id);
+      return (
+        (yield* store.get<PrReviewSession>(PR_REVIEW_SESSIONS_NAMESPACE, key)) ??
+        (yield* store.get<PrReviewSession>(LEGACY_NAMESPACE, key))
+      );
+    });
 
-      const save = (session: PrReviewSession) =>
-        store.set(PR_REVIEW_SESSIONS_NAMESPACE, validateSessionId(session.id), {
-          ...session,
-          updatedAt: Date.now(),
-        });
+  const save = (session: PrReviewSession) =>
+    store.set(PR_REVIEW_SESSIONS_NAMESPACE, validateSessionId(session.id), {
+      ...session,
+      updatedAt: Date.now(),
+    });
 
-      const create = (
-        input: Omit<PrReviewSession, "createdAt" | "updatedAt"> & {
-          createdAt?: number;
-          updatedAt?: number;
-        },
-      ) => {
-        const now = Date.now();
-        const session: PrReviewSession = {
-          ...input,
-          id: validateSessionId(input.id),
-          createdAt: input.createdAt ?? now,
-          updatedAt: input.updatedAt ?? now,
-        };
+  const create = (
+    input: Omit<PrReviewSession, "createdAt" | "updatedAt"> & {
+      createdAt?: number;
+      updatedAt?: number;
+    },
+  ) => {
+    const now = Date.now();
+    const session: PrReviewSession = {
+      ...input,
+      id: validateSessionId(input.id),
+      createdAt: input.createdAt ?? now,
+      updatedAt: input.updatedAt ?? now,
+    };
 
-        return store
-          .set(PR_REVIEW_SESSIONS_NAMESPACE, session.id, session)
-          .pipe(Effect.as(session));
-      };
+    return store.set(PR_REVIEW_SESSIONS_NAMESPACE, session.id, session).pipe(Effect.as(session));
+  };
 
-      return { get, save, create };
-    }),
-  },
-) {}
+  return { get, save, create };
+});
 
-export const PrReviewSessionServiceLive = PrReviewSessionService.Default.pipe(
-  Layer.provide(StoreServiceLive),
+export type PrReviewSessionService = Effect.Success<typeof makePrReviewSessionService>;
+export const PrReviewSessionService = Context.Service<PrReviewSessionService>(
+  "better-review/PrReviewSessionService",
 );
+export const PrReviewSessionServiceLive = Layer.effect(
+  PrReviewSessionService,
+  makePrReviewSessionService,
+).pipe(Layer.provide(StoreServiceLive));

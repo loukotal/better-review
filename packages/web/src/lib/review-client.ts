@@ -1,4 +1,4 @@
-import type { ReviewSnapshot } from "@better-review/shared";
+import { applyReviewUpdate, type ReviewSnapshot, type ReviewUpdate } from "@better-review/shared";
 
 import { fetchWithApiAuth } from "./apiAuth";
 
@@ -56,6 +56,8 @@ export function createReviewClient(sessionId: string): ReviewClient {
             throw new Error(`Review stream failed (${response.status})`);
           const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
           let buffer = "";
+          let current: ReviewSnapshot | undefined;
+          let version = 0;
           try {
             while (!controller.signal.aborted) {
               const chunk = await reader.read();
@@ -70,7 +72,18 @@ export function createReviewClient(sessionId: string): ReviewClient {
                   .filter((line) => line.startsWith("data:"))
                   .map((line) => line.slice(5).trimStart())
                   .join("\n");
-                if (frame.includes("event: snapshot") && data) snapshot(JSON.parse(data));
+                if (frame.includes("event: snapshot") && data) {
+                  const value: { version: number; snapshot: ReviewSnapshot } = JSON.parse(data);
+                  current = value.snapshot;
+                  version = value.version;
+                  snapshot(current);
+                } else if (frame.includes("event: update") && data) {
+                  if (!current) throw new Error("Review stream needs an initial snapshot");
+                  const update: ReviewUpdate = JSON.parse(data);
+                  current = applyReviewUpdate(current, version, update);
+                  version = update.version;
+                  snapshot(current);
+                }
                 if (data) {
                   attempt = 0;
                   connected();

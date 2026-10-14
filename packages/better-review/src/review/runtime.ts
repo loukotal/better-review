@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 
-import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { type Models } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
 import { Hono } from "hono";
@@ -25,12 +24,14 @@ import { ensureSessionCheckout } from "../session-checkout";
 import { STORE_BASE_DIR } from "../store";
 import { openReviewEngine, type ReviewEngine } from "./engine";
 import { readLegacyHistory } from "./legacy-history";
+import { reviewMetrics } from "./metrics";
 import {
   cleanupOrphanedMicrosandboxes,
   createReviewMicrosandbox,
   type SubmissionSandbox,
 } from "./microsandbox";
 import { createReviewModels } from "./providers";
+import { reviewStream, encodeReviewFrame, type ReviewFrame } from "./stream";
 
 export const REVIEW_DATABASE_DIR =
   process.env.BETTER_REVIEW_DATABASE_DIR ?? path.join(STORE_BASE_DIR, "pi-reviews");
@@ -46,6 +47,8 @@ export function createReviewRuntime(options: {
   admitted?: (id: string, requestId: string, submissionId: string) => Promise<void>;
 }) {
   const engines = new Map<string, Promise<ReviewEngine>>();
+  const streams = new Map<string, ReturnType<typeof reviewStream>>();
+  const streamClosers = new Set<() => void>();
   let ownership: Promise<() => Promise<void>> | undefined;
   let closing = false;
   const claim = () => {
@@ -123,6 +126,7 @@ export function createReviewRuntime(options: {
     );
   }
   const app = new Hono();
+  app.get("/metrics", (c) => c.json(reviewMetrics()));
   app.onError((error, c) =>
     c.json(
       { error: { message: error.message } },
@@ -158,26 +162,57 @@ export function createReviewRuntime(options: {
     return c.json({ success: true });
   });
   app.get("/sessions/:id/events", async (c) => {
-    const engine = await get(c.req.param("id"));
+    const id = c.req.param("id");
+    const engine = await get(id);
+    let channel = streams.get(id);
+    if (!channel) {
+      channel = reviewStream(engine);
+      streams.set(id, channel);
+    }
     return streamSSE(c, async (stream) => {
-      const watch = await engine.conversation.watch(context);
-      const send = async () =>
-        stream.writeSSE({ event: "snapshot", data: JSON.stringify(await engine.snapshot()) });
-      const heartbeat = setInterval(() => {
-        void stream.writeSSE({ event: "heartbeat", data: "{}" }).catch(() => undefined);
-      }, 15000);
+      let latest: ReviewFrame | undefined;
+      let lastVersion: number | undefined;
+      let sending = false;
+      let stopped = false;
       let finish!: () => void;
       const ended = new Promise<void>((resolve) => {
         finish = resolve;
       });
+      const send = async () => {
+        if (sending || stopped) return;
+        sending = true;
+        try {
+          while (latest && !stopped) {
+            const frame = latest;
+            latest = undefined;
+            if (frame.version === lastVersion) continue;
+            await stream.writeSSE(encodeReviewFrame(frame, lastVersion));
+            lastVersion = frame.version;
+          }
+        } catch {
+          finish();
+        } finally {
+          sending = false;
+        }
+      };
+      const unsubscribe = channel.subscribe((frame) => {
+        latest = frame;
+        void send();
+      });
+      const heartbeat = setInterval(() => {
+        void stream.writeSSE({ event: "heartbeat", data: "{}" }).catch(() => undefined);
+      }, 15000);
+      streamClosers.add(finish);
       stream.onAbort(finish);
       try {
+        latest = await channel.current();
         await send();
-        watch.start(send);
-        await Promise.race([ended, watch.closed]);
+        await ended;
       } finally {
+        stopped = true;
+        unsubscribe();
+        streamClosers.delete(finish);
         clearInterval(heartbeat);
-        await watch.stop();
       }
     });
   });
@@ -196,6 +231,9 @@ export function createReviewRuntime(options: {
       }
     },
     async close() {
+      for (const finish of streamClosers) finish();
+      for (const channel of streams.values()) channel.close();
+      streams.clear();
       if (closing) return;
       closing = true;
       try {

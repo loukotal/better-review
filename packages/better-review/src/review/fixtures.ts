@@ -42,6 +42,7 @@ export function fixtureSandbox(head: string, read?: () => Promise<string>): Subm
       return { stdout: head, stderr: "", exitCode: 0 };
     },
     readFile: read ?? (async () => `revision ${head}`),
+    readLines: async () => `1: ${read ? await read() : `revision ${head}`}`,
     readFileBuffer: async () => new Uint8Array(),
     writeFile: async () => {
       throw new Error("read-only");

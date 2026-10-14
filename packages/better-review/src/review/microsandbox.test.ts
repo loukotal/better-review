@@ -58,7 +58,7 @@ test("cached conversations resume a stopped shared VM before resetting scratch",
   await Promise.all([first.beginSubmission(), second.beginSubmission()]);
   assert.equal(start.mock.callCount(), 1);
   assert.equal(entry.vm, resumedVm);
-  assert.equal(commands.filter((command) => command === "mkdir").length, 2);
+  assert.equal(commands.filter((command) => command === "/bin/sh").length, 2);
   await first.endSubmission();
   await first.beginSubmission();
   assert.equal(start.mock.callCount(), 1);

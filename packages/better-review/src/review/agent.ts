@@ -59,13 +59,7 @@ export function reviewerExtension(
     outputLimits: { maxBytes: 48000, maxLines: 2000 },
     execute: async ({ path, offset = 1, limit = 200 }, api, context) => {
       context.abortSignal?.throwIfAborted();
-      const lines = (await (await getSandbox()).readFile(path)).split("\n");
-      api.output(
-        lines
-          .slice(offset - 1, offset - 1 + limit)
-          .map((line, index) => `${offset + index}: ${line}`)
-          .join("\n"),
-      );
+      api.output(await (await getSandbox()).readLines(path, offset, limit, context.abortSignal));
       return {};
     },
   });

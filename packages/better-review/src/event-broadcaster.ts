@@ -2,7 +2,7 @@ import type {
   Event as OpenCodeEvent,
   GlobalEvent as OpenCodeGlobalEvent,
 } from "@opencode-ai/sdk/v2";
-import { Effect, Fiber, Layer, PubSub, Ref, Schedule, Stream } from "effect";
+import { Context, Duration, Effect, Fiber, Layer, PubSub, Ref, Schedule, Stream } from "effect";
 
 import { OpencodeService, OpencodeServiceLive } from "./opencode";
 import { transformEvent } from "./stream";
@@ -34,10 +34,10 @@ const makeEventBroadcaster = Effect.gen(function* () {
   const subscriberCountRef = yield* Ref.make(0);
 
   // Connection fiber reference (null when not connected)
-  const connectionFiberRef = yield* Ref.make<Fiber.RuntimeFiber<void, never> | null>(null);
+  const connectionFiberRef = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
 
   // Idle timeout fiber (for delayed connection shutdown)
-  const idleTimeoutFiberRef = yield* Ref.make<Fiber.RuntimeFiber<void, never> | null>(null);
+  const idleTimeoutFiberRef = yield* Ref.make<Fiber.Fiber<void, never> | null>(null);
 
   // Idle timeout duration (keep connection alive for 5 seconds after last subscriber)
   const IDLE_TIMEOUT_MS = 5000;
@@ -132,8 +132,10 @@ const makeEventBroadcaster = Effect.gen(function* () {
     retryAttempt = 0;
   };
   const reconnectSchedule = Schedule.exponential("1 second").pipe(
-    Schedule.union(Schedule.spaced("30 seconds")),
-    Schedule.tapInput(() =>
+    Schedule.modifyDelay(({ duration }) =>
+      Effect.succeed(Math.min(Duration.toMillis(duration), 30000)),
+    ),
+    Schedule.tap(() =>
       Effect.gen(function* () {
         retryAttempt++;
         yield* setState({ _tag: "Reconnecting", attempt: retryAttempt });
@@ -144,7 +146,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
   // Connection with auto-retry
   const connectionWithRetry = runConnection.pipe(
     Effect.retry(reconnectSchedule),
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.gen(function* () {
         yield* setState({ _tag: "Error", error: error.message });
         yield* Effect.log(`[EventBroadcaster] Giving up after retries: ${error.message}`);
@@ -167,7 +169,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
     yield* Effect.log("[EventBroadcaster] Starting connection...");
 
     // Fork the connection - it runs until interrupted
-    const fiber = yield* Effect.forkDaemon(
+    const fiber = yield* Effect.forkDetach(
       connectionWithRetry.pipe(
         Effect.ensuring(
           Effect.gen(function* () {
@@ -212,7 +214,7 @@ const makeEventBroadcaster = Effect.gen(function* () {
 
     yield* Effect.log(`[EventBroadcaster] Scheduling connection stop in ${IDLE_TIMEOUT_MS}ms...`);
 
-    const idleFiber = yield* Effect.forkDaemon(
+    const idleFiber = yield* Effect.forkDetach(
       Effect.gen(function* () {
         yield* Effect.sleep(IDLE_TIMEOUT_MS);
 
@@ -325,10 +327,9 @@ const makeEventBroadcaster = Effect.gen(function* () {
   };
 });
 
-export class EventBroadcaster extends Effect.Service<EventBroadcaster>()("EventBroadcaster", {
-  scoped: makeEventBroadcaster,
-}) {}
+export type EventBroadcaster = Effect.Success<typeof makeEventBroadcaster>;
+export const EventBroadcaster = Context.Service<EventBroadcaster>("better-review/EventBroadcaster");
 
-export const EventBroadcasterLive = EventBroadcaster.Default.pipe(
+export const EventBroadcasterLive = Layer.effect(EventBroadcaster, makeEventBroadcaster).pipe(
   Layer.provide(OpencodeServiceLive),
 );

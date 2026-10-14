@@ -34,3 +34,38 @@ export type ReviewSnapshot = {
   revision?: string;
   usage?: { input: number; output: number; cost: number };
 };
+
+/** Ordered patch; reconnects always begin with a complete snapshot. */
+export type ReviewUpdate = {
+  baseVersion: number;
+  version: number;
+  state: Omit<ReviewSnapshot, "messages">;
+  messages: { start: number; deleteCount: number; items: ReviewMessage[] };
+};
+
+export function applyReviewUpdate(
+  current: ReviewSnapshot,
+  version: number,
+  update: ReviewUpdate,
+): ReviewSnapshot {
+  const { start, deleteCount, items } = update.messages;
+  if (
+    update.baseVersion !== version ||
+    update.version !== version + 1 ||
+    update.state.sessionId !== current.sessionId ||
+    !Number.isInteger(start) ||
+    !Number.isInteger(deleteCount) ||
+    start < 0 ||
+    deleteCount < 0 ||
+    start + deleteCount > current.messages.length
+  )
+    throw new Error("Review stream is out of sync; reconnecting…");
+  return {
+    ...update.state,
+    messages: [
+      ...current.messages.slice(0, start),
+      ...items,
+      ...current.messages.slice(start + deleteCount),
+    ],
+  };
+}

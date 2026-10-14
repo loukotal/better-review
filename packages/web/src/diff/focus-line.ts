@@ -2,8 +2,8 @@ import { FileDiff, VirtualizedFileDiff, type AnnotationSide } from "@pierre/diff
 
 // Widen only documented protected APIs; never reach into virtualizer caches.
 export class FocusableFileDiff<T> extends FileDiff<T> {
-  public override getFileContainer() {
-    return super.getFileContainer();
+  public getFileContainer() {
+    return this.fileContainer;
   }
   getExpandedHunks() {
     return this.hunksRenderer.getExpandedHunksMap();
@@ -11,8 +11,8 @@ export class FocusableFileDiff<T> extends FileDiff<T> {
 }
 
 export class FocusableVirtualizedFileDiff<T> extends VirtualizedFileDiff<T> {
-  public override getFileContainer() {
-    return super.getFileContainer();
+  public getFileContainer() {
+    return this.fileContainer;
   }
   getExpandedHunks() {
     return this.hunksRenderer.getExpandedHunksMap();

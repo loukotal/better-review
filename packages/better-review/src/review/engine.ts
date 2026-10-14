@@ -9,6 +9,7 @@ import {
   type EntryRecord,
   type SubmissionRecord,
   type ModelRef,
+  type CommitPublication,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 
@@ -21,6 +22,7 @@ import type {
 
 import type { PrReviewSession } from "../pr-review-sessions";
 import { reviewerExtension } from "./agent";
+import { measure, startMeasurement } from "./metrics";
 import type { SubmissionSandbox } from "./microsandbox";
 
 const ReviewDoc = defineDoc<{ session: string; legacySettlements: string }>({
@@ -69,17 +71,25 @@ export async function openReviewEngine(options: {
   sandbox: (session: PrReviewSession) => Promise<SubmissionSandbox>;
 }) {
   let vm: Promise<SubmissionSandbox> | undefined;
+  let cleanup: Promise<void> = Promise.resolve();
+  let runGeneration = 0;
   let session = options.session;
   const releaseSandbox = async () => {
     const active = vm;
     vm = undefined;
-    if (active) await (await active).endSubmission();
+    if (active)
+      cleanup = cleanup.then(async () => {
+        await (await active).endSubmission();
+      });
+    await cleanup;
   };
   const getSandbox = () =>
-    (vm ??= options.sandbox(session).then(async (sandbox) => {
-      await sandbox.beginSubmission();
-      return sandbox;
-    }));
+    (vm ??= cleanup
+      .then(() => options.sandbox(session))
+      .then(async (sandbox) => {
+        await sandbox.beginSubmission();
+        return sandbox;
+      }));
   const registry = createRegistry();
   registry.install(reviewerExtension(async () => session, getSandbox));
   const storage = await openNodeSqliteStorage(options.database);
@@ -172,13 +182,63 @@ export async function openReviewEngine(options: {
     } while (cursor);
     return records;
   }
+  const entryCache = new Map<number, EntryRecord>();
+  const submissionCache = new Map<number, SubmissionRecord>();
+  let docs: Record<string, unknown> = {};
+  let historyDirty = true;
+  let cachedHistory: { messages: ReviewMessage[]; ref: string; submissionId?: string } | undefined;
+  const listeners = new Set<() => void>();
+  const pendingCommits: CommitPublication[] = [];
+  let hydrated = false;
+  let lastSnapshot: ReviewSnapshot | undefined;
+  function adopt(publication: CommitPublication) {
+    let changed = false;
+    for (const change of publication.changes) {
+      if (change.type === "entry" && change.value.conversationId === conversation.id) {
+        entryCache.set(change.value.id, change.value);
+        historyDirty = true;
+        changed = true;
+      } else if (change.type === "submission" && change.value.conversationId === conversation.id) {
+        submissionCache.set(change.value.id, change.value);
+        historyDirty = true;
+        changed = true;
+      } else if (change.type === "document" && change.conversationId === conversation.id) {
+        docs[change.record.kind] = change.value;
+        changed = true;
+      }
+    }
+    if (changed) {
+      lastSnapshot = undefined;
+      queueMicrotask(() => {
+        for (const notify of listeners) notify();
+      });
+    }
+  }
+  const stopCommits = harness.subscribeCommits((publication) => {
+    if (!hydrated) pendingCommits.push(publication);
+    else adopt(publication);
+  });
+  const hydrateDone = startMeasurement("snapshot.hydrate");
+  const [initialEntries, initialSubmissions, initialView] = await Promise.all([
+    allEntries(),
+    allSubmissions(),
+    conversation.watch(context),
+  ]);
+  for (const entry of initialEntries) entryCache.set(entry.id, entry);
+  for (const record of initialSubmissions) submissionCache.set(record.id, record);
+  docs = { ...initialView.value.docs };
+  await initialView.stop();
+  for (const publication of pendingCommits) adopt(publication);
+  pendingCommits.length = 0;
+  hydrated = true;
+  hydrateDone();
+  measure("snapshot.hydrated.entries", entryCache.size);
+
   async function snapshot(): Promise<ReviewSnapshot> {
-    const [entries, submissions, view] = await Promise.all([
-      allEntries(),
-      allSubmissions(),
-      conversation.watch(context),
-    ]);
-    const live = view.value.docs["pi.live"] as
+    if (lastSnapshot) return lastSnapshot;
+    const done = startMeasurement("snapshot.project");
+    const submissions = [...submissionCache.values()].sort((a, b) => a.id - b.id);
+    const live = docs["pi.live"] as
       | {
           run?: { taskId: number };
           generation?: { message?: Extract<Message, { role: "assistant" }> };
@@ -186,59 +246,71 @@ export async function openReviewEngine(options: {
           compactions?: unknown[];
         }
       | undefined;
-    await view.stop();
-    const messages: ReviewMessage[] = [];
+    let messages: ReviewMessage[] = [];
     let ref =
       session.revisionHistory?.[0]?.commitSha ??
       session.revisionHistory?.[0]?.headSha ??
       session.commitSha ??
       session.headSha;
     let submissionId: string | undefined;
-    for (const entry of entries) {
-      if (entry.kind === "review.revision") {
-        ref = (entry.data as { ref: string }).ref;
-        continue;
-      }
-      if (entry.kind === "review.legacy") {
-        const message: ReviewMessage = JSON.parse(entry.data as string);
-        message.metadata.revision ??= ref;
-        messages.push(message);
-        continue;
-      }
-      if (
-        entry.kind !== "pi.user" &&
-        entry.kind !== "pi.assistant" &&
-        entry.kind !== "pi.tool-result"
-      )
-        continue;
-      const submission = submissions.find((record) => record.entry === entry.id);
-      if (submission?.type === "input") submissionId = String(submission.id);
-      for (const model of entry.model ?? []) {
-        if (model.role === "user" || model.role === "assistant") {
-          messages.push({
-            id: `pi:${entry.id}`,
-            role: model.role,
-            submissionId,
-            metadata: { timestamp: new Date(model.timestamp).toISOString(), revision: ref },
-            parts:
-              model.role === "user"
-                ? [{ type: "text", text: textContent(model.content) }]
-                : parts(model),
-          });
-        } else if (model.role === "toolResult") {
-          const tool = messages
-            .flatMap((message) => message.parts)
-            .findLast(
-              (part) => part.type === "dynamic-tool" && part.toolCallId === model.toolCallId,
-            );
-          if (tool?.type === "dynamic-tool") {
-            tool.state = model.isError ? "output-error" : "output-available";
-            tool.output = textContent(model.content);
-            if (model.isError) tool.errorText = tool.output;
+    if (historyDirty || !cachedHistory) {
+      const byEntry = new Map(submissions.map((record) => [record.entry, record]));
+      const tools = new Map<string, Extract<ReviewPart, { type: "dynamic-tool" }>>();
+      for (const entry of [...entryCache.values()].sort((a, b) => a.id - b.id)) {
+        if (entry.kind === "review.revision") {
+          ref = (entry.data as { ref: string }).ref;
+          continue;
+        }
+        if (entry.kind === "review.legacy") {
+          const message: ReviewMessage = JSON.parse(entry.data as string);
+          message.metadata.revision ??= ref;
+          messages.push(message);
+          continue;
+        }
+        if (
+          entry.kind !== "pi.user" &&
+          entry.kind !== "pi.assistant" &&
+          entry.kind !== "pi.tool-result"
+        )
+          continue;
+        const submission = byEntry.get(entry.id);
+        if (submission?.type === "input") submissionId = String(submission.id);
+        for (const model of entry.model ?? []) {
+          if (model.role === "user" || model.role === "assistant") {
+            messages.push({
+              id: `pi:${entry.id}`,
+              role: model.role,
+              submissionId,
+              metadata: { timestamp: new Date(model.timestamp).toISOString(), revision: ref },
+              parts:
+                model.role === "user"
+                  ? [{ type: "text", text: textContent(model.content) }]
+                  : parts(model),
+            });
+            for (const part of messages.at(-1)!.parts)
+              if (part.type === "dynamic-tool") tools.set(part.toolCallId, part);
+          } else if (model.role === "toolResult") {
+            const tool = tools.get(model.toolCallId);
+            if (tool?.type === "dynamic-tool") {
+              tool.state = model.isError ? "output-error" : "output-available";
+              tool.output = textContent(model.content);
+              if (model.isError) tool.errorText = tool.output;
+            }
           }
         }
       }
+      // Reuse unchanged objects so streaming diffs can compare references instead of serializing history.
+      const previous = new Map(cachedHistory?.messages.map((message) => [message.id, message]));
+      messages = messages.map((message) => {
+        const old = previous.get(message.id);
+        return old && JSON.stringify(old) === JSON.stringify(message) ? old : message;
+      });
+      cachedHistory = { messages, ref, submissionId };
+      historyDirty = false;
+    } else {
+      ({ messages, ref, submissionId } = cachedHistory);
     }
+    messages = [...messages];
     if (live?.generation?.message)
       messages.push({
         id: `live:${live.run?.taskId}`,
@@ -251,11 +323,23 @@ export async function openReviewEngine(options: {
         parts: parts(live.generation.message),
       });
     for (const slot of live?.tools ?? []) {
-      const tool = messages
-        .flatMap((message) => message.parts)
-        .findLast((part) => part.type === "dynamic-tool" && part.toolCallId === slot.callId);
-      if (tool?.type === "dynamic-tool" && slot.output && tool.state === "input-available")
-        tool.output = slot.output;
+      const index = messages.findLastIndex((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === "dynamic-tool" &&
+            part.toolCallId === slot.callId &&
+            part.state === "input-available",
+        ),
+      );
+      if (index >= 0 && slot.output)
+        messages[index] = {
+          ...messages[index]!,
+          parts: messages[index]!.parts.map((part) =>
+            part.type === "dynamic-tool" && part.toolCallId === slot.callId
+              ? { ...part, output: slot.output }
+              : part,
+          ),
+        };
     }
     const settlements: ReviewSettlement[] = JSON.parse(saved?.legacySettlements ?? "[]");
     for (const record of submissions) {
@@ -279,7 +363,9 @@ export async function openReviewEngine(options: {
           : {}),
       });
     }
-    const usage = await harness.usage(context);
+    const usage = (docs["pi.usage"] ?? { models: {} }) as {
+      models: Record<string, { input: number; output: number; cost: { total: number } }>;
+    };
     const totals = Object.values(usage.models).reduce(
       (sum, value) => ({
         input: sum.input + value.input,
@@ -288,7 +374,7 @@ export async function openReviewEngine(options: {
       }),
       { input: 0, output: 0, cost: 0 },
     );
-    return {
+    lastSnapshot = {
       sessionId: session.id,
       messages,
       settlements,
@@ -299,6 +385,8 @@ export async function openReviewEngine(options: {
       revision: session.commitSha ?? session.headSha,
       usage: totals,
     };
+    done();
+    return lastSnapshot;
   }
   async function syncSession(next: PrReviewSession) {
     const inspection = await harness.inspect(context);
@@ -331,6 +419,13 @@ export async function openReviewEngine(options: {
     const existing = await storage.submissionByRequest(conversation.id, requestId, context);
     if (existing) return { submissionId: String(existing.id) };
     if (nextSession) await syncSession(nextSession);
+    else {
+      const inspection = await harness.inspect(context);
+      if (inspection.tasks.length || inspection.submissions.length)
+        throw new Error("Review is running");
+    }
+    await releaseSandbox();
+    const generation = ++runGeneration;
     await conversation.configure({ model, thinkingLevel }, context);
     const receipt = await conversation.submit(
       { type: "input", content: body, requestId, whenBusy: "reject" },
@@ -338,7 +433,9 @@ export async function openReviewEngine(options: {
     );
     void receipt
       .wait(context)
-      .then(() => releaseSandbox())
+      .then(() => {
+        if (generation === runGeneration) return releaseSandbox();
+      })
       .catch((error) => console.error("[Review] Submission interrupted:", error));
     return { submissionId: String(receipt.id) };
   }
@@ -346,13 +443,22 @@ export async function openReviewEngine(options: {
     harness,
     conversation,
     snapshot,
+    subscribe(notify: () => void) {
+      listeners.add(notify);
+      return () => {
+        listeners.delete(notify);
+      };
+    },
     syncSession,
     submit,
     resume() {
+      const generation = ++runGeneration;
       harness.resume();
       void conversation
         .waitForIdle(context)
-        .then(releaseSandbox)
+        .then(() => {
+          if (generation === runGeneration) return releaseSandbox();
+        })
         .catch((error) => console.error("[Review] Recovery failed:", error));
     },
     async abort() {
@@ -366,6 +472,8 @@ export async function openReviewEngine(options: {
       );
     },
     async close() {
+      stopCommits();
+      listeners.clear();
       await harness.close(context);
       await releaseSandbox();
     },
