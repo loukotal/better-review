@@ -28,6 +28,21 @@ export default defineConfig(({ command }) => {
 
   return {
     plugins: [solidPlugin(), tailwindcss()],
+    worker: {
+      plugins: () => [
+        {
+          name: "preserve-diff-worker-bootstrap",
+          transform(code, id) {
+            // The dependency marks this bootstrap as side-effect-free, but it
+            // installs the worker message listener. Dropping it emits an empty
+            // worker and leaves every code panel waiting indefinitely.
+            if (id.split("?")[0]?.endsWith("/@pierre/diffs/dist/worker/worker.js")) {
+              return { code, map: null, moduleSideEffects: true };
+            }
+          },
+        },
+      ],
+    },
     define: {
       "import.meta.env.VITE_BETTER_REVIEW_API_TOKEN": JSON.stringify(devApiToken),
     },
