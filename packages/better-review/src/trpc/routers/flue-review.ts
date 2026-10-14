@@ -20,8 +20,12 @@ import {
 } from "../../flue-review-sessions";
 import { readFlueConversationHistory, sendServerReview } from "../../flue/runtime";
 import { GhService } from "../../gh/gh";
-import { preparedWorktreePath } from "../../pr-checkout";
-import { ReviewLaunchCoordinator, PrSessionLock } from "../../review-launch-coordinator";
+import { preparedWorktreePath, PrCheckoutService } from "../../pr-checkout";
+import {
+  ReviewLaunchCoordinator,
+  PrSessionLock,
+  reviewRevisionLock,
+} from "../../review-launch-coordinator";
 import {
   ensureSessionCheckout,
   getSessionCheckoutStatus,
@@ -172,7 +176,11 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>, forceNew = false) {
+export function getOrCreateReviewSession(
+  input: z.infer<typeof sessionInput>,
+  forceNew = false,
+  reusePreviousRevision = false,
+) {
   return Effect.gen(function* () {
     const gh = yield* GhService;
     const prContext = yield* PrContextService;
@@ -220,21 +228,15 @@ export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>, fo
         }
         if (
           !forceNew &&
-          flueSession.headSha === headSha &&
-          flueSession.baseSha === baseSha &&
+          (reusePreviousRevision ||
+            (flueSession.headSha === headSha && flueSession.baseSha === baseSha)) &&
           flueSession.reviewMode === reviewScope.mode &&
           flueSession.commitSha === reviewScope.commitSha
         ) {
           const updatedSession: FlueReviewSession = {
             ...flueSession,
-            baseSha,
-            headSha,
-            baseRef,
-            headRef,
             reviewMode: reviewScope.mode,
             commitSha: reviewScope.commitSha,
-            worktreePath: preparedWorktreePath({ ...pr, headSha }),
-            files: input.files,
           };
           yield* flueSessions.save(updatedSession);
           yield* prContext.registerSession(flueSession.id, input.prUrl);
@@ -242,7 +244,10 @@ export function getOrCreateReviewSession(input: z.infer<typeof sessionInput>, fo
           // Refresh the checkout (it may have been cleaned up) without blocking the page.
           prepareSessionCheckoutInBackground(updatedSession.id);
           const sessions = yield* visibleV2Sessions(current.sessions, flueSessions);
-          return sessionPayload(updatedSession, sessions, current.activeSessionId, true);
+          return {
+            ...sessionPayload(updatedSession, sessions, current.activeSessionId, true),
+            headSha,
+          };
         }
       }
     }
@@ -381,6 +386,95 @@ async function startAutomaticReview(
 }
 
 export const flueReviewRouter = router({
+  pullLatest: publicProcedure
+    .input(z.object({ prUrl: z.string(), sessionId: z.string() }))
+    .mutation(({ input }) =>
+      sessionLock.run(canonicalPrUrl(input.prUrl), () =>
+        reviewRevisionLock.run(input.sessionId, async () => {
+          const session = await runEffect(
+            Effect.flatMap(FlueReviewSessionService, (store) => store.get(input.sessionId)),
+          );
+          if (
+            !isFlueV2ReviewSession(session) ||
+            canonicalPrUrl(session.prUrl) !== canonicalPrUrl(input.prUrl)
+          ) {
+            throw new Error("Review session not found for PR");
+          }
+          const history = await readFlueConversationHistory(session.id);
+          if (history && conversationIsRunning(history))
+            throw new Error("Wait for the current review to finish before pulling changes");
+          // Drain any checkout already preparing the old revision before replacing its metadata.
+          await ensureSessionCheckout(session.id);
+          return runEffect(
+            Effect.gen(function* () {
+              const gh = yield* GhService;
+              const store = yield* FlueReviewSessionService;
+              const context = yield* PrContextService;
+              const checkout = yield* PrCheckoutService;
+              const registered = yield* context.listSessions(session.prUrl);
+              if (!registered.sessions.some((item) => item.id === session.id)) {
+                return yield* Effect.fail(new Error("Review session not found for PR"));
+              }
+              const [headSha, baseSha, headRef, baseRef, diff] = yield* Effect.all(
+                [
+                  gh.getHeadSha(session.prUrl),
+                  gh.getBaseSha(session.prUrl),
+                  gh.getHeadRef(session.prUrl),
+                  gh.getBaseRef(session.prUrl),
+                  gh.getDiff(session.prUrl),
+                ],
+                { concurrency: "unbounded" },
+              );
+              const changed =
+                headSha !== session.headSha ||
+                baseSha !== session.baseSha ||
+                session.reviewMode !== "full";
+              if (!changed) return { changed: false, headSha, prompt: "" };
+              const files = [...parseFullDiff(diff).keys()];
+              const prepared = yield* checkout.prepare({
+                ...session,
+                headSha,
+                baseSha,
+                headRef,
+                baseRef,
+                files,
+                reviewMode: "full",
+                commitSha: null,
+              });
+              yield* store.save({
+                ...session,
+                headSha,
+                baseSha,
+                headRef,
+                baseRef,
+                files,
+                reviewMode: "full",
+                commitSha: null,
+                worktreePath: prepared.worktreePath,
+                repoAccess: prepared.repoAccess,
+                automaticReview: undefined,
+                revisionHistory: [
+                  ...(session.revisionHistory ?? []),
+                  {
+                    headSha: session.headSha,
+                    baseSha: session.baseSha,
+                    commitSha: session.commitSha,
+                    pulledAt: Date.now(),
+                  },
+                ],
+              });
+              yield* context.updateSessionHead(session.prUrl, session.id, headSha);
+              yield* context.setSessionScope(session.id, { mode: "full", commitSha: null });
+              return {
+                changed: true,
+                headSha,
+                prompt: `Pulled the latest full PR into this review session. Previous revision: ${session.commitSha ?? session.headSha} (base ${session.baseSha}). Current revision: ${headSha} (base ${baseSha}). Continue the review using our conversation as historical context. Re-read the current checkout and diff; previous tool output and line numbers may be stale. History may have been rewritten, so do not assume the old revision is an ancestor. Re-check earlier findings and distinguish resolved, still-present, and new issues.`,
+              };
+            }),
+          );
+        }),
+      ),
+    ),
   source: publicProcedure
     .input(
       z.object({
@@ -449,7 +543,7 @@ export const flueReviewRouter = router({
     .input(sessionInput)
     .mutation(({ input }) =>
       sessionLock.run(canonicalPrUrl(input.prUrl), () =>
-        runEffect(getOrCreateReviewSession(input)),
+        runEffect(getOrCreateReviewSession(input, false, true)),
       ),
     ),
 

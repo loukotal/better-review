@@ -113,6 +113,8 @@ export function ChatPanel(props: ChatPanelProps) {
   const [scopeSessionKey, setScopeSessionKey] = createSignal<string | null>(null);
   const [switchingCommitSession, setSwitchingCommitSession] = createSignal(false);
   const [creatingNewSession, setCreatingNewSession] = createSignal(false);
+  const [pullingLatest, setPullingLatest] = createSignal(false);
+  const [pullNotice, setPullNotice] = createSignal<string | null>(null);
   const [useSte100, setUseSte100] = createSignal(loadSte100Preference());
 
   // Session management state
@@ -163,15 +165,19 @@ export function ChatPanel(props: ChatPanelProps) {
         // Extract annotations from all assistant messages
         const allAnnotations: Annotation[] = [];
         for (const msg of chat.messages()) {
+          if (
+            msg.role === "user" &&
+            msg.content.startsWith("Pulled the latest full PR into this review session.")
+          ) {
+            allAnnotations.length = 0;
+          }
           if (msg.role === "assistant") {
             const parsed = parseReviewTokens(msg.content);
             allAnnotations.push(...parsed.annotations);
           }
         }
 
-        if (allAnnotations.length > 0) {
-          props.onAnnotationsReceived(allAnnotations);
-        }
+        props.onAnnotationsReceived(allAnnotations);
       },
       { defer: true },
     ),
@@ -315,7 +321,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function submitMessage(message: string) {
     const trimmedMessage = message.trim();
-    if (!trimmedMessage || chat.isStreaming() || !sessionId()) return;
+    if (!trimmedMessage || chat.isStreaming() || pullingLatest() || !sessionId()) return;
 
     setInput("");
     await chat.sendMessage(trimmedMessage, {
@@ -359,9 +365,35 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   // Session management handlers
+  async function handlePullLatest() {
+    const sid = sessionId();
+    const prUrl = props.prUrl;
+    if (!sid || !prUrl || pullingLatest() || chat.isStreaming()) return;
+    setPullingLatest(true);
+    setPullNotice(null);
+    try {
+      const result = await trpc.flueReview.pullLatest.mutate({ sessionId: sid, prUrl });
+      if (sessionId() !== sid || props.prUrl !== prUrl) return;
+      if (!result.changed) {
+        setPullNotice("Already at the latest PR revision.");
+        return;
+      }
+      setSessions((items) =>
+        items.map((item) => (item.id === sid ? { ...item, headSha: result.headSha } : item)),
+      );
+      // The page diff and older transcript annotations can still reference the old revision.
+      setNavigationRevision(null);
+      await chat.sendMessage(result.prompt, { reviewMode: "full" });
+    } catch (error) {
+      setPullNotice(error instanceof Error ? error.message : "Could not pull latest changes");
+    } finally {
+      setPullingLatest(false);
+    }
+  }
+
   async function handleSessionSwitch(newSessionId: string) {
     if (!props.prUrl || newSessionId === sessionId()) return;
-    if (creatingNewSession()) return;
+    if (creatingNewSession() || pullingLatest()) return;
 
     try {
       await trpc.flueReview.switch.mutate({
@@ -379,7 +411,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function handleNewSession(): Promise<boolean> {
     if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return false;
-    if (creatingNewSession()) return false;
+    if (creatingNewSession() || pullingLatest()) return false;
 
     setCreatingNewSession(true);
     try {
@@ -419,7 +451,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function handleHideSession(hiddenSessionId: string) {
     if (!props.prUrl) return;
-    if (creatingNewSession()) return;
+    if (creatingNewSession() || pullingLatest()) return;
 
     try {
       const data = await trpc.flueReview.hide.mutate({
@@ -1055,6 +1087,20 @@ export function ChatPanel(props: ChatPanelProps) {
             onNewSession={handleNewSession}
             onHide={handleHideSession}
           />
+          <Show when={props.reviewMode !== "commit"}>
+            <Button
+              size="sm"
+              onClick={handlePullLatest}
+              disabled={
+                chat.isStreaming() || initializing() || creatingNewSession() || pullingLatest()
+              }
+            >
+              {pullingLatest() ? "Pulling latest…" : "Pull latest & continue"}
+            </Button>
+            <Show when={pullNotice()}>
+              <p class="text-xs text-text-muted mt-1">{pullNotice()}</p>
+            </Show>
+          </Show>
         </div>
       </Show>
       <div hidden={!assistantSettingsOpen()}>

@@ -55,6 +55,12 @@ function buildInstructions(session: FlueReviewSession): string {
     `Head branch: ${headRef}`,
     `Base SHA: ${session.baseSha}`,
     `Head SHA: ${session.headSha}`,
+    ...(session.revisionHistory?.length
+      ? [
+          `This conversation previously reviewed: ${session.revisionHistory.map((revision) => `${revision.commitSha ?? revision.headSha} (base ${revision.baseSha})`).join(", ")}.`,
+          "The PR was pulled forward in this same session. Treat earlier findings and tool output as historical context, not current facts. Re-read the checkout and revalidate findings; history may have been rewritten.",
+        ]
+      : []),
     scope,
     "",
     "You are running in a network-disabled microVM with a read-only prepared checkout. Treat it as the source of truth.",

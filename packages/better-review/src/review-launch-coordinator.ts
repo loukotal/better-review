@@ -32,3 +32,6 @@ export class PrSessionLock {
     return task;
   }
 }
+
+/** Serialize revision replacement with admission of new conversation turns. */
+export const reviewRevisionLock = new PrSessionLock();

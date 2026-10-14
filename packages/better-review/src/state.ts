@@ -437,6 +437,24 @@ const makePrContextService = Effect.gen(function* () {
         return updated;
       }),
 
+    updateSessionHead: (prUrl: string, sessionId: string, headSha: string) =>
+      Effect.gen(function* () {
+        const key = prUrlToKey(prUrl);
+        if (!key) return yield* Effect.fail(new Error(`Invalid PR URL: ${prUrl}`));
+        const data = yield* store.get<PrSessionData>(SESSIONS_NAMESPACE, key);
+        if (!data?.sessions.some((session) => session.id === sessionId)) {
+          return yield* Effect.fail(new Error("Review session not found for PR"));
+        }
+        const updated = {
+          ...data,
+          sessions: data.sessions.map((session) =>
+            session.id === sessionId ? { ...session, headSha } : session,
+          ),
+        };
+        yield* store.set(SESSIONS_NAMESPACE, key, updated);
+        return updated;
+      }),
+
     /**
      * Set the active session for a PR
      */

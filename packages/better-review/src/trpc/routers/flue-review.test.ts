@@ -302,6 +302,7 @@ test("automatic reruns preserve results, deduplicate running work, and report st
     addSession: () => Effect.sync(list),
     setSessionScope: () => Effect.void,
     registerSession: () => Effect.void,
+    updateSessionHead: () => Effect.sync(list),
   } as unknown as PrContextService;
   const checkout = {
     prepare: () =>
@@ -379,6 +380,10 @@ test("automatic reruns preserve results, deduplicate running work, and report st
 
   headSha = "head-2";
   baseSha = "base-2";
+  await assert.rejects(
+    caller.pullLatest({ prUrl, sessionId: second.sessionId! }),
+    /finish before pulling/,
+  );
   const beforeJoining = preparations;
   assert.equal((await caller.startAutomatic({ prUrl, rerun: true })).sessionId, second.sessionId);
   assert.equal(preparations, beforeJoining);
@@ -400,6 +405,19 @@ test("automatic reruns preserve results, deduplicate running work, and report st
   assert.notEqual(third.sessionId, second.sessionId);
   assert.equal(histories.get(second.sessionId!)!.settlements[0]!.outcome, "failed");
   settle(third.sessionId!, "completed");
+
+  headSha = "rewritten-head";
+  const oldHistory = structuredClone(histories.get(third.sessionId!)!);
+  const reopened = await caller.getOrCreateSession(input);
+  assert.equal(reopened.session.id, third.sessionId);
+  assert.equal(reopened.sessionHeadSha, "head-1");
+  const pulled = await caller.pullLatest({ prUrl, sessionId: third.sessionId! });
+  assert.equal(pulled.changed, true);
+  assert.equal(pulled.headSha, "rewritten-head");
+  assert.match(pulled.prompt, /Previous revision: head-1/);
+  assert.deepEqual(histories.get(third.sessionId!), oldHistory);
+  assert.equal(sessions.get(third.sessionId!)!.revisionHistory?.[0]?.headSha, "head-1");
+  assert.equal((await caller.pullLatest({ prUrl, sessionId: third.sessionId! })).changed, false);
 
   headSha = "head-2";
   const revised = await caller.startAutomatic({ prUrl });

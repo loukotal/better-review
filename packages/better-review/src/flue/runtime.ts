@@ -7,6 +7,7 @@ import { Hono } from "hono";
 
 import type { ReviewConversation } from "@better-review/shared";
 
+import { reviewRevisionLock } from "../review-launch-coordinator";
 import { checkoutErrorMessage, ensureSessionCheckout } from "../session-checkout";
 import { STORE_BASE_DIR } from "../store";
 import { cleanupOrphanedMicrosandboxes, shutdownMicrosandboxes } from "./microsandbox";
@@ -51,20 +52,22 @@ export function createFlueReviewApp(): Hono {
   const app = new Hono();
   // The reviewer reads its prepared checkout on start, so hold prompts until it exists.
   app.post("/agents/pr-reviewer/:id", async (c, next) => {
-    try {
-      await ensureSessionCheckout(c.req.param("id"));
-    } catch (error) {
-      return c.json(
-        {
-          error: {
-            message: "Could not prepare the PR checkout",
-            details: checkoutErrorMessage(error),
+    return reviewRevisionLock.run(c.req.param("id"), async () => {
+      try {
+        await ensureSessionCheckout(c.req.param("id"));
+      } catch (error) {
+        return c.json(
+          {
+            error: {
+              message: "Could not prepare the PR checkout",
+              details: checkoutErrorMessage(error),
+            },
           },
-        },
-        503,
-      );
-    }
-    await next();
+          503,
+        );
+      }
+      await next();
+    });
   });
   app.route("/agents/pr-reviewer", createAgentRouter(PrReviewer));
   return app;
