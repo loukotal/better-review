@@ -1118,6 +1118,15 @@ export function ChatPanel(props: ChatPanelProps) {
             </Button>
             <Button
               size="sm"
+              variant="ghost"
+              disabled={reviewActionsDisabled()}
+              onClick={() => void startReview()}
+              title="Run a normal review in this conversation"
+            >
+              Run review
+            </Button>
+            <Button
+              size="sm"
               variant="primary"
               disabled={reviewActionsDisabled()}
               onClick={() => void startAdversarialReview()}
