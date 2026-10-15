@@ -21,11 +21,18 @@ import { FileLink } from "./components/FileLink";
 import { ModelSelector } from "./components/ModelSelector";
 import { ReviewActions } from "./components/ReviewActions";
 import { ReviewOrderPanel } from "./components/ReviewOrderPanel";
-import { SessionSelector } from "./components/SessionSelector";
-import { Button, Checkbox, IconButton, PanelHeader, Textarea } from "./design-system";
+import { ReviewSessionToolbar } from "./components/ReviewSessionToolbar";
+import { SelectionQuestionMessage } from "./components/SelectionQuestionMessage";
+import { Button, Checkbox, IconButton, PanelHeader, Textarea, MessageForm } from "./design-system";
 import type { DiffTheme } from "./diff/types";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { SpinnerIcon } from "./icons/spinner-icon";
+import {
+  createSelectionSender,
+  type SourceSelection,
+  type SelectionChatController,
+} from "./lib/ask-ai-selection";
+import { parseChatFileReference } from "./lib/chat-file-reference";
 import {
   groupTranscript,
   reviewRequestLabel,
@@ -40,11 +47,13 @@ import {
   renderMermaidCodeBlock,
   renderSemanticTextCodeBlock,
 } from "./lib/markdown";
+import { createReviewClient } from "./lib/review-client";
 import {
   ADVERSARIAL_REVIEW_PROMPT,
   buildReviewPrompt,
   STRUCTURED_REVIEW_PROMPT,
 } from "./lib/review-prompts";
+import type { SelectionSourceContext } from "./lib/selection-question-message";
 import { highlightCode, clearHighlightCache } from "./lib/shiki";
 import { trpc } from "./lib/trpc";
 import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
@@ -56,6 +65,9 @@ marked.setOptions({
 });
 
 interface ChatPanelProps {
+  hidden?: boolean;
+  selectionScope?: string;
+  onSelectionController?: (controller: SelectionChatController | null) => void;
   prUrl: string | null;
   initialSessionId?: string;
   prNumber: number | null;
@@ -73,8 +85,12 @@ interface ChatPanelProps {
   ) => void;
   onApplyReviewOrder?: (files: string[]) => void;
   onAnnotationsReceived?: (annotations: Annotation[]) => void;
+  onCreateFindingComment?: (annotation: Annotation, sessionId: string, ref?: string | null) => void;
+  onSelectionSourceNavigate?: (selection: SelectionSourceContext, sessionId: string) => void;
   reviewMode?: "full" | "commit";
   commitSha?: string | null;
+  /** Revision of the diff actually displayed by App, independent of the saved conversation. */
+  displayedHeadSha?: string | null;
 }
 
 const CHAT_WIDTH_KEY = "chat-panel-width";
@@ -108,6 +124,13 @@ function loadSte100Preference(): boolean {
 
 export function ChatPanel(props: ChatPanelProps) {
   const [input, setInput] = createSignal("");
+  const [linkNotice, setLinkNotice] = createSignal<string | null>(null);
+  const [sendingSelection, setSendingSelection] = createSignal(false);
+  const selectionSender = createSelectionSender();
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+  });
   const [assistantSettingsOpen, setAssistantSettingsOpen] = createSignal(false);
   const [sessionId, setSessionId] = createSignal<string | null>(null);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
@@ -135,6 +158,7 @@ export function ChatPanel(props: ChatPanelProps) {
   });
 
   const reviewActionsDisabled = () =>
+    sendingSelection() ||
     initializing() ||
     creatingNewSession() ||
     pullingLatest() ||
@@ -165,10 +189,13 @@ export function ChatPanel(props: ChatPanelProps) {
   createEffect(
     on(
       () =>
-        chat
-          .messages()
-          .map((m) => m.id)
-          .join(","),
+        [
+          sessionId(),
+          props.reviewMode,
+          props.commitSha,
+          props.displayedHeadSha,
+          chat.messages(),
+        ] as const,
       () => {
         if (!props.onAnnotationsReceived) return;
 
@@ -181,15 +208,27 @@ export function ChatPanel(props: ChatPanelProps) {
           ) {
             allAnnotations.length = 0;
           }
-          if (msg.role === "assistant" && (!msg.revision || msg.revision === chat.revision())) {
+          if (
+            msg.role === "assistant" &&
+            !!msg.revision &&
+            msg.revision ===
+              (props.reviewMode === "commit" ? props.commitSha : props.displayedHeadSha)
+          ) {
             const parsed = parseReviewTokens(msg.content);
-            allAnnotations.push(...parsed.annotations);
+            const sid = sessionId();
+            if (sid)
+              allAnnotations.push(
+                ...parsed.annotations.map((annotation) => ({
+                  ...annotation,
+                  origin: { sessionId: sid, revision: msg.revision },
+                })),
+              );
           }
         }
 
         props.onAnnotationsReceived(allAnnotations);
       },
-      { defer: true },
+      { defer: false },
     ),
   );
 
@@ -341,6 +380,79 @@ export function ChatPanel(props: ChatPanelProps) {
     });
   }
 
+  async function sendSelection(
+    selection: SourceSelection,
+    body: string,
+    target: string,
+    selectionIsCurrent: () => boolean,
+  ): Promise<boolean> {
+    const prUrl = props.prUrl;
+    if (
+      !selection ||
+      !prUrl ||
+      sendingSelection() ||
+      initializing() ||
+      creatingNewSession() ||
+      pullingLatest()
+    )
+      return false;
+    const isCurrent = () =>
+      !disposed &&
+      props.prUrl === prUrl &&
+      props.selectionScope === selection.scope &&
+      selectionIsCurrent();
+    const createInput = {
+      prUrl,
+      prNumber: props.prNumber!,
+      repoOwner: props.repoOwner!,
+      repoName: props.repoName!,
+      files: [...props.files],
+      reviewMode: props.reviewMode,
+      commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
+    };
+    setSendingSelection(true);
+    try {
+      const id = await selectionSender.send({
+        draftId: selection.draftId,
+        body,
+        target,
+        isCurrent,
+        client: createReviewClient,
+        createSession: async () => {
+          const result = await trpc.prReview.create.mutate(createInput);
+          if (!result.session?.id) throw new Error("No conversation was created.");
+          if (isCurrent() && result.sessions)
+            setSessions(result.sessions.filter((s: StoredSession) => !s.hidden));
+          return result.session.id;
+        },
+      });
+      if (!id) return false;
+      if (isCurrent()) {
+        // Receipt means the durable API accepted the prompt; do not wait for LLM completion.
+        setSessionId(id);
+        setNavigationRevision(null);
+        void trpc.prReview.switch
+          .mutate({ prUrl, sessionId: id })
+          .catch((cause) => console.error("Could not persist selected conversation", cause));
+      }
+      return true;
+    } finally {
+      setSendingSelection(false);
+    }
+  }
+
+  onMount(() =>
+    props.onSelectionController?.({
+      currentSessionId: sessionId,
+      currentBusy: () => chat.isStreaming() || chat.compacting(),
+      disabled: () =>
+        initializing() || creatingNewSession() || pullingLatest() || sendingSelection(),
+      sessions,
+      send: sendSelection,
+    }),
+  );
+  onCleanup(() => props.onSelectionController?.(null));
+
   async function sendMessage(e: Event) {
     e.preventDefault();
     await submitMessage(input());
@@ -402,13 +514,16 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function handleSessionSwitch(newSessionId: string) {
     if (!props.prUrl || newSessionId === sessionId()) return;
-    if (creatingNewSession() || pullingLatest()) return;
+    if (sendingSelection() || creatingNewSession() || pullingLatest()) return;
+    const version = sessionInitializationVersion;
+    const prUrl = props.prUrl;
 
     try {
       await trpc.prReview.switch.mutate({
         prUrl: props.prUrl,
         sessionId: newSessionId,
       });
+      if (version !== sessionInitializationVersion || props.prUrl !== prUrl) return;
 
       setSessionId(newSessionId);
       // Session list heads do not identify a saved commit-review scope.
@@ -420,7 +535,9 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function handleNewSession(): Promise<boolean> {
     if (!props.prUrl || !props.prNumber || !props.repoOwner || !props.repoName) return false;
-    if (creatingNewSession() || pullingLatest()) return false;
+    if (sendingSelection() || creatingNewSession() || pullingLatest()) return false;
+    const version = sessionInitializationVersion;
+    const prUrl = props.prUrl;
 
     setCreatingNewSession(true);
     try {
@@ -434,7 +551,8 @@ export function ChatPanel(props: ChatPanelProps) {
         commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
       });
 
-      if (!data.session?.id) return false;
+      if (!data.session?.id || version !== sessionInitializationVersion || props.prUrl !== prUrl)
+        return false;
 
       batch(() => {
         setSessionId(data.session.id);
@@ -460,7 +578,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function handleHideSession(hiddenSessionId: string) {
     if (!props.prUrl) return;
-    if (creatingNewSession() || pullingLatest()) return;
+    if (sendingSelection() || creatingNewSession() || pullingLatest()) return;
 
     try {
       const data = await trpc.prReview.hide.mutate({
@@ -507,7 +625,20 @@ export function ChatPanel(props: ChatPanelProps) {
     const resolved = resolveFileReference(file, props.files);
     const sid = sessionId();
     const reviewedHead = ref ?? navigationRevision();
-    const activeHead = props.reviewMode === "commit" ? props.commitSha : currentHeadSha();
+    const activeHead = props.reviewMode === "commit" ? props.commitSha : props.displayedHeadSha;
+    if (!resolved) {
+      setLinkNotice(
+        `The file reference “${file}” is ambiguous or unsafe. Use a full repository-relative path.`,
+      );
+      return;
+    }
+    if (!sid) {
+      setLinkNotice(
+        "Wait for the review conversation to finish loading, then open the code link again.",
+      );
+      return;
+    }
+    setLinkNotice(null);
     if (resolved && sid) {
       props.onScrollToFile?.(
         resolved,
@@ -520,6 +651,17 @@ export function ChatPanel(props: ChatPanelProps) {
   };
 
   // Handle apply review order
+  const navigateSelectionSource = (selection: SelectionSourceContext) => {
+    const sid = sessionId();
+    if (!sid) {
+      setLinkNotice(
+        "Wait for the review conversation to finish loading, then open the selected source again.",
+      );
+      return;
+    }
+    props.onSelectionSourceNavigate?.(selection, sid);
+  };
+
   const handleApplyOrder = (files: string[]) => {
     props.onApplyReviewOrder?.(files);
   };
@@ -605,7 +747,7 @@ export function ChatPanel(props: ChatPanelProps) {
   }
 
   // Render markdown text with Shiki syntax highlighting for code blocks
-  function MarkdownText(mdProps: { content: string; streaming?: boolean }) {
+  function MarkdownText(mdProps: { content: string; streaming?: boolean; revision?: string }) {
     const [html, setHtml] = createSignal<string>("");
 
     // Track code blocks that need highlighting
@@ -614,6 +756,22 @@ export function ChatPanel(props: ChatPanelProps) {
 
     // Custom renderer that creates placeholders for code blocks
     const renderer = applySafeMarkdownRenderer(new marked.Renderer());
+    const originalLink = renderer.link.bind(renderer);
+    const originalCodespan = renderer.codespan.bind(renderer);
+    const sourceButton = (file: string, line: number | undefined, label: string) =>
+      `<button type="button" data-chat-file="${escapeHtmlText(file).replace(/"/g, "&quot;")}"${line ? ` data-chat-line="${line}"` : ""} class="font-mono text-accent hover:underline" title="Open reviewed source">${label}</button>`;
+    renderer.link = (token: Tokens.Link) => {
+      const reference = parseChatFileReference(token.href, props.files);
+      return reference
+        ? sourceButton(reference.file, reference.line, escapeHtmlText(token.text))
+        : originalLink(token);
+    };
+    renderer.codespan = (token: Tokens.Codespan) => {
+      const reference = parseChatFileReference(token.text, props.files, true);
+      return reference
+        ? sourceButton(reference.file, reference.line, escapeHtmlText(token.text))
+        : originalCodespan(token);
+    };
     renderer.code = (token: Tokens.Code) => {
       const language = (token.lang ?? "").trim().toLowerCase().split(/\s+/, 1)[0];
       if (language === "mermaid" && !mdProps.streaming) {
@@ -679,7 +837,23 @@ export function ChatPanel(props: ChatPanelProps) {
       setHtml(updatedHtml);
     }
 
-    return <div class="typeset" innerHTML={html()} />;
+    return (
+      <div
+        class="typeset"
+        innerHTML={html()}
+        onClick={(event) => {
+          const button = (event.target as Element).closest<HTMLElement>("[data-chat-file]");
+          if (!button || !event.currentTarget.contains(button)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          handleFileClick(
+            button.dataset.chatFile!,
+            button.dataset.chatLine ? Number(button.dataset.chatLine) : undefined,
+            mdProps.revision,
+          );
+        }}
+      />
+    );
   }
 
   // Helper to escape HTML for placeholders
@@ -722,6 +896,7 @@ export function ChatPanel(props: ChatPanelProps) {
           <MarkdownText
             content={(segmentProps.segment as { type: "text"; content: string }).content}
             streaming={segmentProps.streaming}
+            revision={segmentProps.revision}
           />
         </Match>
         <Match when={segmentProps.segment.type === "file-ref"}>
@@ -758,6 +933,15 @@ export function ChatPanel(props: ChatPanelProps) {
               ).annotation
             }
             onNavigate={(file, line) => handleFileClick(file, line, segmentProps.revision)}
+            onCreateComment={(annotation) => {
+              const sid = sessionId();
+              if (sid)
+                props.onCreateFindingComment?.(
+                  annotation,
+                  sid,
+                  segmentProps.revision ?? navigationRevision(),
+                );
+            }}
           />
         </Match>
         <Match when={segmentProps.segment.type === "review-order"}>
@@ -1043,6 +1227,7 @@ export function ChatPanel(props: ChatPanelProps) {
       class="chat-panel border-r border-border flex flex-col bg-bg-surface relative"
       style={{
         "--chat-panel-width": `${width()}px`,
+        display: props.hidden ? "none" : undefined,
       }}
     >
       {/* Resize handle */}
@@ -1098,43 +1283,18 @@ export function ChatPanel(props: ChatPanelProps) {
       />
       <Show when={sessionId()}>
         <div class="border-b border-border px-3 py-1.5">
-          <div class="flex flex-wrap items-center gap-2">
-            <SessionSelector
-              sessions={sessions()}
-              activeSessionId={sessionId()}
-              currentHeadSha={currentHeadSha() || undefined}
-              disabled={reviewActionsDisabled()}
-              onSelect={handleSessionSwitch}
-              onHide={handleHideSession}
-            />
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={reviewActionsDisabled()}
-              onClick={() => void handleNewSession()}
-              title="Start a fresh conversation. This session stays saved."
-            >
-              {creatingNewSession() ? "Creating…" : "+ New session"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={reviewActionsDisabled()}
-              onClick={() => void startReview()}
-              title="Run a normal review in this conversation"
-            >
-              Run review
-            </Button>
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={reviewActionsDisabled()}
-              onClick={() => void startAdversarialReview()}
-              title="Run an adversarial review in this conversation"
-            >
-              Adversarial review
-            </Button>
-          </div>
+          <ReviewSessionToolbar
+            sessions={sessions()}
+            activeSessionId={sessionId()}
+            currentHeadSha={props.displayedHeadSha ?? currentHeadSha() ?? undefined}
+            disabled={reviewActionsDisabled()}
+            creating={creatingNewSession()}
+            onSelect={handleSessionSwitch}
+            onHide={handleHideSession}
+            onNew={() => void handleNewSession()}
+            onReview={startReview}
+            onAdversarial={() => void startAdversarialReview()}
+          />
           <p
             role="status"
             aria-live="polite"
@@ -1272,9 +1432,10 @@ export function ChatPanel(props: ChatPanelProps) {
                   fallback={
                     <div class="space-y-1">
                       <span class="text-xs text-text-faint">You</span>
-                      <p class="whitespace-pre-wrap wrap-break-word leading-relaxed">
-                        {group.messages[0]!.content}
-                      </p>
+                      <SelectionQuestionMessage
+                        content={group.messages[0]!.content}
+                        onNavigate={navigateSelectionSource}
+                      />
                     </div>
                   }
                 >
@@ -1338,6 +1499,14 @@ export function ChatPanel(props: ChatPanelProps) {
       </div>
 
       {/* Error and retry display */}
+      <Show when={linkNotice()}>
+        <div role="status" class="border-t border-warning/40 p-2 text-xs text-warning">
+          {linkNotice()}{" "}
+          <button type="button" onClick={() => setLinkNotice(null)}>
+            Dismiss
+          </button>
+        </div>
+      </Show>
       <Show when={displayError() || chat.retryableMessage()}>
         <div class="flex items-center justify-between gap-3 border-t border-error/20 bg-error/10 px-3 py-2">
           <div class="text-error text-sm">{displayError() ?? "The last prompt failed."}</div>
@@ -1351,15 +1520,26 @@ export function ChatPanel(props: ChatPanelProps) {
 
       {/* Input */}
       <div class="border-t border-border p-2">
-        <form onSubmit={sendMessage}>
+        <MessageForm onSubmit={sendMessage}>
           <div class="flex flex-col gap-2">
             <Textarea
               value={input()}
               onInput={(e) => setInput(e.currentTarget.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !e.metaKey &&
+                  !e.ctrlKey &&
+                  !e.altKey &&
+                  !e.isComposing &&
+                  e.keyCode !== 229 &&
+                  !e.repeat
+                ) {
                   e.preventDefault();
-                  sendMessage(e);
+                  const form = e.currentTarget.form;
+                  const button = form?.querySelector<HTMLButtonElement>('button[type="submit"]');
+                  if (form && button && !button.disabled) form.requestSubmit(button);
                 }
               }}
               placeholder={
@@ -1375,7 +1555,9 @@ export function ChatPanel(props: ChatPanelProps) {
                         : "Connecting..."
                     : "Load a PR first"
               }
-              disabled={!sessionId() || chat.isStreaming() || creatingNewSession()}
+              disabled={
+                !sessionId() || chat.isStreaming() || creatingNewSession() || sendingSelection()
+              }
               aria-label="Message review assistant"
               class="w-full resize-none"
               rows={2}
@@ -1400,7 +1582,11 @@ export function ChatPanel(props: ChatPanelProps) {
               <button
                 type="submit"
                 disabled={
-                  !sessionId() || chat.isStreaming() || creatingNewSession() || !input().trim()
+                  !sessionId() ||
+                  chat.isStreaming() ||
+                  creatingNewSession() ||
+                  sendingSelection() ||
+                  !input().trim()
                 }
                 class="px-3 py-1 bg-primary text-primary-text text-sm font-medium hover:bg-primary-hover disabled:opacity-30 disabled:cursor-not-allowed"
               >
@@ -1408,7 +1594,7 @@ export function ChatPanel(props: ChatPanelProps) {
               </button>
             </div>
           </div>
-        </form>
+        </MessageForm>
       </div>
     </div>
   );

@@ -16,6 +16,7 @@ import type {
 } from "@better-review/shared";
 
 import type { Annotation } from "../utils/parseReviewTokens";
+import { annotationDismissalKey, reconcileAnnotationDismissals } from "./annotation-dismissals";
 import { fetchWithApiAuth } from "./apiAuth";
 import { getFileRevision } from "./file-revision";
 import { trpc } from "./trpc";
@@ -115,6 +116,7 @@ export const queryKeys = {
     reviewedFiles: (scope: string) => ["local", "reviewedFiles", scope] as const,
     reviewOrder: (prUrl: string) => ["local", "reviewOrder", prUrl] as const,
     annotations: (prUrl: string) => ["local", "annotations", prUrl] as const,
+    annotationDismissals: (prUrl: string) => ["local", "annotationDismissals", prUrl] as const,
   },
 };
 
@@ -251,7 +253,12 @@ export const api = {
     url: string,
     path: string,
     prevPath?: string,
-  ): Promise<{ oldContent: string | null; newContent: string | null }> {
+  ): Promise<{
+    oldContent: string | null;
+    newContent: string | null;
+    baseSha?: string;
+    headSha?: string;
+  }> {
     return await trpc.pr.fileContent.query({ url, path, prevPath });
   },
 
@@ -288,7 +295,13 @@ export const api = {
 
   async fetchPrCore(url: string, _signal?: AbortSignal): Promise<PrCoreData> {
     const result = await trpc.pr.core.query({ url });
-    return { diff: result.diff, info: result.info, commits: [...result.commits] };
+    return {
+      diff: result.diff,
+      info: result.info,
+      commits: [...result.commits],
+      headSha: result.headSha,
+      comparisonBaseSha: result.comparisonBaseSha,
+    };
   },
 
   async fetchPrExtras(url: string, _signal?: AbortSignal): Promise<PrExtrasData> {
@@ -304,6 +317,8 @@ export const api = {
 export type ReadingDiffResult = Awaited<ReturnType<typeof api.generateReadingDiff>>;
 
 export interface PrCoreData {
+  headSha?: string | null;
+  comparisonBaseSha?: string | null;
   diff: string;
   info: { owner: string; repo: string; number: string };
   commits: PrCommit[];
@@ -394,7 +409,12 @@ export async function fetchFileContentCached(
   source: { sessionId?: string | null; prUrl?: string | null; variantId?: string | null },
   path: string,
   prevPath?: string,
-): Promise<{ oldContent: string | null; newContent: string | null }> {
+): Promise<{
+  oldContent: string | null;
+  newContent: string | null;
+  baseSha?: string;
+  headSha?: string;
+}> {
   const sessionId = source.sessionId ?? null;
   const prUrl = source.prUrl ?? null;
   const variantId = source.variantId ?? null;
@@ -407,6 +427,8 @@ export async function fetchFileContentCached(
   const existing = queryClient.getQueryData<{
     oldContent: string | null;
     newContent: string | null;
+    baseSha?: string;
+    headSha?: string;
   }>(key);
   if (existing) return existing;
 
@@ -484,6 +506,26 @@ export function getAnnotations(prUrl: string): Annotation[] {
  */
 export function setAnnotations(prUrl: string, annotations: Annotation[]): void {
   queryClient.setQueryData(queryKeys.local.annotations(prUrl), annotations);
+}
+
+/** Persist tombstones separately: an empty transcript must clear the list, not dismissals. */
+export function dismissTranscriptAnnotation(prUrl: string, annotation: Annotation): void {
+  const queryKey = queryKeys.local.annotationDismissals(prUrl);
+  const key = annotationDismissalKey(annotation);
+  queryClient.setQueryData<string[]>(queryKey, (previous = []) =>
+    previous.includes(key) ? previous : [...previous, key],
+  );
+}
+
+export function reconcileTranscriptAnnotations(
+  prUrl: string,
+  annotations: Annotation[],
+): Annotation[] {
+  const dismissed =
+    queryClient.getQueryData<string[]>(queryKeys.local.annotationDismissals(prUrl)) ?? [];
+  const visible = reconcileAnnotationDismissals(annotations, dismissed);
+  setAnnotations(prUrl, visible);
+  return visible;
 }
 
 /**

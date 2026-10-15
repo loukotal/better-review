@@ -157,7 +157,26 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
   };
 
   return (
-    <div class="rounded-md bg-bg-surface text-text">
+    <div
+      class={`rounded-md bg-bg-surface text-text ${props.onCreateComment ? "cursor-pointer" : ""}`}
+      role={props.onCreateComment ? "button" : undefined}
+      tabIndex={props.onCreateComment ? 0 : undefined}
+      aria-label={
+        props.onCreateComment
+          ? `Prepare comment for ${props.annotation.file}:${props.annotation.line}`
+          : undefined
+      }
+      onClick={(event) => {
+        if (!(event.target as Element).closest("button,a") && !window.getSelection()?.toString())
+          handleCreateComment();
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          handleCreateComment();
+        }
+      }}
+    >
       <div class={`relative rounded-md border ${config().surface} px-3.5 py-3 font-sans`}>
         {/* Header row */}
         <div class="flex flex-wrap items-center gap-2 mb-3">
@@ -175,7 +194,13 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
           </span>
 
           <div class="ml-auto flex items-center gap-1">
-            <IconButton label={copied() ? "Copied finding" : "Copy finding"} onClick={handleCopy}>
+            <IconButton
+              label={copied() ? "Copied finding" : "Copy finding"}
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleCopy();
+              }}
+            >
               {copied() ? <CheckIcon /> : <CopyIcon />}
             </IconButton>
             <Show when={props.onCreateComment}>
@@ -183,14 +208,23 @@ export const AiAnnotationInline: Component<AiAnnotationInlineProps> = (props) =>
                 type="button"
                 size="sm"
                 variant="ghost"
-                onClick={handleCreateComment}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleCreateComment();
+                }}
                 title="Create PR comment from this suggestion"
               >
                 <CommentIcon /> Comment
               </Button>
             </Show>
             <Show when={props.onDismiss}>
-              <IconButton label="Dismiss annotation" onClick={handleDismiss}>
+              <IconButton
+                label="Dismiss annotation"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleDismiss();
+                }}
+              >
                 <DismissIcon />
               </IconButton>
             </Show>

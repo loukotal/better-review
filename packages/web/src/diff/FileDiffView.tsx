@@ -14,13 +14,25 @@ import type { WorkerPoolManager } from "@pierre/diffs/worker";
 import { createSignal, Show, createEffect, on, onCleanup, createMemo } from "solid-js";
 
 import { renderAiAnnotation } from "../components/AiAnnotationInline";
-import { renderCommentThread, renderPendingCommentForm } from "../components/CommentView";
+import {
+  createCachedCommentDraft,
+  renderCachedCommentForm,
+  type CachedCommentDraft,
+} from "../components/CachedCommentForm";
+import { renderCommentThread } from "../components/CommentView";
+import { SelectionBubble } from "../components/SelectionBubble";
 import type { DiffCommentDraft } from "../DiffViewer";
 import { CheckIcon } from "../icons/check-icon";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CircleIcon } from "../icons/circle-icon";
+import { extractLines, extractTextSelection, type SelectedSource } from "../lib/ask-ai-selection";
+import type { FindingCommentRequest } from "../lib/finding-comment";
 import { fetchFileContentCached } from "../lib/query";
-import { formatAnnotationForComment } from "../utils/formatAnnotationForClipboard";
+import {
+  lineSelectionAnchor,
+  textSelectionAnchor,
+  type SelectionBubbleAnchor,
+} from "../lib/selection-bubble";
 import type { Annotation } from "../utils/parseReviewTokens";
 import {
   FocusableFileDiff,
@@ -52,6 +64,13 @@ const GENERATED_FILE_PATTERNS = [
 ];
 
 interface FileDiffViewProps {
+  findingComment?: FindingCommentRequest | null;
+  commentHeadSha?: string | null;
+  onAskAi?: (selection: SelectedSource, anchor: SelectionBubbleAnchor) => void;
+  askEditorOpen?: boolean;
+  selectionScope?: string;
+  selectionClearToken?: number;
+  commitScope?: boolean;
   file: FileDiffMetadata;
   comments: PRComment[];
   aiAnnotations?: Annotation[];
@@ -61,6 +80,7 @@ interface FileDiffViewProps {
   onDeleteComment: (commentId: number) => Promise<unknown>;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<unknown>;
   onDismissAiAnnotation?: (annotationId: string) => void;
+  onCreateFindingComment?: (annotation: Annotation) => void;
   onCommentDraftChange?: (hasDraft: boolean) => void;
   settings: DiffSettings;
   highlightedLine?: { line: number; side?: "LEFT" | "RIGHT" };
@@ -129,6 +149,55 @@ export function FileDiffView(props: FileDiffViewProps) {
     | undefined;
   let nonVirtualized = false;
   let cancelFocus: (() => void) | undefined;
+  const [aiCandidate, setAiCandidate] = createSignal<SelectedSource | null>(null);
+  const [selectionError, setSelectionError] = createSignal<string | null>(null);
+  const [bubbleAnchor, setBubbleAnchor] = createSignal<SelectionBubbleAnchor | null>(null);
+  const hideCandidate = () => {
+    setBubbleAnchor(null);
+    setAiCandidate(null);
+    setSelectionError(null);
+  };
+  const clearAiSelection = () => {
+    hideCandidate();
+    instance?.setSelectedLines(null);
+    window.getSelection()?.removeAllRanges();
+  };
+  createEffect(() => {
+    if (props.askEditorOpen) hideCandidate();
+  });
+  createEffect(on(() => props.selectionClearToken, clearAiSelection, { defer: true }));
+  createEffect(
+    on(
+      () => props.selectionScope,
+      () => {
+        hideCandidate();
+        setPendingComment(null);
+      },
+      { defer: true },
+    ),
+  );
+
+  const captureText = () => {
+    if (!props.onAskAi || props.askEditorOpen) return;
+    const root = instance?.getFileContainer()?.shadowRoot;
+    if (!root) return;
+    try {
+      const anchor = textSelectionAnchor(root);
+      if (!anchor) return;
+      setBubbleAnchor(anchor);
+      assertSelectionRevision();
+      const selection = extractTextSelection(root, currentFile());
+      if (selection) {
+        setAiCandidate(withSourceRevision(selection));
+        setSelectionError(null);
+      }
+    } catch (error) {
+      if (!bubbleAnchor())
+        setBubbleAnchor(lineSelectionAnchor(root, () => (_containerRef ? [_containerRef] : [])));
+      setAiCandidate(null);
+      setSelectionError(error instanceof Error ? error.message : "Unable to read selection.");
+    }
+  };
 
   // Detect large or generated files
   const totalLines = createMemo(
@@ -150,7 +219,35 @@ export function FileDiffView(props: FileDiffViewProps) {
     endLine: number;
     side: "LEFT" | "RIGHT";
     initialBody?: string;
+    expectedHeadSha?: string;
+    scope?: string;
   } | null>(null);
+  const commentDrafts = new Map<string, CachedCommentDraft>();
+  createEffect(
+    on(
+      () => props.findingComment,
+      (request) => {
+        if (
+          !request ||
+          request.filePath !== props.file.name ||
+          request.scope !== props.selectionScope
+        )
+          return;
+        setCollapsed(false);
+        setPendingComment({
+          startLine: request.line,
+          endLine: request.line,
+          side: "RIGHT",
+          initialBody: request.body,
+          expectedHeadSha: request.expectedHeadSha,
+          scope: request.scope,
+        });
+        setTimeout(() => {
+          if (props.findingComment?.id === request.id) rerender();
+        }, 0);
+      },
+    ),
+  );
 
   // Collapse file when marked as read, expand when marked as unread
   createEffect(
@@ -234,6 +331,8 @@ export function FileDiffView(props: FileDiffViewProps) {
           endLine: pending.endLine,
           side: pending.side,
           initialBody: pending.initialBody,
+          expectedHeadSha: pending.expectedHeadSha ?? props.commentHeadSha ?? undefined,
+          scope: pending.scope ?? props.selectionScope,
         },
       });
     }
@@ -249,6 +348,9 @@ export function FileDiffView(props: FileDiffViewProps) {
       lineAnnotations: lineAnnotations(),
       forceRender,
     });
+    const container = instance.getFileContainer();
+    if (container && fileContentLoaded)
+      container.dataset.expandedHead = expandedSourceRefs.headSha ?? "";
   };
 
   const rerender = () => {
@@ -415,6 +517,23 @@ export function FileDiffView(props: FileDiffViewProps) {
 
   // Track whether full file content has been loaded for expanding unchanged lines
   let fileContentLoaded = false;
+  let expandedSourceRefs: { baseSha?: string; headSha?: string } = {};
+  const assertSelectionRevision = () => {
+    if (fileContentLoaded && props.commitScope)
+      throw new Error(
+        "Expanded source is not pinned to this commit. Reload the commit diff and select its patch lines instead.",
+      );
+  };
+  const withSourceRevision = (selection: SelectedSource): SelectedSource =>
+    !fileContentLoaded
+      ? selection
+      : {
+          ...selection,
+          revision:
+            selection.side === "LEFT"
+              ? `expanded comparison-base source: ${expandedSourceRefs.baseSha ?? "revision unavailable"} (not the PR merge-base)`
+              : `expanded head source: ${expandedSourceRefs.headSha ?? "revision unavailable"}`,
+        };
   let fileContentLoading = false;
   // Track loading state per hunk separator element so we can show spinners
   const loadingHunkSeparators = new Set<HTMLElement>();
@@ -434,11 +553,13 @@ export function FileDiffView(props: FileDiffViewProps) {
 
     fileContentLoading = true;
     try {
-      const { oldContent, newContent } = await fetchFileContentCached(
+      const { oldContent, newContent, baseSha, headSha } = await fetchFileContentCached(
         { sessionId: props.sessionId, prUrl: props.prUrl, variantId: props.variantId },
         props.file.name,
         props.file.prevName ?? undefined,
       );
+      expandedSourceRefs = { baseSha, headSha };
+      hideCandidate();
 
       // Clone the FileDiffMetadata so the renderer sees a new reference and
       // invalidates its render cache (which was built without oldLines/newLines).
@@ -632,6 +753,43 @@ export function FileDiffView(props: FileDiffViewProps) {
       onLineSelectionEnd: (range: SelectedLineRange | null) => {
         if (props.readOnly) return;
         if (range && range.start && range.end) {
+          if (props.onAskAi && !props.askEditorOpen) {
+            const root = instance?.getFileContainer()?.shadowRoot;
+            const side = range.side === "deletions" ? "deletions" : "additions";
+            if (root)
+              setBubbleAnchor(
+                lineSelectionAnchor(root, () =>
+                  [range.start, range.end].flatMap((line) => {
+                    const indices = instance?.getLineIndex(line, side);
+                    const row = indices
+                      ? root.querySelector(focusRowSelector(indices, side, line))
+                      : null;
+                    return row ? [row] : [];
+                  }),
+                ),
+              );
+            try {
+              assertSelectionRevision();
+              if (range.endSide && range.endSide !== range.side)
+                throw new Error("Select gutter lines on one diff side only.");
+              setAiCandidate(
+                withSourceRevision(
+                  extractLines(
+                    currentFile(),
+                    range.side === "deletions" ? "LEFT" : "RIGHT",
+                    range.start,
+                    range.end,
+                  ),
+                ),
+              );
+              setSelectionError(null);
+            } catch (error) {
+              setAiCandidate(null);
+              setSelectionError(
+                error instanceof Error ? error.message : "Unable to read selection.",
+              );
+            }
+          }
           // Clear any existing text selection so it doesn't block future interactions
           window.getSelection()?.removeAllRanges();
 
@@ -680,25 +838,25 @@ export function FileDiffView(props: FileDiffViewProps) {
           const dispose = renderAiAnnotation(div, {
             annotation: metadata.annotation,
             onDismiss: props.onDismissAiAnnotation,
-            onCreateComment: (annotation) => {
-              setPendingComment({
-                startLine: annotation.line,
-                endLine: annotation.line,
-                side: "RIGHT",
-                initialBody: formatAnnotationForComment(annotation),
-              });
-              setTimeout(rerender, 0);
-            },
+            onCreateComment: props.onCreateFindingComment,
           });
           disposeList.push(dispose);
         } else if (metadata.type === "pending") {
           div.className = "p-2.5 my-1 mx-2 bg-bg-surface border border-accent";
 
           // Render the PendingCommentForm component into the div
-          const dispose = renderPendingCommentForm(div, {
+          const key = `${metadata.expectedHeadSha ?? "manual"}:${metadata.side}:${metadata.startLine}:${metadata.endLine}`;
+          const draft =
+            commentDrafts.get(key) ?? createCachedCommentDraft(metadata.initialBody ?? "");
+          commentDrafts.set(key, draft);
+          div.dataset.commentFile = props.file.name;
+          div.dataset.commentLine = String(metadata.endLine);
+          div.dataset.commentSide = metadata.side;
+          const dispose = renderCachedCommentForm(div, {
+            draft,
             startLine: metadata.startLine,
             endLine: metadata.endLine,
-            initialBody: metadata.initialBody,
+            disabled: () => !!metadata.scope && metadata.scope !== props.selectionScope,
             onSubmit: async (body) => {
               await props.onAddComment({
                 line: metadata.endLine,
@@ -706,15 +864,21 @@ export function FileDiffView(props: FileDiffViewProps) {
                 body,
                 startLine: metadata.startLine,
                 endLine: metadata.endLine,
+                expectedHeadSha: metadata.expectedHeadSha,
               });
               setPendingComment(null);
+              commentDrafts.delete(key);
               window.getSelection()?.removeAllRanges();
             },
             onCancel: () => {
               setPendingComment(null);
+              commentDrafts.delete(key);
               setTimeout(rerender, 0);
             },
-            onDraftChange: props.onCommentDraftChange,
+            onDraftChange: () =>
+              props.onCommentDraftChange?.(
+                [...commentDrafts.values()].some((draft) => !!draft.body.trim()),
+              ),
           });
           disposeList.push(dispose);
         }
@@ -735,6 +899,8 @@ export function FileDiffView(props: FileDiffViewProps) {
       containerWrapper: el,
       lineAnnotations: lineAnnotations(),
     });
+    if (fileContentLoaded)
+      instance.getFileContainer()!.dataset.expandedHead = expandedSourceRefs.headSha ?? "";
   };
 
   const renderDiff = (el: HTMLDivElement) => {
@@ -774,7 +940,10 @@ export function FileDiffView(props: FileDiffViewProps) {
     on(
       () => collapsed(),
       (isCollapsed, wasCollapsed) => {
-        if (isCollapsed) cancelFocus?.();
+        if (isCollapsed) {
+          cancelFocus?.();
+          hideCandidate();
+        }
         if (isCollapsed && !wasCollapsed && headerRef) {
           // After collapsing, ensure the header is visible
           requestAnimationFrame(() => {
@@ -850,8 +1019,34 @@ export function FileDiffView(props: FileDiffViewProps) {
       </button>
 
       {/* Diff content */}
+      <Show when={props.onAskAi && bubbleAnchor()}>
+        {(anchor) => (
+          <SelectionBubble
+            anchor={anchor()}
+            error={selectionError()}
+            label={
+              aiCandidate()
+                ? `Lines ${aiCandidate()!.startLine}–${aiCandidate()!.endLine}`
+                : undefined
+            }
+            onAsk={
+              aiCandidate()
+                ? () => {
+                    const selection = aiCandidate();
+                    if (selection) props.onAskAi?.(selection, anchor());
+                    hideCandidate();
+                  }
+                : undefined
+            }
+            onDismiss={clearAiSelection}
+            onHide={hideCandidate}
+          />
+        )}
+      </Show>
       <Show when={!collapsed()}>
         <div
+          onMouseUp={captureText}
+          onKeyUp={captureText}
           class="border border-t-0 border-border rounded-b-sm overflow-hidden"
           ref={renderDiff}
         />

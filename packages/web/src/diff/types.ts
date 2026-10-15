@@ -279,6 +279,8 @@ export type AnnotationMetadata =
       endLine: number;
       side: "LEFT" | "RIGHT";
       initialBody?: string;
+      expectedHeadSha?: string;
+      scope?: string;
     }
   | {
       type: "pending-reply";

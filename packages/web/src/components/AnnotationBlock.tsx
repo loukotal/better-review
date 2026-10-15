@@ -1,4 +1,4 @@
-import { type Component, For, createMemo, createSignal } from "solid-js";
+import { type Component, For, Show, createMemo, createSignal } from "solid-js";
 
 import { IconButton } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
@@ -13,6 +13,7 @@ import { FileLink } from "./FileLink";
 interface AnnotationBlockProps {
   annotation: Annotation;
   onNavigate: (file: string, line: number) => void;
+  onCreateComment?: (annotation: Annotation) => void;
 }
 
 type MessagePart = { type: "text"; text: string } | { type: "file"; file: string; line?: number };
@@ -106,7 +107,27 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
   };
 
   return (
-    <div class={`my-5 rounded-md border ${styles().border} ${styles().bg} p-3.5`}>
+    <div
+      class={`my-5 rounded-md border ${styles().border} ${styles().bg} p-3.5 ${props.onCreateComment ? "cursor-pointer focus-visible:outline-2 focus-visible:outline-accent" : ""}`}
+      role={props.onCreateComment ? "button" : undefined}
+      tabIndex={props.onCreateComment ? 0 : undefined}
+      aria-label={
+        props.onCreateComment
+          ? `Prepare comment for ${props.annotation.file}:${props.annotation.line}`
+          : undefined
+      }
+      onClick={(event) => {
+        if ((event.target as Element).closest("button,a,input,textarea,select")) return;
+        if (window.getSelection()?.toString()) return;
+        props.onCreateComment?.(props.annotation);
+      }}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          props.onCreateComment?.(props.annotation);
+        }
+      }}
+    >
       {/* Header */}
       <div class="flex items-center justify-between gap-2 mb-3">
         <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -116,16 +137,40 @@ export const AnnotationBlock: Component<AnnotationBlockProps> = (props) => {
           <span class={`text-sm font-semibold ${styles().icon}`}>{styles().label}</span>
           <button
             type="button"
-            onClick={handleNavigate}
+            onClick={(event) => {
+              event.stopPropagation();
+              handleNavigate();
+            }}
             class="w-full truncate text-left text-xs font-mono text-text-muted hover:text-accent transition-colors"
             title={`${props.annotation.file}:${props.annotation.line}`}
           >
             {fileName()}:{props.annotation.line}
           </button>
         </div>
-        <IconButton label={copied() ? "Copied finding" : "Copy finding"} onClick={handleCopy}>
-          {copied() ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-        </IconButton>
+        <div class="flex shrink-0 items-center gap-1">
+          <Show when={props.onCreateComment}>
+            <button
+              type="button"
+              class="rounded px-1 py-1 text-xs text-text-muted hover:text-text"
+              title="Prepare an editable PR comment (does not publish)"
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onCreateComment?.(props.annotation);
+              }}
+            >
+              Comment
+            </button>
+          </Show>
+          <IconButton
+            label={copied() ? "Copied finding" : "Copy finding"}
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleCopy();
+            }}
+          >
+            {copied() ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+          </IconButton>
+        </div>
       </div>
 
       {/* Message */}

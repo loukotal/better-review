@@ -5,7 +5,10 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 import { TextInput } from "./design-system";
 import { FileDiffView } from "./diff/FileDiffView";
 import type { DiffSettings, PRComment } from "./diff/types";
+import type { SelectedSource } from "./lib/ask-ai-selection";
 import { searchDiffFiles } from "./lib/diff-search";
+import type { FindingCommentRequest } from "./lib/finding-comment";
+import type { SelectionBubbleAnchor } from "./lib/selection-bubble";
 import type { Annotation } from "./utils/parseReviewTokens";
 
 // Re-export types for convenience
@@ -18,6 +21,7 @@ export function getFileElementId(fileName: string): string {
 }
 
 export interface DiffCommentDraft {
+  expectedHeadSha?: string;
   filePath: string;
   line: number;
   side: "LEFT" | "RIGHT";
@@ -27,6 +31,13 @@ export interface DiffCommentDraft {
 }
 
 interface Props {
+  findingComment?: FindingCommentRequest | null;
+  commentHeadSha?: string | null;
+  onAskAi?: (selection: SelectedSource, anchor: SelectionBubbleAnchor) => void;
+  askEditorOpen?: boolean;
+  selectionScope?: string;
+  selectionClearToken?: number;
+  commitScope?: boolean;
   rawDiff: string;
   comments: PRComment[];
   aiAnnotations?: Annotation[];
@@ -37,6 +48,7 @@ interface Props {
   onDeleteComment: (commentId: number) => Promise<unknown>;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<unknown>;
   onDismissAiAnnotation?: (annotationId: string) => void;
+  onCreateFindingComment?: (annotation: Annotation) => void;
   onCommentDraftChange?: (filePath: string, hasDraft: boolean) => void;
   settings: DiffSettings;
   onFilesLoaded?: (files: FileDiffMetadata[]) => void;
@@ -322,6 +334,15 @@ export function DiffViewer(props: Props) {
                 }}
               >
                 <FileDiffView
+                  findingComment={
+                    props.findingComment?.filePath === file.name ? props.findingComment : undefined
+                  }
+                  commentHeadSha={props.commentHeadSha}
+                  onAskAi={props.onAskAi}
+                  askEditorOpen={props.askEditorOpen}
+                  selectionScope={props.selectionScope}
+                  selectionClearToken={props.selectionClearToken}
+                  commitScope={props.commitScope}
                   workerPool={workerPool}
                   file={file}
                   comments={commentsByFile().get(file.name) ?? []}
@@ -337,6 +358,7 @@ export function DiffViewer(props: Props) {
                   onDeleteComment={props.onDeleteComment}
                   onResolveThread={props.onResolveThread}
                   onDismissAiAnnotation={props.onDismissAiAnnotation}
+                  onCreateFindingComment={props.onCreateFindingComment}
                   onCommentDraftChange={(hasDraft) =>
                     props.onCommentDraftChange?.(file.name, hasDraft)
                   }

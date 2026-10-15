@@ -92,6 +92,7 @@ const IssueCommentSchema = Schema.Struct({
 export type RawIssueComment = typeof IssueCommentSchema.Type;
 
 export interface AddCommentParams {
+  expectedHeadSha?: string;
   prUrl: string;
   filePath: string;
   line: number;
@@ -332,7 +333,7 @@ interface GhCli {
     sha: string;
   }) => Effect.Effect<string, GhError, never>;
   getPrCiStatus: (prUrl: string) => Effect.Effect<CiStatus | null, GhError, never>;
-  getHeadSha: (prUrl: string) => Effect.Effect<string, GhError, never>;
+  getHeadSha: (prUrl: string, fresh?: boolean) => Effect.Effect<string, GhError, never>;
   getBaseSha: (prUrl: string) => Effect.Effect<string, GhError, never>;
   getHeadRef: (prUrl: string) => Effect.Effect<string, GhError, never>;
   getBaseRef: (prUrl: string) => Effect.Effect<string, GhError, never>;
@@ -990,6 +991,13 @@ const ghCli: GhCli = {
         "--jq",
         ".head.sha",
       )).trim();
+
+      if (params.expectedHeadSha && params.expectedHeadSha !== commitSha)
+        return yield* Effect.fail(
+          new Error(
+            "The PR head changed since this finding was reviewed. Reload and revalidate it before posting; your comment draft was preserved.",
+          ),
+        );
 
       const side = params.side ?? "RIGHT";
       const args = [
@@ -1898,8 +1906,8 @@ const ghCli: GhCli = {
       Effect.withSpan("GhService.getPrCiStatus", { attributes: { prUrl } }),
     ),
 
-  getHeadSha: (prUrl: string) =>
-    getCachedPullRequest(prUrl).pipe(
+  getHeadSha: (prUrl: string, fresh = false) =>
+    getCachedPullRequest(prUrl, { fresh }).pipe(
       Effect.map((pr) => pr.head.sha),
       Effect.mapError((cause) => new GhError({ command: "getHeadSha", cause })),
       Effect.withSpan("GhService.getHeadSha", { attributes: { prUrl } }),

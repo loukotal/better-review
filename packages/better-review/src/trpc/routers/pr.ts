@@ -236,6 +236,9 @@ export const prRouter = router({
         const log = logPrLoad("pr.core", startTime);
         const gh = yield* GhService;
 
+        const headBefore = yield* gh
+          .getHeadSha(input.url, true)
+          .pipe(Effect.orElseSucceed(() => null));
         const [diff, info, commits] = yield* Effect.all(
           [
             gh.getDiff(input.url).pipe(log.timed("getDiff")),
@@ -246,7 +249,20 @@ export const prRouter = router({
         );
 
         yield* Effect.log(`[pr.core] DONE url=${input.url} total=${Date.now() - startTime}ms`);
-        return { diff, info, commits };
+        const [headAfter, comparisonBaseSha] = yield* Effect.all(
+          [
+            gh.getHeadSha(input.url, true).pipe(Effect.orElseSucceed(() => null)),
+            gh.getBaseSha(input.url).pipe(Effect.orElseSucceed(() => null)),
+          ],
+          { concurrency: "unbounded" },
+        );
+        return {
+          diff,
+          info,
+          commits,
+          headSha: headBefore === headAfter ? headAfter : null,
+          comparisonBaseSha,
+        };
       }),
     ),
   ),
@@ -344,7 +360,7 @@ export const prRouter = router({
             `[fileContent] ${input.path} old=${oldContent ? oldContent.length : "null"}b new=${newContent ? newContent.length : "null"}b`,
           );
 
-          return { oldContent, newContent };
+          return { oldContent, newContent, baseSha, headSha };
         }),
       ),
     ),
@@ -503,6 +519,10 @@ ${fileStats.join("\n")}`;
         side: z.enum(["LEFT", "RIGHT"]).optional(),
         startLine: z.number().optional(),
         startSide: z.enum(["LEFT", "RIGHT"]).optional(),
+        expectedHeadSha: z
+          .string()
+          .regex(/^[a-f\d]{40,64}$/i)
+          .optional(),
       }),
     )
     .mutation(({ input }) =>
@@ -521,6 +541,7 @@ ${fileStats.join("\n")}`;
             side,
             startLine: input.startLine,
             startSide,
+            ...(input.expectedHeadSha ? { expectedHeadSha: input.expectedHeadSha } : {}),
           });
           // User just created this comment, so they can edit it
           return { comment: { ...comment, canEdit: true } };

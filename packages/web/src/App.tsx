@@ -14,15 +14,23 @@ import {
 import type { PrStatus, PrInfo } from "@better-review/shared";
 
 import { ChatPanel } from "./ChatPanel";
+import {
+  AnchoredSelectionEditor,
+  type SelectionEditorDraft,
+} from "./components/AnchoredSelectionEditor";
 import { AppHeader } from "./components/AppHeader";
 import { ApproveButton } from "./components/ApproveButton";
+import { createSelectionQuestionState } from "./components/AskSelectionComposer";
+import { createCachedCommentDraft } from "./components/CachedCommentForm";
 import { CommitNavigator } from "./components/CommitNavigator";
 import { DiffStatsBadge } from "./components/DiffStatsBadge";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
+import { InlineFindingComment, type InlineFindingDraft } from "./components/InlineFindingComment";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReadingDiffEmpty, ReadingDiffSummary } from "./components/ReadingDiffState";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
+import { SelectionSourcePreview } from "./components/SelectionSourcePreview";
 import { SourceDialog } from "./components/SourceDialog";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
@@ -38,9 +46,21 @@ import {
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
 import { navigateAnnotation, type SourceTarget } from "./lib/annotation-navigation";
+import {
+  selectionRevision,
+  createSelectionDraft,
+  type SelectedSource,
+  type SelectionChatController,
+} from "./lib/ask-ai-selection";
 import { savePrComment } from "./lib/comment-save";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
+import { resolveFileReference } from "./lib/file-reference";
+import {
+  prepareFindingComment,
+  findingCommentKey,
+  type FindingCommentRequest,
+} from "./lib/finding-comment";
 import { submitPrReview } from "./lib/pr-review-action";
 import {
   queryKeys,
@@ -54,11 +74,12 @@ import {
   toggleReviewedFile,
   getReviewOrder,
   setReviewOrder as querySetReviewOrder,
-  getAnnotations,
-  addAnnotations as queryAddAnnotations,
-  removeAnnotation as queryRemoveAnnotation,
+  dismissTranscriptAnnotation,
+  reconcileTranscriptAnnotations,
   type ReadingDiffResult,
 } from "./lib/query";
+import type { SelectionBubbleAnchor } from "./lib/selection-bubble";
+import type { SelectionSourceContext } from "./lib/selection-question-message";
 import { uiTheme } from "./lib/theme";
 import { trpc } from "./lib/trpc";
 import type { Annotation } from "./utils/parseReviewTokens";
@@ -129,6 +150,23 @@ const AppContent: Component = () => {
   } | null>(null);
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
   const [sourceTarget, setSourceTarget] = createSignal<SourceTarget | null>(null);
+  const [selectionSource, setSelectionSource] = createSignal<SelectionSourceContext | null>(null);
+  const [findingNotice, setFindingNotice] = createSignal<string | null>(null);
+  const [findingComment, setFindingComment] = createSignal<FindingCommentRequest | null>(null);
+  const [inlineFinding, setInlineFinding] = createSignal<InlineFindingDraft | null>(null);
+  const inlineFindingDrafts = new Map<string, InlineFindingDraft>();
+  const [askSelection, setAskSelection] = createSignal<SelectionEditorDraft | null>(null);
+  const [selectionController, setSelectionController] =
+    createSignal<SelectionChatController | null>(null);
+  const [selectionClearToken, setSelectionClearToken] = createSignal(0);
+  const dismissSelection = () => {
+    setAskSelection(null);
+    setSelectionClearToken((value) => value + 1);
+  };
+  const [diffRevision, setDiffRevision] = createSignal<{
+    headSha?: string | null;
+    comparisonBaseSha?: string | null;
+  }>({});
   let diffScrollRef: HTMLDivElement | undefined;
 
   // Panel visibility
@@ -194,6 +232,41 @@ const AppContent: Component = () => {
   const currentCommitSha = createMemo(() =>
     reviewMode() === "commit" ? (commits()[currentCommitIndex()]?.sha ?? null) : null,
   );
+  let selectionScopeVersion = 0;
+  const selectionScope = createMemo(() => {
+    const values = [
+      prUrl(),
+      loadedPrUrl(),
+      reviewMode(),
+      currentCommitSha(),
+      activeDiff(),
+      diffRevision(),
+      loadingCommits(),
+      switchingPr(),
+    ];
+    return `${++selectionScopeVersion}:${values[0]}`;
+  });
+  const askAboutSource = (
+    selection: SelectedSource,
+    anchor: SelectionBubbleAnchor,
+    revision?: string,
+  ) => {
+    if (switchingPr() || loadingCommits() || prUrl() !== loadedPrUrl()) return;
+    // Do not replace an unsent question when another source range is selected.
+    if (!askSelection()) {
+      const metadata = diffRevision();
+      const sourceRevision =
+        revision ??
+        selection.revision ??
+        selectionRevision(selection.side, metadata, currentCommitSha());
+      const rect = anchor.rect(false);
+      setAskSelection({
+        selection: createSelectionDraft(selection, sourceRevision, selectionScope()),
+        anchor: { ...anchor, fallbackRect: rect ?? undefined },
+        state: createSelectionQuestionState(),
+      });
+    }
+  };
 
   const readingDiffScopeKey = createMemo(() => {
     const url = loadedPrUrl();
@@ -280,6 +353,21 @@ const AppContent: Component = () => {
     ref?: string,
   ) => {
     if (!sessionId) return;
+    const container = document
+      .getElementById(getFileElementId(path))
+      ?.querySelector<HTMLElement>("diffs-container");
+    if (
+      sameRevision &&
+      ref &&
+      container?.dataset.expandedHead === ref &&
+      line &&
+      container.shadowRoot?.querySelector(
+        `[data-additions] [data-line="${line}"], [data-unified] [data-line="${line}"]`,
+      )
+    ) {
+      scrollToFile(path, line, "RIGHT");
+      return;
+    }
     navigateAnnotation(
       { path, line, sessionId, ref },
       files(),
@@ -292,6 +380,79 @@ const AppContent: Component = () => {
         source: setSourceTarget,
       },
     );
+  };
+  const navigateSelectionSource = (selection: SelectionSourceContext, _sessionId: string) => {
+    const path = resolveFileReference(selection.file, fileNames());
+    const revision = reviewMode() === "commit" ? currentCommitSha() : diffRevision().headSha;
+    const file = files().find((file) => file.name === path);
+    const container = path
+      ? document
+          .getElementById(getFileElementId(path))
+          ?.querySelector<HTMLElement>("diffs-container")
+      : null;
+    const expanded =
+      container?.dataset.expandedHead === selection.revision &&
+      !!container.shadowRoot?.querySelector(
+        `[data-additions] [data-line="${selection.startLine}"], [data-unified] [data-line="${selection.startLine}"]`,
+      );
+    if (
+      selection.side === "RIGHT" &&
+      path &&
+      container &&
+      selection.revision === revision &&
+      (expanded ||
+        file?.hunks.some(
+          (hunk) =>
+            selection.startLine >= hunk.additionStart &&
+            selection.startLine < hunk.additionStart + hunk.additionCount,
+        ))
+    )
+      scrollToFile(path, selection.startLine, "RIGHT");
+    else if (selection.side === "RIGHT" && path && /^[a-f\d]{40,64}$/i.test(selection.revision))
+      setSourceTarget({
+        path,
+        line: selection.startLine,
+        ref: selection.revision,
+        sessionId: _sessionId,
+      });
+    else setSelectionSource(selection);
+  };
+  const createFindingComment = (annotation: Annotation, sessionId: string, ref?: string | null) => {
+    try {
+      if (!loadedPrUrl() || prUrl() !== loadedPrUrl() || loading() || loadingCommits())
+        throw new Error(
+          "Wait for the current PR revision to finish loading; existing drafts were preserved.",
+        );
+      const { request, inPatch } = prepareFindingComment(annotation, {
+        prUrl: loadedPrUrl()!,
+        sessionId,
+        scope: selectionScope(),
+        reviewedRef: ref,
+        displayedHeadSha: diffRevision().headSha,
+        files: files(),
+        commitScope: reviewMode() === "commit",
+      });
+      setFindingNotice(null);
+      if (inPatch) {
+        setInlineFinding(null);
+        setFindingComment(request);
+        scrollToFile(request.filePath, request.line, "RIGHT");
+      } else {
+        const key = findingCommentKey(request);
+        const entry = {
+          request,
+          draft: inlineFindingDrafts.get(key)?.draft ?? createCachedCommentDraft(request.body),
+        };
+        inlineFindingDrafts.set(key, entry);
+        setInlineFinding(entry);
+      }
+    } catch (error) {
+      setFindingNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not prepare this finding. Existing drafts were preserved.",
+      );
+    }
   };
 
   // Apply review order
@@ -322,36 +483,45 @@ const AppContent: Component = () => {
   const dismissAiAnnotation = (annotationId: string) => {
     const url = loadedPrUrl();
     if (url) {
-      const updated = queryRemoveAnnotation(url, annotationId);
-      setAiAnnotations(updated);
+      const annotation = aiAnnotations().find((annotation) => annotation.id === annotationId);
+      if (annotation) dismissTranscriptAnnotation(url, annotation);
+      setAiAnnotations(reconcileTranscriptAnnotations(url, aiAnnotations()));
     }
   };
 
-  // Add new AI annotations (called when chat receives annotations)
+  // The active transcript is authoritative, including an empty revision-filtered result.
   const addNewAiAnnotations = (annotations: Annotation[]) => {
     const url = loadedPrUrl();
-    if (url && annotations.length > 0) {
-      const updated = queryAddAnnotations(url, annotations);
-      setAiAnnotations(updated);
+    if (url) {
+      setAiAnnotations(reconcileTranscriptAnnotations(url, annotations));
     }
   };
 
   // Load commit diff using TanStack Query (auto-cached)
+  let commitDiffRequest = 0;
   const loadCommitDiff = async (sha: string) => {
     const url = loadedPrUrl();
     if (!url) return;
+    const request = ++commitDiffRequest;
 
     setLoadingCommits(true);
+    setCommitDiff(null);
     try {
       const diff = await queryClient.fetchQuery({
         queryKey: queryKeys.pr.commitDiff(url, sha),
         queryFn: () => api.fetchCommitDiff(url, sha),
       });
-      setCommitDiff(diff);
+      if (
+        request === commitDiffRequest &&
+        prUrl() === url &&
+        loadedPrUrl() === url &&
+        currentCommitSha() === sha
+      )
+        setCommitDiff(diff);
     } catch (err) {
       console.error("Failed to load commit diff:", err);
     } finally {
-      setLoadingCommits(false);
+      if (request === commitDiffRequest) setLoadingCommits(false);
     }
   };
 
@@ -507,8 +677,9 @@ const AppContent: Component = () => {
         setReviewOrder(null);
       }
 
-      const savedAnnotations = getAnnotations(url);
-      setAiAnnotations(savedAnnotations);
+      // Legacy PR-wide caches have no trustworthy active-session provenance.
+      // ChatPanel republishes the active transcript rather than merging these records.
+      setAiAnnotations([]);
 
       setReadFiles(new Set<string>());
     } else {
@@ -574,6 +745,7 @@ const AppContent: Component = () => {
       predicate: (query) => !query.queryKey.includes(currentPrUrl),
     });
     setError(null);
+    setDiffRevision({});
     // Reset commit mode state
     setReviewMode("full");
     setDiffViewMode("original");
@@ -647,6 +819,7 @@ const AppContent: Component = () => {
       if (!isCurrentPr()) return;
 
       setDiff(data.diff);
+      setDiffRevision({ headSha: data.headSha, comparisonBaseSha: data.comparisonBaseSha });
       setLoadedPrUrl(currentPrUrl);
       setSwitchingPr(false);
       setContextPrUrl(currentPrUrl);
@@ -664,9 +837,8 @@ const AppContent: Component = () => {
           : 0;
         if (idx === -1) idx = 0;
         setCurrentCommitIndex(idx);
-        loadCommitDiff(data.commits[idx].sha).then(() => {
-          setReviewMode("commit");
-        });
+        setReviewMode("commit");
+        void loadCommitDiff(data.commits[idx].sha);
       }
     } catch (err) {
       if (isCurrentPr()) setError(describePrLoadError(err));
@@ -1063,32 +1235,68 @@ const AppContent: Component = () => {
       </Show>
 
       {/* Main content */}
+      <Show when={selectionSource()} keyed>
+        {(selection) => (
+          <SelectionSourcePreview
+            selection={selection}
+            reason={
+              !resolveFileReference(selection.file, fileNames())
+                ? "This file reference is ambiguous or unsafe. Showing the captured selection instead of guessing a repository path."
+                : undefined
+            }
+            onClose={() => setSelectionSource(null)}
+          />
+        )}
+      </Show>
       <Show when={sourceTarget()} keyed>
-        {(target) => <SourceDialog target={target} onClose={() => setSourceTarget(null)} />}
+        {(target) => (
+          <SourceDialog
+            target={target}
+            onClose={() => setSourceTarget(null)}
+            askEditorOpen={!!askSelection()}
+            onAskAi={askAboutSource}
+          />
+        )}
+      </Show>
+      <Show when={askSelection()} keyed>
+        {(draft) => (
+          <AnchoredSelectionEditor
+            draft={draft}
+            controller={selectionController()}
+            scope={selectionScope()}
+            sourceDialogOpen={!!sourceTarget()}
+            isCurrent={() => askSelection() === draft && draft.selection.scope === selectionScope()}
+            onDismiss={dismissSelection}
+          />
+        )}
       </Show>
       <div class="relative flex min-w-0 flex-1 overflow-hidden">
         {/* Chat panel (left) - hidden in focus mode */}
-        <Show when={panelVisibility().chat && !focusMode()}>
-          <ChatPanel
-            prUrl={loadedPrUrl()}
-            initialSessionId={
-              typeof searchParams.sessionId === "string" ? searchParams.sessionId : undefined
-            }
-            prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
-            repoOwner={prInfo()?.owner ?? null}
-            repoName={prInfo()?.repo ?? null}
-            files={fileNames()}
-            reviewMode={reviewMode()}
-            commitSha={
-              reviewMode() === "commit" ? (commits()[currentCommitIndex()]?.sha ?? null) : null
-            }
-            theme={settings().theme}
-            aiAnnotations={aiAnnotations()}
-            onScrollToFile={navigateChatFile}
-            onApplyReviewOrder={applyReviewOrder}
-            onAnnotationsReceived={addNewAiAnnotations}
-          />
-        </Show>
+        <ChatPanel
+          hidden={!panelVisibility().chat || focusMode()}
+          selectionScope={selectionScope()}
+          onSelectionController={setSelectionController}
+          prUrl={loadedPrUrl()}
+          initialSessionId={
+            typeof searchParams.sessionId === "string" ? searchParams.sessionId : undefined
+          }
+          prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
+          repoOwner={prInfo()?.owner ?? null}
+          repoName={prInfo()?.repo ?? null}
+          files={fileNames()}
+          reviewMode={reviewMode()}
+          displayedHeadSha={diffRevision().headSha ?? null}
+          commitSha={
+            reviewMode() === "commit" ? (commits()[currentCommitIndex()]?.sha ?? null) : null
+          }
+          theme={settings().theme}
+          aiAnnotations={aiAnnotations()}
+          onScrollToFile={navigateChatFile}
+          onApplyReviewOrder={applyReviewOrder}
+          onAnnotationsReceived={addNewAiAnnotations}
+          onCreateFindingComment={createFindingComment}
+          onSelectionSourceNavigate={navigateSelectionSource}
+        />
 
         {/* Center content */}
         <Show
@@ -1165,10 +1373,68 @@ const AppContent: Component = () => {
                     onNavigateEvidence={scrollToFile}
                   />
                 </Show>
+                <Show when={findingNotice()}>
+                  <div
+                    data-finding-comment-notice
+                    role="alert"
+                    class="mb-3 rounded border border-warning/40 bg-bg-elevated p-3 text-sm"
+                  >
+                    {findingNotice()}{" "}
+                    <Button type="button" size="xs" onClick={() => setFindingNotice(null)}>
+                      Dismiss
+                    </Button>
+                  </div>
+                </Show>
+                <Show when={inlineFinding()} keyed>
+                  {(entry) => (
+                    <InlineFindingComment
+                      entry={entry}
+                      isCurrent={() =>
+                        entry.request.scope === selectionScope() &&
+                        entry.request.prUrl === loadedPrUrl() &&
+                        entry.request.expectedHeadSha === diffRevision().headSha
+                      }
+                      onCancel={() => {
+                        inlineFindingDrafts.delete(findingCommentKey(entry.request));
+                        setInlineFinding(null);
+                      }}
+                      onSubmit={async (body) => {
+                        if (
+                          entry.request.scope !== selectionScope() ||
+                          entry.request.prUrl !== loadedPrUrl()
+                        )
+                          throw new Error("PR or revision changed. This draft was not submitted.");
+                        await addComment({
+                          filePath: entry.request.filePath,
+                          line: entry.request.line,
+                          side: "RIGHT",
+                          body,
+                          expectedHeadSha: entry.request.expectedHeadSha,
+                        });
+                        inlineFindingDrafts.delete(findingCommentKey(entry.request));
+                        if (inlineFinding() === entry) setInlineFinding(null);
+                      }}
+                    />
+                  )}
+                </Show>
                 <DiffViewer
+                  findingComment={findingComment()}
+                  commentHeadSha={diffRevision().headSha}
+                  askEditorOpen={!!askSelection()}
+                  commitScope={reviewMode() === "commit"}
+                  onAskAi={askAboutSource}
+                  selectionScope={selectionScope()}
+                  selectionClearToken={selectionClearToken()}
                   rawDiff={activeDiff()!}
                   comments={reviewCommentsHidden() ? [] : comments()}
                   aiAnnotations={reviewCommentsHidden() ? [] : aiAnnotations()}
+                  onCreateFindingComment={(annotation) =>
+                    createFindingComment(
+                      annotation,
+                      annotation.origin?.sessionId ?? "",
+                      annotation.origin?.revision,
+                    )
+                  }
                   loadingComments={!reviewCommentsHidden() && loadingComments()}
                   onAddComment={addComment}
                   onReplyToComment={replyToComment}

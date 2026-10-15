@@ -12,6 +12,17 @@ export function Dialog(props: {
 }) {
   let element!: HTMLDialogElement;
   const titleId = createUniqueId();
+  let startedOutside = false;
+  const outside = (event: MouseEvent) => {
+    if (event.target !== element) return false;
+    const rect = element.getBoundingClientRect();
+    return (
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom
+    );
+  };
   createEffect(() => {
     if (props.open && !element.open) element.showModal();
     if (!props.open && element.open) element.close();
@@ -26,6 +37,16 @@ export function Dialog(props: {
       }}
       aria-label={props.title}
       id={titleId}
+      onPointerDown={(event) => {
+        startedOutside = outside(event);
+      }}
+      onPointerCancel={() => {
+        startedOutside = false;
+      }}
+      onClick={(event) => {
+        if (startedOutside && outside(event)) props.onClose();
+        startedOutside = false;
+      }}
       onCancel={(event) => {
         event.preventDefault();
         props.onClose();

@@ -33,6 +33,7 @@ import {
   LoadingState,
   Alert,
   PanelHeader,
+  MessageForm,
 } from "../design-system";
 import { SettingsPanel } from "../diff/SettingsPanel";
 import {
@@ -857,11 +858,12 @@ export default function AgentReviewPage() {
     const target = event.target;
     if (!(target instanceof Node)) return;
     if (composerRef?.contains(target)) return;
-    if (contentRef?.contains(target)) return;
+    if (!composerOpen() && contentRef?.contains(target)) return;
     dismissComposer(false);
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing) return;
     if (event.key === "Escape" && pendingVerdict() !== null) {
       event.preventDefault();
       setPendingVerdict(null);
@@ -1371,7 +1373,11 @@ export default function AgentReviewPage() {
                     <div class="text-xs text-text-faint">Cmd/Ctrl+Enter to save</div>
                   </div>
                 </div>
-                <div class="space-y-3 px-4 py-4">
+                <MessageForm
+                  onSubmit={addAnnotation}
+                  aria-label="Attach note"
+                  class="space-y-3 px-4 py-4"
+                >
                   <blockquote class="m-0 bg-accent/5 px-3 py-2 text-sm text-text">
                     {quote()}
                   </blockquote>
@@ -1382,12 +1388,9 @@ export default function AgentReviewPage() {
                     value={annotationComment()}
                     onInput={(event) => setAnnotationComment(event.currentTarget.value)}
                     onKeyDown={(event) => {
-                      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                      if (event.key === "Escape" && !event.isComposing) {
                         event.preventDefault();
-                        addAnnotation();
-                      }
-                      if (event.key === "Escape") {
-                        event.preventDefault();
+                        event.stopPropagation();
                         clearDraftSelection();
                       }
                     }}
@@ -1401,17 +1404,16 @@ export default function AgentReviewPage() {
                         Cancel
                       </Button>
                       <Button
-                        type="button"
+                        type="submit"
                         variant="primary"
                         size="sm"
                         disabled={annotationComment().trim().length === 0}
-                        onClick={addAnnotation}
                       >
                         Save Note
                       </Button>
                     </div>
                   </div>
-                </div>
+                </MessageForm>
               </div>
             )}
           </Show>
@@ -1504,7 +1506,12 @@ function AnnotationsPanel(props: {
               {(annotation) => {
                 const location = () => annotationLocation(annotation);
                 return (
-                  <div id={annotation.id} class="border border-border bg-bg p-3">
+                  <MessageForm
+                    onSubmit={saveEditing}
+                    id={annotation.id}
+                    aria-label="Edit review note"
+                    class="border border-border bg-bg p-3"
+                  >
                     <div class="flex items-start justify-between gap-2">
                       <div class="min-w-0 flex-1 text-left">
                         <button
@@ -1540,12 +1547,9 @@ function AnnotationsPanel(props: {
                             value={editingComment()}
                             onInput={(event) => setEditingComment(event.currentTarget.value)}
                             onKeyDown={(event) => {
-                              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                              if (event.key === "Escape" && !event.isComposing) {
                                 event.preventDefault();
-                                saveEditing();
-                              }
-                              if (event.key === "Escape") {
-                                event.preventDefault();
+                                event.stopPropagation();
                                 cancelEditing();
                               }
                             }}
@@ -1585,11 +1589,10 @@ function AnnotationsPanel(props: {
                             }
                           >
                             <Button
-                              type="button"
+                              type="submit"
                               variant="primary"
                               size="xs"
                               disabled={editingComment().trim().length === 0}
-                              onClick={saveEditing}
                               title="Save annotation"
                             >
                               Save
@@ -1607,7 +1610,7 @@ function AnnotationsPanel(props: {
                         </div>
                       </Show>
                     </div>
-                  </div>
+                  </MessageForm>
                 );
               }}
             </For>
@@ -1654,7 +1657,13 @@ function SubmitBar(props: {
         )}
       </Match>
       <Match when={true}>
-        <div class="space-y-3 px-4 py-3">
+        <MessageForm
+          class="space-y-3 px-4 py-3"
+          aria-label="Submit review"
+          onSubmit={(event) =>
+            props.onSubmit((event.submitter as HTMLButtonElement)?.value === "approve")
+          }
+        >
           <Show when={props.result.error}>
             <Alert intent="danger" title="Could not load review result">
               {props.result.error?.message}
@@ -1667,6 +1676,7 @@ function SubmitBar(props: {
             onInput={(event) => props.setFeedback(event.currentTarget.value)}
             placeholder="Write your verdict..."
             class="min-h-20"
+            disabled={props.submitting}
           />
 
           <Show when={props.submitError}>
@@ -1677,25 +1687,27 @@ function SubmitBar(props: {
 
           <div class="flex gap-2">
             <Button
-              type="button"
+              type="submit"
+              value="approve"
               variant="success"
               size="sm"
-              disabled={!props.canSubmit}
-              onClick={() => void props.onSubmit(true)}
+              disabled={!props.canSubmit || props.submitting}
             >
               {props.submitting ? "Submitting..." : "Approve"}
             </Button>
             <Button
-              type="button"
+              type="submit"
+              value="request-changes"
+              data-default-submit
+              title="Request changes (Cmd/Ctrl+Enter)"
               variant="danger"
               size="sm"
-              disabled={!props.canSubmit}
-              onClick={() => void props.onSubmit(false)}
+              disabled={!props.canSubmit || props.submitting}
             >
               {props.submitting ? "Submitting..." : "Request Changes"}
             </Button>
           </div>
-        </div>
+        </MessageForm>
       </Match>
     </Switch>
   );

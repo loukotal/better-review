@@ -71,8 +71,7 @@ const visibleSessions = (sessions: StoredSession[], store: PrReviewSessionServic
 
 export function getOrCreateReviewSession(
   input: z.infer<typeof inputSchema>,
-  forceNew = false,
-  reusePreviousRevision = false,
+  options: { forceNew?: boolean; reusePreviousRevision?: boolean; reuseBusy?: boolean } = {},
 ) {
   return Effect.gen(function* () {
     const gh = yield* GhService;
@@ -101,14 +100,17 @@ export function getOrCreateReviewSession(
       sessions.find((item) => item.id === listed.activeSessionId && !item.hidden) ??
       sessions.filter((item) => !item.hidden).sort((a, b) => b.createdAt - a.createdAt)[0];
     const old = active ? yield* store.get(active.id) : null;
-    if (old) {
+    // Explicit create must bypass all reuse; only automatic review launches coalesce
+    // a requested rerun with an already-running/compacting conversation.
+    if (old && (!options.forceNew || options.reuseBusy)) {
       const history = yield* Effect.tryPromise(() => reviewConversations.history(old.id));
-      if (history && conversationIsRunning(history)) return payload(old, sessions, headSha);
+      if (history && (conversationIsRunning(history) || history.compacting))
+        return payload(old, sessions, headSha);
       if (
-        !forceNew &&
+        !options.forceNew &&
         old.reviewMode === scope.mode &&
         old.commitSha === scope.commitSha &&
-        (reusePreviousRevision || (old.headSha === headSha && old.baseSha === baseSha))
+        (options.reusePreviousRevision || (old.headSha === headSha && old.baseSha === baseSha))
       ) {
         yield* context.registerSession(old.id, prUrl);
         yield* context.setSessionScope(old.id, scope);
@@ -194,14 +196,14 @@ export const prReviewRouter = router({
     .input(inputSchema)
     .mutation(({ input }) =>
       sessionLock.run(canonical(input.prUrl), () =>
-        runEffect(getOrCreateReviewSession(input, false, true)),
+        runEffect(getOrCreateReviewSession(input, { reusePreviousRevision: true })),
       ),
     ),
   create: publicProcedure
     .input(inputSchema)
     .mutation(({ input }) =>
       sessionLock.run(canonical(input.prUrl), () =>
-        runEffect(getOrCreateReviewSession(input, true)),
+        runEffect(getOrCreateReviewSession(input, { forceNew: true })),
       ),
     ),
   selectSession: publicProcedure
@@ -395,7 +397,7 @@ export const prReviewRouter = router({
                     repoName: pr.repo,
                     files: [...parseFullDiff(diff).keys()],
                   },
-                  input.rerun,
+                  { forceNew: input.rerun, reuseBusy: true },
                 );
               }),
             );

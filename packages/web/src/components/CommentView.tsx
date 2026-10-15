@@ -1,7 +1,7 @@
 import { type Component, Show, For, createSignal, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
 
-import { Button, Textarea } from "../design-system";
+import { Button, MessageForm, Textarea } from "../design-system";
 import { GitHubIcon } from "../icons/github-icon";
 import { createPendingCommentFormState } from "../lib/comment-save";
 import { parseMarkdown } from "../lib/markdown";
@@ -116,11 +116,9 @@ export const CommentView: Component<CommentViewProps> = (props) => {
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && e.metaKey) {
+    if (e.key === "Escape" && !e.isComposing && !isSubmitting()) {
       e.preventDefault();
-      submitEdit();
-    }
-    if (e.key === "Escape") {
+      e.stopPropagation();
       cancelEditing();
     }
   };
@@ -131,7 +129,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
         when={!isEditing()}
         fallback={
           /* Editing mode */
-          <div>
+          <MessageForm onSubmit={submitEdit} aria-label="Edit comment">
             <div class="flex items-center gap-2 mb-1">
               <img
                 src={props.comment.user.avatar_url}
@@ -151,13 +149,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
               disabled={isSubmitting()}
             />
             <div class="flex gap-2 mt-1.5">
-              <Button
-                type="button"
-                onClick={submitEdit}
-                disabled={isSubmitting()}
-                variant="primary"
-                size="sm"
-              >
+              <Button type="submit" disabled={isSubmitting()} variant="primary" size="sm">
                 {isSubmitting() ? "Saving..." : "Save"}
               </Button>
               <Button
@@ -175,7 +167,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
                 {editError()}
               </div>
             </Show>
-          </div>
+          </MessageForm>
         }
       >
         {/* View mode */}
@@ -302,17 +294,19 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && e.metaKey) {
+    if (e.key === "Escape" && !e.isComposing && !isSubmitting()) {
       e.preventDefault();
-      submit();
-    }
-    if (e.key === "Escape") {
+      e.stopPropagation();
       props.onCancel();
     }
   };
 
   return (
-    <div class="ml-3 pl-3 border-l border-accent mt-2">
+    <MessageForm
+      onSubmit={submit}
+      aria-label="Reply to comment"
+      class="ml-3 pl-3 border-l border-accent mt-2"
+    >
       <Textarea
         aria-label="Comment"
         ref={(el) => setTimeout(() => el.focus(), 0)}
@@ -330,8 +324,7 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
       </Show>
       <div class="flex gap-2 mt-1.5">
         <Button
-          type="button"
-          onClick={submit}
+          type="submit"
           disabled={!body().trim() || isSubmitting()}
           variant="primary"
           size="sm"
@@ -348,7 +341,7 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
           Cancel
         </Button>
       </div>
-    </div>
+    </MessageForm>
   );
 };
 
@@ -506,6 +499,8 @@ export function renderCommentThread(container: HTMLElement, props: CommentThread
 // ============================================================================
 
 export interface PendingCommentFormProps {
+  /** Optional owner-held state survives diff annotation re-renders and finding switches. */
+  state?: ReturnType<typeof createPendingCommentFormState>;
   startLine: number;
   endLine: number;
   initialBody?: string;
@@ -518,7 +513,8 @@ export interface PendingCommentFormProps {
  * Form for adding a new comment on a line selection.
  */
 export const PendingCommentForm: Component<PendingCommentFormProps> = (props) => {
-  const { body, setBody, isSubmitting, saveError, submit } = createPendingCommentFormState(props);
+  const { body, setBody, isSubmitting, saveError, submit } =
+    props.state ?? createPendingCommentFormState(props);
 
   onMount(() => props.onDraftChange?.(body().trim().length > 0));
   onCleanup(() => props.onDraftChange?.(false));
@@ -529,17 +525,15 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
       : `Lines ${props.startLine}-${props.endLine}`;
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && e.metaKey) {
+    if (e.key === "Escape" && !e.isComposing && !isSubmitting()) {
       e.preventDefault();
-      submit();
-    }
-    if (e.key === "Escape") {
+      e.stopPropagation();
       props.onCancel();
     }
   };
 
   return (
-    <div>
+    <MessageForm onSubmit={submit} aria-label="New inline comment">
       <div class="text-sm text-accent mb-2">{lineLabel()}</div>
       <Textarea
         aria-label="Comment"
@@ -562,8 +556,7 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
       </Show>
       <div class="flex gap-2 mt-2">
         <Button
-          type="button"
-          onClick={submit}
+          type="submit"
           disabled={!body().trim() || isSubmitting()}
           variant="primary"
           size="sm"
@@ -580,7 +573,7 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
           Cancel
         </Button>
       </div>
-    </div>
+    </MessageForm>
   );
 };
 

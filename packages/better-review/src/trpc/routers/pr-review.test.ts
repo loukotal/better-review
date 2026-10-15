@@ -76,7 +76,7 @@ test("selecting history keeps the saved revision; historical source references a
   assert.equal(calls.length, 1);
 });
 
-test("automatic reviews coalesce concurrent launches, retain completed results, and explicitly rerun into a new session", async (t) => {
+test("automatic reviews coalesce busy launches while explicit creation always makes a fresh conversation", async (t) => {
   const sessions = new Map<string, PrReviewSession>();
   const histories = new Map<string, ReviewSnapshot>();
   let active: string | null = null;
@@ -167,6 +167,36 @@ test("automatic reviews coalesce concurrent launches, retain completed results, 
   ]);
   assert.deepEqual(first, duplicate);
   assert.equal(admissions, 1);
+  // Exercise the actual explicit-create route, not a fake createSession callback.
+  const createInput = {
+    prUrl: fixtureSession.prUrl,
+    prNumber: fixtureSession.number,
+    repoOwner: fixtureSession.owner,
+    repoName: fixtureSession.repo,
+    files: fixtureSession.files,
+  };
+  for (const compacting of [false, true]) {
+    active = first.sessionId!;
+    const busy = histories.get(active)!;
+    busy.running = !compacting;
+    busy.compacting = compacting;
+    const fresh = await caller.create(createInput);
+    assert.notEqual(
+      fresh.session.id,
+      first.sessionId,
+      "explicit new must not reuse a busy conversation",
+    );
+    assert.equal(fresh.existing, false);
+    assert.equal(
+      histories.has(fresh.session.id),
+      false,
+      "creating must not send a full-review prompt",
+    );
+    assert.equal(admissions, 1);
+  }
+  active = first.sessionId!;
+  histories.get(active)!.running = true;
+  histories.get(active)!.compacting = false;
   assert.equal(
     (await caller.startAutomatic({ prUrl: fixtureSession.prUrl, rerun: true })).sessionId,
     first.sessionId,

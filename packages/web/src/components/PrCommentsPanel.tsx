@@ -1,6 +1,6 @@
 import { type Component, For, Show, createSignal, createMemo } from "solid-js";
 
-import { Button, Textarea } from "../design-system";
+import { Button, MessageForm, Textarea } from "../design-system";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CommentIcon } from "../icons/comment-icon";
 import type { IssueComment } from "../lib/query";
@@ -195,11 +195,9 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && e.metaKey) {
+    if (e.key === "Escape" && !e.isComposing && !isSubmitting()) {
       e.preventDefault();
-      handleSubmitComment();
-    }
-    if (e.key === "Escape") {
+      e.stopPropagation();
       cancelReply();
     }
   };
@@ -213,7 +211,11 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
 
   const renderReplyForm = () => (
     <div class="mt-2 ml-3 pl-3 border-l border-border">
-      <div class="bg-bg-surface border border-accent p-2 space-y-2">
+      <MessageForm
+        onSubmit={handleSubmitComment}
+        aria-label="Conversation reply"
+        class="bg-bg-surface border border-accent p-2 space-y-2"
+      >
         <div class="text-xs text-accent">Replying to @{replyingToUsername()}</div>
         <Textarea
           value={newCommentBody()}
@@ -236,8 +238,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
             Cancel
           </Button>
           <Button
-            type="button"
-            onClick={handleSubmitComment}
+            type="submit"
             disabled={!newCommentBody().trim() || isSubmitting()}
             variant="primary"
             size="sm"
@@ -245,7 +246,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
             {isSubmitting() ? "Posting..." : "Reply"}
           </Button>
         </div>
-      </div>
+      </MessageForm>
     </div>
   );
 
@@ -342,7 +343,11 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                   </Button>
                 }
               >
-                <div class="bg-bg-elevated border border-border p-3 space-y-2">
+                <MessageForm
+                  onSubmit={handleSubmitComment}
+                  aria-label="New conversation comment"
+                  class="bg-bg-elevated border border-border p-3 space-y-2"
+                >
                   <Textarea
                     value={newCommentBody()}
                     onInput={(e) => setNewCommentBody(e.currentTarget.value)}
@@ -366,8 +371,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                         Cancel
                       </Button>
                       <Button
-                        type="button"
-                        onClick={handleSubmitComment}
+                        type="submit"
                         disabled={!newCommentBody().trim() || isSubmitting()}
                         variant="primary"
                         size="sm"
@@ -376,7 +380,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                       </Button>
                     </div>
                   </div>
-                </div>
+                </MessageForm>
               </Show>
             </Show>
           </div>

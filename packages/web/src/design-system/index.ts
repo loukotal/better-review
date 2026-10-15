@@ -14,3 +14,4 @@ export { Card } from "./Card";
 export { Select } from "./Select";
 export { Textarea } from "./Textarea";
 export { TextInput } from "./TextInput";
+export { MessageForm } from "./MessageForm";

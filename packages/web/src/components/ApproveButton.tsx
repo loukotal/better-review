@@ -1,7 +1,7 @@
 import { createEffect, createSignal, on, Show } from "solid-js";
 
 import { usePrContext } from "../context/PrContext";
-import { Alert, Button, Field, Popover, Textarea } from "../design-system";
+import { Alert, Button, Field, MessageForm, Popover, Textarea } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
 import { SpinnerIcon } from "../icons/spinner-icon";
 import { submitPrReview } from "../lib/pr-review-action";
@@ -61,7 +61,7 @@ export function ApproveButton() {
       disabled={!prUrl() || approved() || submitting()}
     >
       {(close) => (
-        <div class="space-y-3">
+        <MessageForm class="space-y-3" onSubmit={handleApprove} aria-label="Approve PR">
           <Field label="Approval comment (optional)">
             {(id) => (
               <Textarea
@@ -69,12 +69,6 @@ export function ApproveButton() {
                 value={comment()}
                 disabled={submitting()}
                 onInput={(e) => setComment(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                    e.preventDefault();
-                    void handleApprove();
-                  }
-                }}
                 placeholder="Leave a comment…"
                 class="min-h-20"
               />
@@ -91,20 +85,14 @@ export function ApproveButton() {
             <Button type="button" variant="ghost" size="sm" onClick={close}>
               Cancel
             </Button>
-            <Button
-              type="button"
-              variant="success"
-              size="sm"
-              onClick={() => void handleApprove()}
-              disabled={submitting()}
-            >
+            <Button type="submit" variant="success" size="sm" disabled={submitting()}>
               <Show when={submitting()}>
                 <SpinnerIcon size={12} class="animate-spin" />
               </Show>
               {submitting() ? "Approving…" : "Approve PR"}
             </Button>
           </div>
-        </div>
+        </MessageForm>
       )}
     </Popover>
   );

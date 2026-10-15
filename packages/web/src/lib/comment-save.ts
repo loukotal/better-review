@@ -7,7 +7,7 @@ import type { trpc } from "./trpc";
 type AddComment = typeof trpc.pr.addComment.mutate;
 
 export async function savePrComment(
-  { filePath, line, side, body, startLine, endLine }: DiffCommentDraft,
+  { filePath, line, side, body, startLine, endLine, expectedHeadSha }: DiffCommentDraft,
   options: {
     loadedPrUrl: () => string | null;
     mutate: (input: Parameters<AddComment>[0]) => ReturnType<AddComment>;
@@ -22,6 +22,7 @@ export async function savePrComment(
     line: endLine ?? line,
     side,
     body,
+    ...(expectedHeadSha ? { expectedHeadSha } : {}),
     ...(startLine !== undefined && startLine !== (endLine ?? line)
       ? { startLine, startSide: side }
       : {}),

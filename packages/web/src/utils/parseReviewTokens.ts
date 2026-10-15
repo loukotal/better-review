@@ -15,6 +15,8 @@ export interface Annotation {
   line: number;
   severity: AnnotationSeverity;
   message: string;
+  /** Trusted transcript metadata, never inferred from the currently displayed diff. */
+  origin?: { sessionId: string; revision?: string };
 }
 
 export type MessageSegment =
