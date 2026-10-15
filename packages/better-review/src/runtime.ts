@@ -5,9 +5,9 @@
 import { Layer, ManagedRuntime } from "effect";
 
 import { ReviewSessionServiceLive } from "./agent-sessions";
-import { FlueReviewSessionServiceLive } from "./flue-review-sessions";
 import { GhServiceLive } from "./gh/gh";
 import { PrCheckoutServiceLive } from "./pr-checkout";
+import { PrReviewSessionServiceLive } from "./pr-review-sessions";
 import { DiffCacheServiceLive, PrContextServiceLive, PrListCacheServiceLive } from "./state";
 
 export const appLayers = Layer.mergeAll(
@@ -16,7 +16,7 @@ export const appLayers = Layer.mergeAll(
   PrContextServiceLive,
   PrListCacheServiceLive,
   ReviewSessionServiceLive,
-  FlueReviewSessionServiceLive,
+  PrReviewSessionServiceLive,
   PrCheckoutServiceLive,
 ) as Layer.Layer<unknown, unknown, never>;
 

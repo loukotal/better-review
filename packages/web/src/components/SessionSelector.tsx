@@ -9,9 +9,7 @@ interface SessionSelectorProps {
   activeSessionId: string | null;
   currentHeadSha?: string;
   disabled?: boolean;
-  creatingNewSession?: boolean;
   onSelect: (sessionId: string) => void;
-  onNewSession: () => void;
   onHide?: (sessionId: string) => void;
 }
 
@@ -40,11 +38,6 @@ export function SessionSelector(props: SessionSelectorProps) {
     if (sessionId !== props.activeSessionId) {
       props.onSelect(sessionId);
     }
-  };
-
-  const handleNewSession = () => {
-    if (props.disabled || props.creatingNewSession) return;
-    props.onNewSession();
   };
 
   const handleHide = (e: MouseEvent, sessionId: string) => {
@@ -94,15 +87,6 @@ export function SessionSelector(props: SessionSelectorProps) {
           </div>
         )}
       </Popover>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={handleNewSession}
-        disabled={props.disabled || props.creatingNewSession}
-      >
-        {props.creatingNewSession ? "Creating session…" : "+ New session"}
-      </Button>
     </div>
   );
 }

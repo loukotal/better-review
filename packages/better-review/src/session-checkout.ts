@@ -1,15 +1,15 @@
 import { Effect } from "effect";
 
 import {
-  FlueReviewSessionService,
-  isFlueV2ReviewSession,
-  type FlueReviewSession,
-} from "./flue-review-sessions";
-import {
   isPreparedCheckoutUsable,
   PrCheckoutService,
   type PreparePrCheckoutInput,
 } from "./pr-checkout";
+import {
+  PrReviewSessionService,
+  isPrReviewSession,
+  type PrReviewSession,
+} from "./pr-review-sessions";
 import { getErrorMessage } from "./response";
 import { runtime } from "./runtime";
 
@@ -30,7 +30,7 @@ export type SessionCheckoutStatus =
   | { state: "ready" }
   | { state: "failed"; error: string };
 
-function checkoutInput(session: FlueReviewSession): PreparePrCheckoutInput {
+function checkoutInput(session: PrReviewSession): PreparePrCheckoutInput {
   return {
     owner: session.owner,
     repo: session.repo,
@@ -48,7 +48,7 @@ function checkoutInput(session: FlueReviewSession): PreparePrCheckoutInput {
 
 function readSession(sessionId: string) {
   return runtime.runPromise(
-    Effect.flatMap(FlueReviewSessionService, (store) => store.get(sessionId)),
+    Effect.flatMap(PrReviewSessionService, (store) => store.get(sessionId)),
   );
 }
 
@@ -60,10 +60,10 @@ export function prepareSessionCheckout(sessionId: string): Promise<void> {
   const task = runtime
     .runPromise(
       Effect.gen(function* () {
-        const store = yield* FlueReviewSessionService;
+        const store = yield* PrReviewSessionService;
         const checkout = yield* PrCheckoutService;
         const session = yield* store.get(sessionId);
-        if (!isFlueV2ReviewSession(session)) {
+        if (!isPrReviewSession(session)) {
           return yield* Effect.fail(new Error(`Review session not found: ${sessionId}`));
         }
 
@@ -104,7 +104,7 @@ export function prepareSessionCheckoutInBackground(sessionId: string): void {
  * A checkout that was ready can stop working, for example when worktree cleanup removed it.
  * Treat it as ready only when it still serves the canonical diff.
  */
-async function isSessionCheckoutReady(session: FlueReviewSession): Promise<boolean> {
+async function isSessionCheckoutReady(session: PrReviewSession): Promise<boolean> {
   return Boolean(session.repoAccess) && (await isPreparedCheckoutUsable(checkoutInput(session)));
 }
 
@@ -112,7 +112,7 @@ export async function getSessionCheckoutStatus(sessionId: string): Promise<Sessi
   if (pendingCheckouts.has(sessionId)) return { state: "preparing" };
 
   const session = await readSession(sessionId);
-  if (!isFlueV2ReviewSession(session)) return { state: "failed", error: "Session not found" };
+  if (!isPrReviewSession(session)) return { state: "failed", error: "Session not found" };
   if (await isSessionCheckoutReady(session)) return { state: "ready" };
 
   const error = checkoutErrors.get(sessionId);
@@ -128,7 +128,7 @@ export async function ensureSessionCheckout(sessionId: string): Promise<void> {
   if (pending) await pending;
 
   const session = await readSession(sessionId);
-  if (!isFlueV2ReviewSession(session)) return;
+  if (!isPrReviewSession(session)) return;
   if (!(await isSessionCheckoutReady(session))) {
     await prepareSessionCheckout(sessionId);
   }

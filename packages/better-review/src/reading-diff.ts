@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
-import { getFlueProviders } from "./flue/oauth-auth";
+import { getReviewProviders } from "./review/providers";
 import { STORE_BASE_DIR } from "./store";
 
 const READING_DIFF_PROTOCOL_VERSION = "better-review-reading-diff-v5";
@@ -193,7 +193,7 @@ const baseSystemPrompt = [
 
 function createReadingModels() {
   const models = builtinModels();
-  for (const provider of getFlueProviders()) {
+  for (const provider of getReviewProviders()) {
     models.setProvider(provider);
   }
   return models;

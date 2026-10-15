@@ -2,24 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
-import {
-  createBashTool,
-  createGlobTool,
-  createGrepTool,
-  createReadTool,
-  sandboxFromDriver,
-  type FileStat,
-  type Sandbox as FlueSandbox,
-  type SandboxDriver,
-  type SandboxFactory,
-} from "@flue/runtime";
 import { isRuntimeInstalled, Sandbox as MicroVm, type SandboxHandle } from "microsandbox";
 
-import type { FlueReviewSession } from "../flue-review-sessions";
-import { readFlueReviewSession } from "../flue-review-sessions";
 import { STORE_BASE_DIR } from "../store";
+import { BoundedOutput } from "./bounded-output";
+import { measure, startMeasurement } from "./metrics";
+import { ResourcePool } from "./resource-pool";
 
-const OWNER_LABEL = "better-review.flue-v2";
+const OWNER_LABEL = "better-review.pi-durable";
 const WORKTREE_LABEL = "better-review.worktree";
 // Immutable multi-platform index for alpine/git:v2.49.1.
 const DEFAULT_IMAGE =
@@ -28,9 +18,31 @@ const DEFAULT_CPU_COUNT = 2;
 const DEFAULT_MEMORY_MIB = 1_024;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_VM_MAX_DURATION_SECONDS = 6 * 60 * 60;
-const DEFAULT_VM_IDLE_TIMEOUT_SECONDS = 60 * 60;
+const DEFAULT_VM_IDLE_TIMEOUT_SECONDS = 5 * 60;
 
-interface SubmissionSandbox extends FlueSandbox {
+interface FileStat {
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+  size: number;
+  mtime?: unknown;
+}
+
+export interface SubmissionSandbox {
+  cwd: string;
+  exec(
+    command: string,
+    options?: { cwd?: string; timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  readFile(path: string): Promise<string>;
+  readLines(path: string, offset: number, limit: number, signal?: AbortSignal): Promise<string>;
+  readFileBuffer(path: string): Promise<Uint8Array>;
+  writeFile(path: string, content: string | Uint8Array): Promise<void>;
+  stat(path: string): Promise<FileStat>;
+  readdir(path: string): Promise<string[]>;
+  exists(path: string): Promise<boolean>;
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
   beginSubmission(): Promise<void>;
   endSubmission(): Promise<void>;
 }
@@ -52,8 +64,22 @@ interface PoolEntry {
   resuming?: Promise<void>;
 }
 
-const entries = new Map<string, PoolEntry>();
-const creating = new Map<string, Promise<PoolEntry>>();
+let pool: ResourcePool<PoolEntry> | undefined;
+function sandboxPool() {
+  return (pool ??= new ResourcePool(
+    Number(process.env.BETTER_REVIEW_MICROSANDBOX_POOL_SIZE ?? 4),
+    Number(
+      process.env.BETTER_REVIEW_MICROSANDBOX_IDLE_TIMEOUT_SECONDS ??
+        DEFAULT_VM_IDLE_TIMEOUT_SECONDS,
+    ) * 1000,
+    async (entry) => {
+      await removeHandle(await MicroVm.get(entry.vm.name));
+      measure("sandbox.evictions", 1);
+    },
+  ));
+}
+
+const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 function assertMicrosandboxInstalled(): void {
   if (!isRuntimeInstalled()) {
@@ -78,7 +104,7 @@ export function microsandboxIdentity(identity: WorktreeIdentity): string {
 }
 
 export function microsandboxName(identity: WorktreeIdentity): string {
-  return `better-review-v2-${hash(microsandboxIdentity(identity)).slice(0, 32)}`;
+  return `better-review-pi-${hash(microsandboxIdentity(identity)).slice(0, 32)}`;
 }
 
 function worktreeLabel(worktreePath: string): string {
@@ -120,7 +146,7 @@ async function linkedGitRoot(worktreePath: string): Promise<string> {
   return root;
 }
 
-async function createPoolEntry(session: FlueReviewSession): Promise<PoolEntry> {
+async function createPoolEntry(session: WorktreeIdentity, owner = "1"): Promise<PoolEntry> {
   assertMicrosandboxInstalled();
   const identity: WorktreeIdentity = {
     owner: session.owner,
@@ -129,14 +155,9 @@ async function createPoolEntry(session: FlueReviewSession): Promise<PoolEntry> {
     headSha: session.headSha,
     worktreePath: await realpath(session.worktreePath),
   };
-  const name = microsandboxName(identity);
-  const existing = entries.get(name);
-  if (existing) return existing;
-
-  const pending = creating.get(name);
-  if (pending) return pending;
-
-  const creation = (async () => {
+  const name = microsandboxName(identity) + (owner === "1" ? "" : `-${hash(owner).slice(0, 8)}`);
+  const done = startMeasurement("sandbox.create");
+  try {
     const gitRoot = await linkedGitRoot(identity.worktreePath);
     const image = process.env.BETTER_REVIEW_MICROSANDBOX_IMAGE ?? DEFAULT_IMAGE;
     const vm = await MicroVm.builder(name)
@@ -161,7 +182,7 @@ async function createPoolEntry(session: FlueReviewSession): Promise<PoolEntry> {
       .detached(true)
       .workdir(identity.worktreePath)
       .labels({
-        [OWNER_LABEL]: "1",
+        [OWNER_LABEL]: owner,
         [WORKTREE_LABEL]: worktreeLabel(identity.worktreePath),
       })
       .volume(identity.worktreePath, (mount) =>
@@ -178,15 +199,9 @@ async function createPoolEntry(session: FlueReviewSession): Promise<PoolEntry> {
       conversationUids: new Map<string, number>(),
       nextUid: 10_000,
     };
-    entries.set(name, entry);
     return entry;
-  })();
-
-  creating.set(name, creation);
-  try {
-    return await creation;
   } finally {
-    creating.delete(name);
+    done();
   }
 }
 
@@ -259,71 +274,55 @@ export function createSubmissionSandbox(
     activeExecutions.clear();
   };
 
-  const killProcessGroups = async () => {
-    const pidDirectory = `${baseScratch}/pids`;
-    if (!(await fs.exists(pidDirectory))) return;
-    const pidFiles = await fs.list(pidDirectory);
-    await Promise.allSettled(
-      pidFiles.map(async (entry) => {
-        const pidPath = path.posix.isAbsolute(entry.path)
-          ? entry.path
-          : path.posix.join(pidDirectory, entry.path);
-        const pid = (await fs.readToString(pidPath)).trim();
-        if (!/^\d+$/.test(pid)) return;
-        await vm.exec("kill", ["-KILL", "--", `-${pid}`]);
-      }),
-    );
-  };
-
-  const resetScratch = () => {
+  const resetScratch = (initialize: boolean) => {
     lifecycle = lifecycle
       .catch(() => undefined)
       .then(async () => {
         await killExecutions();
-        await killProcessGroups();
-        if (await fs.exists(baseScratch)) {
-          const output = await vm.exec("rm", ["-rf", "--", baseScratch]);
-          if (output.code !== 0) throw new Error(output.stderr());
-        }
         scratch = microsandboxSubmissionScratch(conversationId, randomUUID());
-        const output = await vm.exec("mkdir", ["-p", "--", scratch]);
-        if (output.code !== 0) throw new Error(output.stderr());
-        const gitConfig = `${baseScratch}/gitconfig`;
-        const configureGit = await vm.exec("git", [
-          "config",
-          "--file",
-          gitConfig,
-          "--add",
-          "safe.directory",
-          identity.worktreePath,
-        ]);
-        if (configureGit.code !== 0) throw new Error(configureGit.stderr());
-        const ownership = await vm.exec("chown", ["-R", `${uid}:${uid}`, baseScratch]);
-        if (ownership.code !== 0) throw new Error(ownership.stderr());
-        const permissions = await vm.exec("chmod", ["700", baseScratch, scratch]);
-        if (permissions.code !== 0) throw new Error(permissions.stderr());
+        const done = startMeasurement(initialize ? "sandbox.setup" : "sandbox.cleanup");
+        try {
+          const output = await vm.exec("/bin/sh", [
+            "-ec",
+            [
+              `for f in ${quote(baseScratch)}/pids/*; do [ -f "$f" ] || continue; pid=$(cat "$f"); case "$pid" in ''|*[!0-9]*) continue;; esac; kill -KILL -- "-$pid" 2>/dev/null || :; done`,
+              `rm -rf -- ${quote(baseScratch)}`,
+              ...(initialize
+                ? [
+                    `mkdir -p -- ${quote(scratch)} ${quote(`${baseScratch}/pids`)}`,
+                    `git config --file ${quote(`${baseScratch}/gitconfig`)} --add safe.directory ${quote(identity.worktreePath)}`,
+                    `chown -R ${uid}:${uid} ${quote(baseScratch)}`,
+                    `chmod 700 ${quote(baseScratch)} ${quote(scratch)}`,
+                  ]
+                : []),
+            ].join("\n"),
+          ]);
+          if (output.code !== 0) throw new Error(output.stderr());
+        } finally {
+          done();
+        }
       });
     return lifecycle;
   };
 
-  const driver: SandboxDriver = {
+  const driver: Omit<SubmissionSandbox, "cwd" | "beginSubmission" | "endSubmission"> = {
     async exec(command, options = {}) {
+      options.signal?.throwIfAborted();
       const timeoutMs = Math.min(
         options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
         DEFAULT_COMMAND_TIMEOUT_MS,
       );
       const cwd = assertReadable(options.cwd ?? identity.worktreePath);
-      await fs.mkdir(scratch).catch(() => undefined);
       const pidDirectory = `${baseScratch}/pids`;
-      const mkdirOutput = await vm.exec("mkdir", ["-p", "--", pidDirectory]);
-      if (mkdirOutput.code !== 0) throw new Error(mkdirOutput.stderr());
       const pidFile = `${pidDirectory}/${randomUUID()}`;
-      const execution = await vm.execStreamWith("setsid", (builder) =>
+      const done = startMeasurement("sandbox.exec");
+      // BusyBox setsid lacks --wait and forks when it is the process-group leader.
+      // Launch it as a child of a waiting shell so it can exec and preserve exit status.
+      const execution = await vm.execStreamWith("/bin/sh", (builder) =>
         builder
           .args([
-            "/bin/sh",
             "-c",
-            'echo "$$" > "$1"; exec /bin/sh -lc "$2"',
+            'setsid /bin/sh -c \'echo "$$" > "$1"; exec /bin/sh -lc "$2"\' better-review "$1" "$2" & wait "$!"',
             "better-review",
             pidFile,
             command,
@@ -340,18 +339,62 @@ export function createSubmissionSandbox(
       );
       activeExecutions.add(execution);
 
-      const abort = () => void execution.kill().catch(() => undefined);
-      options.signal?.addEventListener("abort", abort, { once: true });
+      const terminate = async () => {
+        try {
+          const pid = (await fs.readToString(pidFile)).trim();
+          if (/^\d+$/.test(pid)) await vm.exec("kill", ["-KILL", "--", `-${pid}`]);
+        } finally {
+          await execution.kill().catch(() => undefined);
+        }
+      };
+      const abort = () => void terminate().catch(() => undefined);
+      const timeout = setTimeout(abort, timeoutMs);
+      if (options.signal?.aborted) abort();
+      else options.signal?.addEventListener("abort", abort, { once: true });
       try {
-        const output = await execution.collect();
+        const stdout = new BoundedOutput();
+        const stderr = new BoundedOutput();
+        let code: number | undefined;
+        for (let event = await execution.recv(); event; event = await execution.recv()) {
+          if (event.kind === "stdout") stdout.append(event.data);
+          if (event.kind === "stderr") stderr.append(event.data);
+          if (event.kind === "exited") code = event.code;
+        }
+        code ??= (await execution.wait()).code;
+        measure("sandbox.output.bytes", stdout.totalBytes + stderr.totalBytes);
         return {
-          stdout: output.stdout(),
-          stderr: output.stderr(),
-          exitCode: output.code,
+          stdout: stdout.text(),
+          stderr: stderr.text(),
+          exitCode: code,
         };
       } finally {
+        clearTimeout(timeout);
         options.signal?.removeEventListener("abort", abort);
         activeExecutions.delete(execution);
+        done();
+      }
+    },
+    async readLines(value, offset, limit, signal) {
+      if (
+        !Number.isSafeInteger(offset) ||
+        offset < 1 ||
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > 2000
+      )
+        throw new Error("Invalid file line range");
+      const file = assertReadable(value);
+      const done = startMeasurement("sandbox.read");
+      try {
+        // Slice inside the guest. Neither the complete file nor unlimited lines cross the VM boundary.
+        const result = await driver.exec(
+          `awk -v start=${offset} -v count=${limit} 'BEGIN { budget=20000 } NR >= start { text=NR ": " $0; size=length(text)+1; if(size > budget) { print substr(text,1,budget); print "[Read output truncated; request a narrower range]"; exit } print text; budget-=size; if (++n >= count) exit }' ${quote(file)}`,
+          { signal },
+        );
+        if (result.exitCode !== 0) throw new Error(result.stderr || "Could not read file");
+        return result.stdout;
+      } finally {
+        done();
       }
     },
     readFile: (value) => fs.readToString(assertReadable(value)),
@@ -386,39 +429,59 @@ export function createSubmissionSandbox(
     },
   };
 
-  const sandbox = sandboxFromDriver(driver, identity.worktreePath) as SubmissionSandbox;
-  sandbox.beginSubmission = async () => {
-    await ensurePoolEntryRunning(entry);
-    vm = entry.vm;
-    fs = vm.fs();
-    await resetScratch();
+  const sandbox: SubmissionSandbox = {
+    ...driver,
+    cwd: identity.worktreePath,
+    beginSubmission: async () => {
+      await ensurePoolEntryRunning(entry);
+      vm = entry.vm;
+      fs = vm.fs();
+      await resetScratch(true);
+    },
+    endSubmission: () => resetScratch(false),
   };
-  sandbox.endSubmission = resetScratch;
   return sandbox;
 }
 
-export const microsandboxFactory: SandboxFactory = {
-  async createSandbox({ id }) {
-    const session = await readFlueReviewSession(id);
-    if (!session || session.runtimeVersion !== 2) {
-      throw new Error(`Flue 2 review session not found: ${id}`);
-    }
-    return createSubmissionSandbox(await createPoolEntry(session), id);
-  },
-  tools: (sandbox) => [
-    createReadTool(sandbox),
-    createBashTool(sandbox),
-    createGrepTool(sandbox),
-    createGlobTool(sandbox),
-  ],
-};
-
-export async function beginMicrosandboxSubmission(sandbox: FlueSandbox): Promise<void> {
-  await (sandbox as SubmissionSandbox).beginSubmission();
-}
-
-export async function endMicrosandboxSubmission(sandbox: FlueSandbox): Promise<void> {
-  await (sandbox as SubmissionSandbox).endSubmission();
+/** Reuse the checkout sandbox with a separate runtime's conversation and lifecycle. */
+export async function createReviewMicrosandbox(
+  identity: WorktreeIdentity,
+  conversationId: string,
+  owner = "1",
+): Promise<SubmissionSandbox> {
+  const canonical = { ...identity, worktreePath: await realpath(identity.worktreePath) };
+  const key = microsandboxName(canonical) + (owner === "1" ? "" : `-${hash(owner).slice(0, 8)}`);
+  const done = startMeasurement("sandbox.acquire");
+  let cold = false;
+  const started = performance.now();
+  const lease = await sandboxPool().acquire(key, () => {
+    cold = true;
+    return createPoolEntry(canonical, owner);
+  });
+  measure(
+    cold ? "sandbox.cold.acquire.ms" : "sandbox.warm.acquire.ms",
+    performance.now() - started,
+  );
+  done();
+  const sandbox = createSubmissionSandbox(lease.value, conversationId);
+  return {
+    ...sandbox,
+    async beginSubmission() {
+      try {
+        await sandbox.beginSubmission();
+      } catch (error) {
+        await lease.release();
+        throw error;
+      }
+    },
+    async endSubmission() {
+      try {
+        await sandbox.endSubmission();
+      } finally {
+        await lease.release();
+      }
+    },
+  };
 }
 
 async function removeHandle(handle: SandboxHandle) {
@@ -439,23 +502,27 @@ async function removeMatchingMicrosandboxes(labels: Record<string, string>): Pro
   } while (cursor);
 
   // Finish pagination before deleting records so cleanup cannot skip a page.
-  await Promise.all(handles.map(removeHandle));
+  await Promise.all(
+    handles.map(async (handle) => {
+      const result = pool ? await pool.evict(handle.name) : "missing";
+      if (result === "missing") await removeHandle(handle);
+    }),
+  );
 }
 
-export async function cleanupOrphanedMicrosandboxes(): Promise<void> {
+export async function cleanupOrphanedMicrosandboxes(owner = "1"): Promise<void> {
   assertMicrosandboxInstalled();
-  await removeMatchingMicrosandboxes({ [OWNER_LABEL]: "1" });
-  entries.clear();
-  creating.clear();
+  if (pool) {
+    await pool.close();
+    pool = undefined;
+  }
+  await removeMatchingMicrosandboxes({ [OWNER_LABEL]: owner });
 }
 
 export async function removeMicrosandboxForWorktree(worktreePath: string): Promise<void> {
   const canonicalPath = await realpath(worktreePath).catch(() => path.resolve(worktreePath));
   const label = worktreeLabel(canonicalPath);
   await removeMatchingMicrosandboxes({ [OWNER_LABEL]: "1", [WORKTREE_LABEL]: label });
-  for (const [name, entry] of entries) {
-    if (worktreeLabel(entry.identity.worktreePath) === label) entries.delete(name);
-  }
 }
 
 export async function shutdownMicrosandboxes(): Promise<void> {

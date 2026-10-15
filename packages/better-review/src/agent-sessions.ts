@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer, Semaphore } from "effect";
 
 import type {
   ReviewSession,
@@ -26,7 +26,7 @@ function deriveStatusFromResult(result: ReviewSessionResult): ReviewSessionStatu
 export const makeReviewSessionService = Effect.gen(function* () {
   const store = yield* StoreService;
   // Serialize verdicts, expiry, and presence updates so cancellation cannot overwrite a verdict.
-  const lock = yield* Effect.makeSemaphore(1);
+  const lock = yield* Semaphore.make(1);
 
   const saveResult = (session: ReviewSession, result: ReviewSessionResult) =>
     Effect.gen(function* () {
@@ -156,13 +156,12 @@ export const makeReviewSessionService = Effect.gen(function* () {
   };
 });
 
-export class ReviewSessionService extends Effect.Service<ReviewSessionService>()(
-  "ReviewSessionService",
-  {
-    effect: makeReviewSessionService,
-  },
-) {}
-
-export const ReviewSessionServiceLive = ReviewSessionService.Default.pipe(
-  Layer.provide(StoreServiceLive),
+export type ReviewSessionService = Effect.Success<typeof makeReviewSessionService>;
+export const ReviewSessionService = Context.Service<ReviewSessionService>(
+  "better-review/ReviewSessionService",
 );
+
+export const ReviewSessionServiceLive = Layer.effect(
+  ReviewSessionService,
+  makeReviewSessionService,
+).pipe(Layer.provide(StoreServiceLive));

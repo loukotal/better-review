@@ -9,7 +9,7 @@ import { StoreService } from "./store";
 test("closing the last review tab settles the waiting agent without approving", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1000 });
   const data = new Map<string, unknown>();
-  const store = new StoreService({
+  const store = StoreService.of({
     get: <T>(ns: string, key: string) =>
       Effect.succeed((data.get(`${ns}/${key}`) as T | undefined) ?? null),
     set: (ns, key, value) =>

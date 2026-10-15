@@ -13,12 +13,12 @@ function createTestApp() {
   );
   const app = new Hono();
   app.use("*", corsMiddleware);
-  app.route("/flue", child);
+  app.route("/review", child);
   return app;
 }
 
-test("adds CORS headers to mounted Flue-style routes", async () => {
-  const response = await createTestApp().request("http://api/flue/agents/pr-reviewer/session", {
+test("adds CORS headers to mounted review routes", async () => {
+  const response = await createTestApp().request("http://api/review/agents/pr-reviewer/session", {
     headers: { Origin: allowedOrigin },
   });
 
@@ -30,7 +30,7 @@ test("adds CORS headers to mounted Flue-style routes", async () => {
 });
 
 test("answers allowed preflight requests before mounted routes", async () => {
-  const response = await createTestApp().request("http://api/flue/agents/pr-reviewer/session", {
+  const response = await createTestApp().request("http://api/review/agents/pr-reviewer/session", {
     method: "OPTIONS",
     headers: { Origin: allowedOrigin },
   });
@@ -40,7 +40,7 @@ test("answers allowed preflight requests before mounted routes", async () => {
 });
 
 test("does not allow unknown origins", async () => {
-  const response = await createTestApp().request("http://api/flue/agents/pr-reviewer/session", {
+  const response = await createTestApp().request("http://api/review/agents/pr-reviewer/session", {
     headers: { Origin: "https://example.com" },
   });
 

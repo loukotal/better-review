@@ -7,7 +7,7 @@ import {
 import { findEnvKeys } from "@earendil-works/pi-ai/compat";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
-import { hasPiOAuthProvider } from "./flue/oauth-auth";
+import { hasPiOAuthProvider } from "./review/providers";
 
 export interface ModelEntry {
   providerId: string;
@@ -34,9 +34,9 @@ export type SelectedModel = ModelEntry & {
   thinkingLevel: ReasoningEffort;
 };
 
-const FALLBACK_FLUE_MODEL = "anthropic/claude-sonnet-4-6";
+const FALLBACK_REVIEW_MODEL = "anthropic/claude-sonnet-4-6";
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium";
-const configuredDefaultModel = process.env.BETTER_REVIEW_FLUE_MODEL?.trim();
+const configuredDefaultModel = process.env.BETTER_REVIEW_MODEL?.trim();
 
 const providerAliases = new Map<string, string>([
   ["vercel", "vercel-ai-gateway"],
@@ -60,7 +60,7 @@ function normalizeProviderId(providerId: string): string {
   return providerAliases.get(providerId) ?? providerId;
 }
 
-function parseFlueModel(model: string): ModelSelection | null {
+function parseReviewModel(model: string): ModelSelection | null {
   const slash = model.indexOf("/");
   if (slash === -1) return null;
 
@@ -94,7 +94,7 @@ export function getModelEntry(providerId: string, modelId: string): ModelEntry |
 }
 
 function resolveVariant(_model: ModelEntry, input: { variant?: string | null }): string | null {
-  // Flue/pi-ai model IDs are selected directly; there is no OpenCode-style variant channel.
+  // Pi model IDs are selected directly; thinking level is configured separately.
   return typeof input.variant === "string" && input.variant.length > 0 ? input.variant : null;
 }
 
@@ -128,7 +128,7 @@ function toSelectedModel(
 }
 
 function resolveDefaultModel(): SelectedModel {
-  const configured = configuredDefaultModel ? parseFlueModel(configuredDefaultModel) : null;
+  const configured = configuredDefaultModel ? parseReviewModel(configuredDefaultModel) : null;
 
   if (configured) {
     const model = getModelEntry(configured.providerId, configured.modelId);
@@ -136,14 +136,14 @@ function resolveDefaultModel(): SelectedModel {
   }
 
   // Local dev usually has Pi's ChatGPT/Codex OAuth but no Anthropic token. Prefer
-  // the UI-visible OpenAI model; getCurrentFlueModel() will route it to
+  // the UI-visible OpenAI model; getCurrentReviewModel() will route it to
   // openai-codex when needed.
   if (hasPiOAuthProvider("openai-codex") && !process.env.OPENAI_API_KEY) {
     const openAiModel = getModelEntry("openai", "gpt-5.5");
     if (openAiModel) return toSelectedModel(openAiModel, null, DEFAULT_REASONING_EFFORT);
   }
 
-  const fallback = parseFlueModel(FALLBACK_FLUE_MODEL);
+  const fallback = parseReviewModel(FALLBACK_REVIEW_MODEL);
   if (fallback) {
     const model = getModelEntry(fallback.providerId, fallback.modelId);
     if (model) return toSelectedModel(model, fallback.variant, fallback.thinkingLevel);
@@ -152,7 +152,7 @@ function resolveDefaultModel(): SelectedModel {
   const firstProvider = getProviderIds()[0];
   const firstModel = firstProvider ? getModelsByProvider(firstProvider)[0] : undefined;
   if (!firstModel) {
-    throw new Error("No Flue models are available");
+    throw new Error("No review models are available");
   }
 
   return toSelectedModel(toModelEntry(firstModel), null, DEFAULT_REASONING_EFFORT);
@@ -280,11 +280,11 @@ export function searchModels(query: string): {
   return { models, connectedProvidersCount: configuredProviders.size };
 }
 
-export function getCurrentFlueModel(): string {
+export function getCurrentReviewModel(): string {
   const selected = getSelectedModel();
 
   // `openai/*` is API-key auth. If the user is logged in through Pi's ChatGPT/Codex
-  // OAuth, use Flue/pi-ai's `openai-codex/*` provider for the same model ID instead.
+  // OAuth, use Pi's `openai-codex/*` provider for the same model ID instead.
   if (
     selected.providerId === "openai" &&
     !process.env.OPENAI_API_KEY &&
@@ -306,6 +306,6 @@ export function getCurrentFlueModel(): string {
   return `${selected.providerId}/${selected.modelId}`;
 }
 
-export function getCurrentFlueThinkingLevel(): ReasoningEffort {
+export function getCurrentReviewThinkingLevel(): ReasoningEffort {
   return getSelectedModel().thinkingLevel;
 }

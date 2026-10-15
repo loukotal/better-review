@@ -2,9 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
-import { normalizeContext, type Provider } from "@earendil-works/pi-ai";
+import { createModels, normalizeContext, type Provider } from "@earendil-works/pi-ai";
 import { findEnvKeys } from "@earendil-works/pi-ai/compat";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+
+import { reviewCredentials } from "./credentials";
 
 const PI_AUTH_PATH =
   process.env.BETTER_REVIEW_PI_AUTH_PATH ?? path.join(homedir(), ".pi", "agent", "auth.json");
@@ -17,8 +19,8 @@ const OPENCODE_AUTH_PATH =
   );
 
 type StoredCredential =
-  | { type: "api_key"; key?: unknown }
-  | { type: "oauth"; access?: unknown; expires?: unknown };
+  | { type: "api_key" | "api"; key?: unknown }
+  | { type: "oauth"; access?: unknown; expires?: unknown; refresh?: unknown };
 
 const PI_OAUTH_PROVIDER_IDS = ["anthropic", "openai-codex", "github-copilot", "opencode"];
 const OPENCODE_AUTH_PROVIDER_ALIASES = new Map<string, string>([["openai-codex", "openai"]]);
@@ -31,7 +33,7 @@ function readAuthFile(authPath: string, label: string): Record<string, StoredCre
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return parsed as Record<string, StoredCredential>;
   } catch (error) {
-    console.warn(`[Flue] Failed to read ${label} auth file at ${authPath}:`, error);
+    console.warn(`[Review] Failed to read ${label} auth file at ${authPath}:`, error);
     return {};
   }
 }
@@ -43,14 +45,17 @@ function getCredentialApiKey(
 ): string | undefined {
   if (!credential) return undefined;
 
-  if (credential.type === "api_key" && typeof credential.key === "string") {
+  if (
+    (credential.type === "api_key" || credential.type === "api") &&
+    typeof credential.key === "string"
+  ) {
     return credential.key;
   }
 
   if (credential.type === "oauth" && typeof credential.access === "string") {
     if (typeof credential.expires === "number" && credential.expires <= Date.now()) {
       console.warn(
-        `[Flue] ${label} OAuth token for ${provider} is expired; re-run login for that provider.`,
+        `[Review] ${label} OAuth token for ${provider} is expired; re-run login for that provider.`,
       );
       return undefined;
     }
@@ -81,6 +86,7 @@ function withStoredCredential(provider: Provider, token: string): Provider {
   return {
     ...provider,
     auth: {
+      ...provider.auth,
       apiKey: {
         name: `${provider.name} stored credential`,
         resolve: async () => ({
@@ -97,8 +103,7 @@ function withReviewTransport(provider: Provider): Provider {
   // starts. A later WebSocket drop aborts the entire review submission.
   return {
     ...provider,
-    // Flue 2 supplies the legacy Context shape; pi-ai 1 expects system prompts
-    // and tools folded into the transcript before entering a provider.
+    // Normalize inputs from both durable reviews and one-shot diff requests.
     stream: (model, context, options) =>
       provider.stream(
         model,
@@ -116,7 +121,7 @@ function withReviewTransport(provider: Provider): Provider {
   };
 }
 
-export function getFlueProviders(): Provider[] {
+export function getReviewProviders(): Provider[] {
   return builtinProviders().map((provider) => {
     const reviewProvider = withReviewTransport(provider);
     const token = PI_OAUTH_PROVIDER_IDS.includes(provider.id)
@@ -129,5 +134,21 @@ export function getFlueProviders(): Provider[] {
 }
 
 export function hasPiOAuthProvider(provider: string): boolean {
+  const pi = readAuthFile(PI_AUTH_PATH, "Pi")[provider];
+  const opencode = readAuthFile(OPENCODE_AUTH_PATH, "OpenCode")[
+    OPENCODE_AUTH_PROVIDER_ALIASES.get(provider) ?? provider
+  ];
+  if (
+    [pi, opencode].some(
+      (credential) => credential?.type === "oauth" && typeof credential.refresh === "string",
+    )
+  )
+    return true;
   return Boolean(getAuthApiKey(provider));
+}
+
+export function createReviewModels() {
+  const models = createModels({ credentials: reviewCredentials() });
+  for (const provider of builtinProviders()) models.setProvider(withReviewTransport(provider));
+  return models;
 }

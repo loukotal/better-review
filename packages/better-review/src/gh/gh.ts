@@ -1,4 +1,4 @@
-import { Data, Effect, Schema } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 
 import type {
   PrInfo,
@@ -53,9 +53,9 @@ export type {
 // ============================================================================
 
 const parseJsonPreserve =
-  <S extends Schema.Schema.AnyNoContext>(schema: S) =>
-  (json: string): Effect.Effect<Schema.Schema.Type<S>> =>
-    Effect.sync(() => Schema.decodeUnknownSync(schema)(JSON.parse(json)) as Schema.Schema.Type<S>);
+  <S extends Schema.ConstraintDecoder<unknown>>(schema: S) =>
+  (json: string): Effect.Effect<S["Type"]> =>
+    Effect.sync(() => Schema.decodeUnknownSync(schema)(JSON.parse(json)));
 
 const UserSchema = Schema.Struct({
   login: Schema.String,
@@ -69,7 +69,7 @@ const PRCommentSchema = Schema.Struct({
   path: Schema.String,
   line: Schema.NullOr(Schema.Number),
   original_line: Schema.NullOr(Schema.Number),
-  side: Schema.Literal("LEFT", "RIGHT"),
+  side: Schema.Literals(["LEFT", "RIGHT"]),
   body: Schema.String,
   html_url: Schema.String,
   user: UserSchema,
@@ -123,13 +123,13 @@ export interface ApprovePrParams {
   body?: string;
 }
 
-const PrStateSchema = Schema.Literal("open", "closed", "merged");
+const PrStateSchema = Schema.Literals(["open", "closed", "merged"]);
 
 const CheckRunSchema = Schema.Struct({
   name: Schema.String,
-  status: Schema.Literal("queued", "in_progress", "completed", "pending"),
+  status: Schema.Literals(["queued", "in_progress", "completed", "pending"]),
   conclusion: Schema.NullOr(
-    Schema.Literal(
+    Schema.Literals([
       "success",
       "failure",
       "neutral",
@@ -137,7 +137,7 @@ const CheckRunSchema = Schema.Struct({
       "skipped",
       "timed_out",
       "action_required",
-    ),
+    ]),
   ),
 });
 
@@ -154,7 +154,7 @@ const PrStatusSchema = Schema.Struct({
 });
 
 const ReviewStateSchema = Schema.NullOr(
-  Schema.Literal("PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"),
+  Schema.Literals(["PENDING", "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"]),
 );
 
 const RepositorySchema = Schema.Struct({
@@ -169,7 +169,7 @@ const AuthorSchema = Schema.Struct({
 const CiStatusSchema = Schema.Struct({
   passed: Schema.Number,
   total: Schema.Number,
-  state: Schema.Literal("SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"),
+  state: Schema.Literals(["SUCCESS", "FAILURE", "PENDING", "EXPECTED", "ERROR", "NEUTRAL"]),
 });
 
 const SearchedPrSchema = Schema.Struct({
@@ -875,7 +875,7 @@ const ghCli: GhCli = {
     Effect.gen(function* () {
       yield* validatePrUrl(urlOrNumber);
       return yield* runGh("pr", "diff", urlOrNumber).pipe(
-        Effect.catchAll((cause) =>
+        Effect.catch((cause) =>
           isPullRequestDiffTooLarge(cause) ? getDiffViaFilesApi(urlOrNumber) : Effect.fail(cause),
         ),
       );
@@ -897,7 +897,7 @@ const ghCli: GhCli = {
         `repos/${owner}/${repo}/commits/${pr.head.sha}/check-runs`,
         "--jq",
         ".check_runs | map({ name, status, conclusion })",
-      ).pipe(Effect.catchAll(() => Effect.succeed("[]")));
+      ).pipe(Effect.catch(() => Effect.succeed("[]")));
       const checks = yield* parseJsonPreserve(Schema.Array(CheckRunSchema))(checksResult);
 
       // Determine actual state (open/closed/merged)
@@ -1571,7 +1571,7 @@ const ghCli: GhCli = {
 
       let usedClientSideQueryFallback = false;
       const itemsResult = yield* runGh(...itemListArgs).pipe(
-        Effect.catchAll((error: unknown) => {
+        Effect.catch((error: unknown) => {
           if (resolvedItemQuery.length === 0) {
             return Effect.fail(error);
           }
@@ -1933,7 +1933,7 @@ const ghCli: GhCli = {
         `repos/${params.owner}/${params.repo}/contents/${params.path}?ref=${params.ref}`,
         "-H",
         "Accept: application/vnd.github.raw+json",
-      ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+      ).pipe(Effect.catch(() => Effect.succeed(null)));
       return result;
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getFileContent", cause })),
@@ -1943,8 +1943,7 @@ const ghCli: GhCli = {
     ),
 };
 
-export class GhService extends Effect.Service<GhService>()("GhService", {
-  succeed: ghCli,
-}) {}
+export type GhService = typeof ghCli;
+export const GhService = Context.Service<GhService>("better-review/GhService");
 
-export const GhServiceLive = GhService.Default;
+export const GhServiceLive = Layer.succeed(GhService)(ghCli);

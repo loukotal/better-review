@@ -199,7 +199,7 @@ const PrListPage: Component = () => {
   const reviewStatuses = useQuery(() => ({
     queryKey: ["automatic-review-statuses", filteredPrs().map((pr) => pr.url)],
     queryFn: () =>
-      trpc.flueReview.automaticStatuses.query({ prUrls: filteredPrs().map((pr) => pr.url) }),
+      trpc.prReview.automaticStatuses.query({ prUrls: filteredPrs().map((pr) => pr.url) }),
     enabled: filteredPrs().length > 0,
     staleTime: 0,
     refetchInterval: 3000,
@@ -220,7 +220,7 @@ const PrListPage: Component = () => {
       try {
         simplifiedEnglish = localStorage.getItem("better-review:use-ste100") === "true";
       } catch {}
-      await trpc.flueReview.startAutomatic.mutate({ prUrl, simplifiedEnglish, rerun });
+      await trpc.prReview.startAutomatic.mutate({ prUrl, simplifiedEnglish, rerun });
       await reviewStatuses.refetch();
     } catch (error) {
       setLaunchErrors((previous) => ({

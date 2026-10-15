@@ -13,10 +13,11 @@
     "wait:api": "node scripts/wait-for-api.mjs",
     "dev:api": "pnpm --filter ./packages/better-review dev",
     "dev:web": "pnpm --filter ./packages/web dev",
-    "dev": "pnpm ensure:dev-token && concurrently --kill-others-on-fail --names api,web --prefix-colors blue,green \"pnpm dev:api\" \"pnpm wait:api && pnpm dev:web\"",
+    "stop:dev": "node scripts/stop-dev.mjs",
+    "dev": "pnpm stop:dev && pnpm ensure:dev-token && concurrently --kill-others-on-fail --names api,web --prefix-colors blue,green \"pnpm dev:api\" \"pnpm wait:api && pnpm dev:web\"",
     "start": "pnpm dev",
     "start:production": "pnpm --filter ./packages/web build && pnpm --filter ./packages/better-review start",
-    "test": "node --import tsx --test \"packages/**/*.test.ts\"",
+    "test": "pnpm -r test",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist && pnpm install",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
@@ -28,19 +29,18 @@
     "@better-review/shared": "workspace:*"
   },
   "devDependencies": {
-    "@flue/cli": "2.1.1",
-    "@types/node": "26.6.3",
+    "@types/node": "26.6.4",
     "concurrently": "10.0.5",
-    "lefthook": "2.1.14",
-    "oxfmt": "0.70.0",
-    "oxlint": "1.85.0",
+    "lefthook": "2.1.17",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   },
   "overrides": {
     "picomatch": "4.0.4",
     "rollup": "4.59.0",
-    "vite": "8.3.1",
+    "vite": "8.3.3",
     "vitefu": "1.1.3",
     "yaml": "2.8.3"
   },

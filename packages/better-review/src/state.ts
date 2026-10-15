@@ -2,7 +2,7 @@
 // State Services - DiffCache and PrContext with Effect.Ref
 // =============================================================================
 
-import { Effect, Layer, Ref } from "effect";
+import { Context, Effect, Layer, Ref, Semaphore } from "effect";
 
 import type { PrInfo, StoredSession, PrSessionData, SearchedPr } from "@better-review/shared";
 
@@ -263,11 +263,12 @@ const makeDiffCacheService = Effect.gen(function* () {
   return yield* createDiffCacheServiceApi(gh);
 });
 
-export class DiffCacheService extends Effect.Service<DiffCacheService>()("DiffCacheService", {
-  effect: makeDiffCacheService,
-}) {}
+export type DiffCacheService = Effect.Success<typeof makeDiffCacheService>;
+export const DiffCacheService = Context.Service<DiffCacheService>("better-review/DiffCacheService");
 
-export const DiffCacheServiceLive = DiffCacheService.Default.pipe(Layer.provide(GhServiceLive));
+export const DiffCacheServiceLive = Layer.effect(DiffCacheService, makeDiffCacheService).pipe(
+  Layer.provide(GhServiceLive),
+);
 
 // =============================================================================
 // PrContextService
@@ -532,11 +533,12 @@ const makePrContextService = Effect.gen(function* () {
   };
 });
 
-export class PrContextService extends Effect.Service<PrContextService>()("PrContextService", {
-  effect: makePrContextService,
-}) {}
+export type PrContextService = Effect.Success<typeof makePrContextService>;
+export const PrContextService = Context.Service<PrContextService>("better-review/PrContextService");
 
-export const PrContextServiceLive = PrContextService.Default.pipe(Layer.provide(StoreServiceLive));
+export const PrContextServiceLive = Layer.effect(PrContextService, makePrContextService).pipe(
+  Layer.provide(StoreServiceLive),
+);
 
 // =============================================================================
 // PrListCacheService - Background-refreshed PR list cache
@@ -552,7 +554,7 @@ interface PrListCacheData {
 export const createPrListCacheServiceApi = (gh: Pick<GhServiceApi, "searchReviewRequested">) =>
   Effect.gen(function* () {
     const cache = yield* Ref.make<PrListCacheData | null>(null);
-    const refreshLock = yield* Effect.makeSemaphore(1);
+    const refreshLock = yield* Semaphore.make(1);
 
     /**
      * Fetch fresh PR list from GitHub and update the cache.
@@ -619,8 +621,8 @@ export const createPrListCacheServiceApi = (gh: Pick<GhServiceApi, "searchReview
 
         // Only refresh stale cache entries so frequent list reads stay cheap.
         yield* refresh.pipe(
-          Effect.catchAll((e) => Effect.log(`[pr-list-cache] Background refresh failed: ${e}`)),
-          Effect.forkDaemon,
+          Effect.catch((e) => Effect.log(`[pr-list-cache] Background refresh failed: ${e}`)),
+          Effect.forkDetach,
         );
 
         return cached;
@@ -655,14 +657,14 @@ export const createPrListCacheServiceApi = (gh: Pick<GhServiceApi, "searchReview
 
         // Initial fetch on startup
         yield* refresh.pipe(
-          Effect.catchAll((e) => Effect.log(`[pr-list-cache] Initial fetch failed: ${e}`)),
+          Effect.catch((e) => Effect.log(`[pr-list-cache] Initial fetch failed: ${e}`)),
         );
 
         // Loop: sleep then refresh
         while (true) {
           yield* Effect.sleep(PR_LIST_REFRESH_INTERVAL_MS);
           yield* refresh.pipe(
-            Effect.catchAll((e) => Effect.log(`[pr-list-cache] Periodic refresh failed: ${e}`)),
+            Effect.catch((e) => Effect.log(`[pr-list-cache] Periodic refresh failed: ${e}`)),
           );
         }
       }),
@@ -674,8 +676,11 @@ const makePrListCacheService = Effect.gen(function* () {
   return yield* createPrListCacheServiceApi(gh);
 });
 
-export class PrListCacheService extends Effect.Service<PrListCacheService>()("PrListCacheService", {
-  effect: makePrListCacheService,
-}) {}
+export type PrListCacheService = Effect.Success<typeof makePrListCacheService>;
+export const PrListCacheService = Context.Service<PrListCacheService>(
+  "better-review/PrListCacheService",
+);
 
-export const PrListCacheServiceLive = PrListCacheService.Default.pipe(Layer.provide(GhServiceLive));
+export const PrListCacheServiceLive = Layer.effect(PrListCacheService, makePrListCacheService).pipe(
+  Layer.provide(GhServiceLive),
+);

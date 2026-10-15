@@ -12,6 +12,7 @@ export interface AutomaticReviewStatus {
   error?: string;
 }
 export interface ReviewConversation {
+  running?: boolean;
   messages: Array<{
     role: string;
     submissionId?: string;
@@ -26,7 +27,7 @@ export function isReviewRequest(text: string): boolean {
   );
 }
 
-/** Flue settlements, rather than the last token, decide whether work finished. */
+/** Durable settlements, rather than the last token, decide whether work finished. */
 export function reviewConversationStatus(
   conversation: ReviewConversation | null,
   submissionId?: string,
@@ -58,6 +59,7 @@ export function reviewConversationStatus(
 }
 
 export function conversationIsRunning(conversation: ReviewConversation): boolean {
+  if (conversation.running !== undefined) return conversation.running;
   return conversation.messages.some(
     (m) =>
       m.submissionId && !conversation.settlements.some((s) => s.submissionId === m.submissionId),
