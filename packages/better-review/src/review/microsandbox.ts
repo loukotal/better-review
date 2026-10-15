@@ -34,6 +34,11 @@ export interface SubmissionSandbox {
     command: string,
     options?: { cwd?: string; timeoutMs?: number; signal?: AbortSignal },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  /** Trusted repository inspection: no login/startup files and a clean, controlled environment. */
+  execStructured(
+    command: string,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   readFile(path: string): Promise<string>;
   readLines(path: string, offset: number, limit: number, signal?: AbortSignal): Promise<string>;
   readFileBuffer(path: string): Promise<Uint8Array>;
@@ -305,75 +310,95 @@ export function createSubmissionSandbox(
     return lifecycle;
   };
 
-  const driver: Omit<SubmissionSandbox, "cwd" | "beginSubmission" | "endSubmission"> = {
-    async exec(command, options = {}) {
-      options.signal?.throwIfAborted();
-      const timeoutMs = Math.min(
-        options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
-        DEFAULT_COMMAND_TIMEOUT_MS,
-      );
-      const cwd = assertReadable(options.cwd ?? identity.worktreePath);
-      const pidDirectory = `${baseScratch}/pids`;
-      const pidFile = `${pidDirectory}/${randomUUID()}`;
-      const done = startMeasurement("sandbox.exec");
-      // BusyBox setsid lacks --wait and forks when it is the process-group leader.
-      // Launch it as a child of a waiting shell so it can exec and preserve exit status.
-      const execution = await vm.execStreamWith("/bin/sh", (builder) =>
-        builder
-          .args([
-            "-c",
-            'setsid /bin/sh -c \'echo "$$" > "$1"; exec /bin/sh -lc "$2"\' better-review "$1" "$2" & wait "$!"',
-            "better-review",
-            pidFile,
-            command,
-          ])
-          .cwd(cwd)
-          .envs({
-            HOME: scratch,
-            TMPDIR: scratch,
-            GIT_CONFIG_GLOBAL: `${baseScratch}/gitconfig`,
-            PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-          })
-          .user(String(uid))
-          .timeout(timeoutMs),
-      );
-      activeExecutions.add(execution);
+  const run = async (
+    command: string,
+    options: { cwd?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+    trusted = false,
+  ) => {
+    options.signal?.throwIfAborted();
+    const timeoutMs = Math.min(
+      options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+      DEFAULT_COMMAND_TIMEOUT_MS,
+    );
+    const cwd = assertReadable(options.cwd ?? identity.worktreePath);
+    const pidDirectory = `${baseScratch}/pids`;
+    const pidFile = `${pidDirectory}/${randomUUID()}`;
+    const done = startMeasurement("sandbox.exec");
+    // BusyBox setsid lacks --wait and forks when it is the process-group leader.
+    // Launch it as a child of a waiting shell so it can exec and preserve exit status.
+    // Clear the environment before even starting the outer shell. In particular,
+    // writable HOME/.profile and ENV/BASH_ENV must never influence cached reads.
+    const execution = await vm.execStreamWith(trusted ? "/usr/bin/env" : "/bin/sh", (builder) =>
+      builder
+        .args([
+          ...(trusted
+            ? [
+                "-i",
+                "PATH=/usr/bin:/bin",
+                `HOME=${scratch}`,
+                `TMPDIR=${scratch}`,
+                "LC_ALL=C",
+                "/bin/sh",
+              ]
+            : []),
+          "-c",
+          trusted
+            ? 'setsid /bin/sh -c \'echo "$$" > "$1"; exec /bin/sh -c "$2"\' better-review "$1" "$2" & wait "$!"'
+            : 'setsid /bin/sh -c \'echo "$$" > "$1"; exec /bin/sh -lc "$2"\' better-review "$1" "$2" & wait "$!"',
+          "better-review",
+          pidFile,
+          command,
+        ])
+        .cwd(cwd)
+        .envs({
+          HOME: scratch,
+          TMPDIR: scratch,
+          GIT_CONFIG_GLOBAL: `${baseScratch}/gitconfig`,
+          PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        })
+        .user(String(uid))
+        .timeout(timeoutMs),
+    );
+    activeExecutions.add(execution);
 
-      const terminate = async () => {
-        try {
-          const pid = (await fs.readToString(pidFile)).trim();
-          if (/^\d+$/.test(pid)) await vm.exec("kill", ["-KILL", "--", `-${pid}`]);
-        } finally {
-          await execution.kill().catch(() => undefined);
-        }
-      };
-      const abort = () => void terminate().catch(() => undefined);
-      const timeout = setTimeout(abort, timeoutMs);
-      if (options.signal?.aborted) abort();
-      else options.signal?.addEventListener("abort", abort, { once: true });
+    const terminate = async () => {
       try {
-        const stdout = new BoundedOutput();
-        const stderr = new BoundedOutput();
-        let code: number | undefined;
-        for (let event = await execution.recv(); event; event = await execution.recv()) {
-          if (event.kind === "stdout") stdout.append(event.data);
-          if (event.kind === "stderr") stderr.append(event.data);
-          if (event.kind === "exited") code = event.code;
-        }
-        code ??= (await execution.wait()).code;
-        measure("sandbox.output.bytes", stdout.totalBytes + stderr.totalBytes);
-        return {
-          stdout: stdout.text(),
-          stderr: stderr.text(),
-          exitCode: code,
-        };
+        const pid = (await fs.readToString(pidFile)).trim();
+        if (/^\d+$/.test(pid)) await vm.exec("kill", ["-KILL", "--", `-${pid}`]);
       } finally {
-        clearTimeout(timeout);
-        options.signal?.removeEventListener("abort", abort);
-        activeExecutions.delete(execution);
-        done();
+        await execution.kill().catch(() => undefined);
       }
-    },
+    };
+    const abort = () => void terminate().catch(() => undefined);
+    const timeout = setTimeout(abort, timeoutMs);
+    if (options.signal?.aborted) abort();
+    else options.signal?.addEventListener("abort", abort, { once: true });
+    try {
+      const stdout = new BoundedOutput();
+      const stderr = new BoundedOutput();
+      let code: number | undefined;
+      for (let event = await execution.recv(); event; event = await execution.recv()) {
+        if (event.kind === "stdout") stdout.append(event.data);
+        if (event.kind === "stderr") stderr.append(event.data);
+        if (event.kind === "exited") code = event.code;
+      }
+      code ??= (await execution.wait()).code;
+      measure("sandbox.output.bytes", stdout.totalBytes + stderr.totalBytes);
+      return {
+        stdout: stdout.text(),
+        stderr: stderr.text(),
+        exitCode: code,
+      };
+    } finally {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abort);
+      activeExecutions.delete(execution);
+      done();
+    }
+  };
+  const driver: Omit<SubmissionSandbox, "cwd" | "beginSubmission" | "endSubmission"> = {
+    exec: (command, options) => run(command, options),
+    execStructured: (command, options) => run(command, options, true),
     async readLines(value, offset, limit, signal) {
       if (
         !Number.isSafeInteger(offset) ||
@@ -387,7 +412,7 @@ export function createSubmissionSandbox(
       const done = startMeasurement("sandbox.read");
       try {
         // Slice inside the guest. Neither the complete file nor unlimited lines cross the VM boundary.
-        const result = await driver.exec(
+        const result = await driver.execStructured(
           `awk -v start=${offset} -v count=${limit} 'BEGIN { budget=20000 } NR >= start { text=NR ": " $0; size=length(text)+1; if(size > budget) { print substr(text,1,budget); print "[Read output truncated; request a narrower range]"; exit } print text; budget-=size; if (++n >= count) exit }' ${quote(file)}`,
           { signal },
         );

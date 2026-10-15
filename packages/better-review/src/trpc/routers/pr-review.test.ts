@@ -58,7 +58,7 @@ test("selecting history keeps the saved revision; historical source references a
   });
   assert.equal(
     (await caller.selectSession({ prUrl: session.prUrl, sessionId: session.id })).sessionHeadSha,
-    "A",
+    fixtureSession.headSha,
   );
   assert.equal(
     (await caller.source({ sessionId: session.id, path: "source.ts", ref: "old" })).ref,
@@ -238,7 +238,7 @@ test("pulling updates the same session and durably admits continuation on the se
   }));
   t.mock.method(reviewConversations, "admit", async (_id: string, prompt: string) => {
     admissions++;
-    assert.match(prompt, /Previous revision: A/);
+    assert.ok(prompt.includes(`Previous revision: ${fixtureSession.headSha}`));
     return { submissionId: "new-request" };
   });
   const caller = prReviewRouter.createCaller({
@@ -256,7 +256,7 @@ test("pulling updates the same session and durably admits continuation on the se
   const result = await caller.pullLatest({ sessionId: session.id, prUrl: session.prUrl });
   assert.equal(result.headSha, "rewritten-B");
   assert.equal(session.id, fixtureSession.id);
-  assert.equal(session.revisionHistory?.[0]?.headSha, "A");
+  assert.equal(session.revisionHistory?.[0]?.headSha, fixtureSession.headSha);
   assert.equal(session.automaticReview?.submissionId, "new-request");
   assert.equal(admissions, 1);
   assert.equal(

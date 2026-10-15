@@ -73,6 +73,9 @@ export async function openReviewEngine(options: {
   let vm: Promise<SubmissionSandbox> | undefined;
   let cleanup: Promise<void> = Promise.resolve();
   let runGeneration = 0;
+  let observingRun = false;
+  let lastObservedSubmission = 0;
+  let closed = false;
   let session = options.session;
   const releaseSandbox = async () => {
     const active = vm;
@@ -195,6 +198,22 @@ export async function openReviewEngine(options: {
     let changed = false;
     for (const change of publication.changes) {
       if (change.type === "entry" && change.value.conversationId === conversation.id) {
+        // Only newly observed commits count. Hydration/reopening and document streaming do not
+        // replay usage into process-local metrics. This is not durable provider billing.
+        if (hydrated && !entryCache.has(change.value.id)) {
+          for (const message of change.value.model ?? []) {
+            if (change.value.kind === "pi.assistant" && message.role === "assistant") {
+              measure("review.model.round_trips", 1);
+              measure("review.tokens.input", message.usage.input);
+              measure("review.tokens.output", message.usage.output);
+              measure("review.tokens.cache_read", message.usage.cacheRead);
+              measure("review.tokens.cache_write", message.usage.cacheWrite);
+              measure("review.tokens.total", message.usage.totalTokens);
+            } else if (change.value.kind === "pi.tool-result" && message.role === "toolResult") {
+              measure("review.tool.round_trips", 1);
+            }
+          }
+        }
         entryCache.set(change.value.id, change.value);
         historyDirty = true;
         changed = true;
@@ -425,18 +444,31 @@ export async function openReviewEngine(options: {
         throw new Error("Review is running");
     }
     await releaseSandbox();
-    const generation = ++runGeneration;
     await conversation.configure({ model, thinkingLevel }, context);
+    const durationDone = startMeasurement("review.duration");
     const receipt = await conversation.submit(
       { type: "input", content: body, requestId, whenBusy: "reject" },
       context,
     );
+    // Concurrent HTTP retries can both pass submissionByRequest before admission. The
+    // durable layer deduplicates their receipts; observe that receipt only once too.
+    // Submission IDs increase monotonically, so this needs no growing request-ID set.
+    if (receipt.id <= lastObservedSubmission) return { submissionId: String(receipt.id) };
+    lastObservedSubmission = receipt.id;
+    const generation = ++runGeneration;
+    observingRun = true;
     void receipt
       .wait(context)
       .then(() => {
+        if (!closed) durationDone();
+        if (generation === runGeneration) observingRun = false;
         if (generation === runGeneration) return releaseSandbox();
       })
-      .catch((error) => console.error("[Review] Submission interrupted:", error));
+      .catch(() => {
+        if (!closed) durationDone();
+        if (generation === runGeneration) observingRun = false;
+        console.error("[Review] Submission interrupted");
+      });
     return { submissionId: String(receipt.id) };
   }
   return {
@@ -453,13 +485,30 @@ export async function openReviewEngine(options: {
     submit,
     resume() {
       const generation = ++runGeneration;
+      // A resumed interval starts now, not at the persisted submission timestamp. Never
+      // report pre-crash elapsed time, idle opens, or duplicate resume calls as new reviews.
+      const durationDone =
+        !observingRun &&
+        [...submissionCache.values()].some(
+          (record) =>
+            record.type === "input" && (record.status === "queued" || record.status === "placed"),
+        )
+          ? startMeasurement("review.resume.duration")
+          : undefined;
+      if (durationDone) observingRun = true;
       harness.resume();
       void conversation
         .waitForIdle(context)
         .then(() => {
+          if (!closed) durationDone?.();
+          if (generation === runGeneration) observingRun = false;
           if (generation === runGeneration) return releaseSandbox();
         })
-        .catch((error) => console.error("[Review] Recovery failed:", error));
+        .catch(() => {
+          if (!closed) durationDone?.();
+          if (generation === runGeneration) observingRun = false;
+          console.error("[Review] Recovery failed");
+        });
     },
     async abort() {
       await conversation.abort(context);
@@ -472,6 +521,7 @@ export async function openReviewEngine(options: {
       );
     },
     async close() {
+      closed = true;
       stopCommits();
       listeners.clear();
       await harness.close(context);

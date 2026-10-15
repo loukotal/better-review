@@ -17,8 +17,8 @@ export const fixtureSession: PrReviewSession = {
   owner: "acme",
   repo: "app",
   number: 1,
-  headSha: "A",
-  baseSha: "base",
+  headSha: "a".repeat(40),
+  baseSha: "c".repeat(40),
   baseRef: "main",
   headRef: "feature",
   reviewMode: "full",
@@ -29,11 +29,20 @@ export const fixtureSession: PrReviewSession = {
   updatedAt: 1,
 };
 export function fixtureSandbox(head: string, read?: () => Promise<string>): SubmissionSandbox {
+  const label = head === "a".repeat(40) ? "A" : head === "b".repeat(40) ? "B" : head;
   return {
     cwd: `/fixture/${head}`,
     beginSubmission: async () => {},
     endSubmission: async () => {},
     exec: async (command, options) => {
+      if (command.includes("cat-file blob")) {
+        const text = read ? await read() : `revision ${label}`;
+        return {
+          stdout: `R\t1\t0\t${Buffer.byteLength(text)}\t${text}\nN\t0\t0\nS\t0\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      }
       if (command === "wait") {
         await new Promise<void>((resolve) =>
           options?.signal?.addEventListener("abort", () => resolve(), { once: true }),
@@ -41,8 +50,20 @@ export function fixtureSandbox(head: string, read?: () => Promise<string>): Subm
       }
       return { stdout: head, stderr: "", exitCode: 0 };
     },
+    execStructured: async (command) => {
+      if (command.includes("od -An")) return { stdout: "OK\n", stderr: "", exitCode: 0 };
+      if (command.includes("cat-file blob")) {
+        const text = read ? await read() : `revision ${label}`;
+        return {
+          stdout: `R\t1\t0\t${Buffer.byteLength(text)}\t${text}\nN\t0\t0\nS\t0\n`,
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: head, stderr: "", exitCode: 0 };
+    },
     readFile: read ?? (async () => `revision ${head}`),
-    readLines: async () => `1: ${read ? await read() : `revision ${head}`}`,
+    readLines: async () => `1: ${read ? await read() : `revision ${label}`}`,
     readFileBuffer: async () => new Uint8Array(),
     writeFile: async () => {
       throw new Error("read-only");

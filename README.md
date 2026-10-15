@@ -99,6 +99,53 @@ The sandbox has:
 Better Review cleans up its orphaned VMs on startup and removes a worktree's VM when that worktree
 is deleted.
 
+### Structured review tools
+
+Reviewers prefer these tools over ad-hoc shell inspection; all Git commands still run inside
+Microsandbox:
+
+- `search`: literal text (default) or Git extended regex, optional literal file/directory paths,
+  and 0–10 context lines. Reports `ok`, `no_match`, or `error` separately. Context lines are not
+  individually classified as matches. Binary files and discovered control-character paths are
+  skipped, including in unfiltered or directory-filtered searches.
+- `read_files`: batches 1-based inclusive line ranges, merges overlapping/adjacent ranges, and
+  reports errors independently per file. All ranges share one page budget.
+- `review_diff`: uses the saved full-PR three-dot base/head range or saved commit/parent range,
+  validates the saved base ref, preserves rename headers, and includes old/new hunk line numbers.
+- `read` retains the legacy uncached numbered-text interface, including offset/limit and allowed
+  absolute checkout/scratch paths, so pending durable calls keep their original contract.
+  `bash` is an uncached escape hatch.
+
+Structured pages retain at most 100 records and 12 KB of source text (plus bounded metadata).
+`truncated` and `continuation` describe incomplete results; repeat the same arguments with the
+returned token. Long lines span fragments: `row` identifies the original stream record, `byte`
+is its byte offset, and `totalBytes` is its full size. Read rows are source line numbers; search
+and diff rows are output-stream positions. Subsequent fragments may lack parsed path/hunk fields,
+so join them to their first fragment before interpreting the complete line.
+
+Paths are literal repository-relative file/directory names, not globs or Git pathspec expressions.
+Traversal, Git internals, absolute/scratch paths, control-character paths, and paths longer than
+1,024 characters are rejected. Structured reads access Git blobs directly, so symlinks yield their
+stored target text rather than exposing files outside the repository. Reads and searches use the
+saved head revision, even for commit reviews of an earlier commit.
+
+Before numbering file lines, `read_files` scans the immutable blob with a bounded-memory bytewise
+validator. NUL-containing binary blobs and invalid UTF-8 produce explicit per-file errors, no
+fabricated lines or continuation. Structured commands use a non-login shell with a clean environment
+and controlled executable search path; writable startup profiles and scratch Git configuration
+cannot affect cached results. Each structured call creates one 120-second abort deadline shared by
+validation, all file ranges, and diff base verification—not a fresh timeout for every VM command.
+This bounds cooperative command execution, not hard wall-clock duration: sandbox initialization
+does not accept an abort signal and can finish after the deadline. No command starts after an
+expired deadline, and cancellation is forwarded to active commands.
+
+Successful read/search/diff pages use a process-local 2 MiB / 128-entry LRU cache keyed by repository
+identity, immutable head/base/commit revisions, review mode, normalized arguments, continuation,
+and tool version. Scratch, shell output, and failures are never cached; revision changes invalidate
+continuations. Pages stream and drain results inside the VM rather than collecting a whole search
+or diff on the host; fetching a later page reruns the command, subject to the sandbox timeout.
+See [the fixed-revision evaluation procedure](docs/review-tool-evaluation.md) for performance checks.
+
 ## Agent Review CLI
 
 Keep Better Review running, then invoke the workspace CLI directly:
