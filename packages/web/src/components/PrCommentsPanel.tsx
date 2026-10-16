@@ -10,6 +10,7 @@ import type { IssueComment } from "../lib/query";
 import { createRecoverableDraft } from "../lib/recoverable-drafts";
 import { CommentView } from "./CommentView";
 import { GithubCommentCard } from "./GithubCommentCard";
+import { GithubSyncStatus } from "./GithubSyncStatus";
 
 interface PrCommentsPanelProps {
   githubView?: ReturnType<typeof projectGithubComments>;
@@ -280,7 +281,10 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
             variant="primary"
             size="sm"
           >
-            {isSubmitting() ? "Posting..." : "Reply"}
+            <Show when={isSubmitting() && draft}>
+              <GithubSyncStatus status="saving-local" iconOnly />
+            </Show>
+            {isSubmitting() ? (draft ? "Saving locally…" : "Posting...") : "Reply"}
           </Button>
         </div>
       </MessageForm>
@@ -438,7 +442,10 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                         variant="primary"
                         size="sm"
                       >
-                        {isSubmitting() ? "Posting..." : "Comment"}
+                        <Show when={isSubmitting() && draft}>
+                          <GithubSyncStatus status="saving-local" iconOnly />
+                        </Show>
+                        {isSubmitting() ? (draft ? "Saving locally…" : "Posting...") : "Comment"}
                       </Button>
                     </div>
                   </div>

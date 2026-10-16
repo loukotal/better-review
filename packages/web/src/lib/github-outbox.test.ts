@@ -106,10 +106,10 @@ function memoryJournal(): BrowserGithubJournal {
         .filter((entry) => !pr || entry.command.scope.url === pr.url)
         .map((entry) => structuredClone(entry.command));
     },
-    async acknowledge(op) {
-      const entry = entries.get(op.command.operationId);
+    async acknowledge(op, submittedId = op.command.operationId) {
+      const entry = entries.get(submittedId);
       if (entry)
-        entries.set(op.command.operationId, {
+        entries.set(submittedId, {
           ...entry,
           backendOwned: true,
           operation: structuredClone(op),
@@ -134,6 +134,75 @@ function memoryJournal(): BrowserGithubJournal {
     async removeControl() {},
   };
 }
+
+test("different UUID duplicate receipt acknowledges submitted journal entry and reload has no ghost", async () => {
+  const journal = memoryJournal();
+  const canonical = operation(command(1));
+  const wire = transport({
+    async enqueue(cmd) {
+      if (cmd.action.kind === "edit-comment") throw new Error("offline child admission");
+      return { outcome: "duplicate", operation: canonical };
+    },
+    async snapshot() {
+      return { scope, revision: 1, operations: [canonical] };
+    },
+    async control(request) {
+      assert.equal(request.operationId, id(2));
+      return { outcome: "applied", operation: canonical };
+    },
+  });
+  let client = createGithubOutbox({ journal, transport: wire });
+  await client.submit({ scope, actor, action: command().action, operationId: id(2) });
+  await client.recover(scope);
+  assert.equal((await journal.entries(scope))[0].backendOwned, true);
+  assert.equal((await journal.entries(scope))[0].command.operationId, id(2));
+  assert.equal(client.getState(scope).operations.length, 1);
+  assert.equal(client.getState(scope).operations[0].command.operationId, id(1));
+  assert.equal(client.getState(scope).pendingCount, 1);
+  assert.equal((await client.draftForOperation(scope, id(2)))?.submittedOperationId, id(1));
+  assert.equal(
+    (
+      await client.control(scope, {
+        requestId: id(3),
+        operationId: id(2),
+        expectedRevision: 1,
+        kind: "cancel",
+      })
+    )?.outcome,
+    "applied",
+  );
+  await client.close();
+  client = createGithubOutbox({ journal, transport: wire });
+  await client.recover(scope);
+  assert.equal(client.getState(scope).operations.length, 1);
+  assert.equal(client.getState(scope).pendingCount, 1);
+  await client.submit({
+    scope,
+    actor,
+    operationId: id(4),
+    action: {
+      kind: "edit-comment",
+      target: { source: "local", kind: "issue-comment", operationId: id(2) },
+      body: "edited",
+      expectedBody: "hello",
+    },
+  });
+  await client.recover(scope);
+  const child = client
+    .getState(scope)
+    .operations.find((item) => item.command.operationId === id(4))!;
+  assert.deepEqual(child.command.dependencies, [id(1)]);
+  assert.deepEqual(child.command.action, {
+    kind: "edit-comment",
+    target: { source: "local", kind: "issue-comment", operationId: id(1) },
+    body: "edited",
+    expectedBody: "hello",
+  });
+  const projected = createGithubOutboxProjection().project(client.getState(scope));
+  assert.equal(projected.comments.length, 1);
+  assert.equal(projected.comments[0].body, "edited");
+  await client.close();
+});
 function transport(overrides: Partial<GithubOutboxTransport> = {}): GithubOutboxTransport {
   return {
     async enqueue(cmd) {

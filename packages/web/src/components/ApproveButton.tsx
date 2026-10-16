@@ -3,14 +3,15 @@ import { createEffect, createSignal, on, Show } from "solid-js";
 import { usePrContext } from "../context/PrContext";
 import { Alert, Button, Field, MessageForm, Popover, Textarea } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
-import { SpinnerIcon } from "../icons/spinner-icon";
 import { createGithubEditorDraft } from "../lib/github-editor-draft";
 import { queueGithubWrite } from "../lib/github-writes";
+import { GithubSyncStatus, type GithubSyncState } from "./GithubSyncStatus";
 
 export function ApproveButton(props: {
   expectedHeadSha?: string | null;
   canSubmit?: boolean;
   approvalState?: "pending" | "synced";
+  approvalSyncState?: GithubSyncState;
 }) {
   const { prUrl } = usePrContext();
   const [open, setOpen] = createSignal(false);
@@ -66,7 +67,18 @@ export function ApproveButton(props: {
       width={320}
       trigger={
         <>
-          <CheckIcon size={12} />
+          <Show when={props.approvalState || submitting()} fallback={<CheckIcon size={12} />}>
+            <GithubSyncStatus
+              status={
+                submitting()
+                  ? "saving-local"
+                  : (props.approvalSyncState ??
+                    (props.approvalState === "synced" ? "synced" : "queued"))
+              }
+              iconOnly
+              showSynced
+            />
+          </Show>
           <span>
             {props.approvalState === "synced"
               ? "Approved"
@@ -115,9 +127,9 @@ export function ApproveButton(props: {
               disabled={submitting() || !draft.ready() || !draft.context().expectedHeadSha}
             >
               <Show when={submitting()}>
-                <SpinnerIcon size={12} class="animate-spin" />
+                <GithubSyncStatus status="saving-local" iconOnly />
               </Show>
-              {submitting() ? "Approving…" : "Approve PR"}
+              {submitting() ? "Saving locally…" : "Approve PR"}
             </Button>
           </div>
         </MessageForm>

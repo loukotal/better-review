@@ -84,6 +84,15 @@ export async function testAppGithubCommentProjectionInBrowser() {
     calls++;
     const prior = operations.get(input.operationId);
     if (prior) return { outcome: "duplicate", operation: structuredClone(prior) };
+    const sameContent = [...operations.values()].find(
+      (operation) =>
+        operation.command.action.kind === "issue-comment" &&
+        input.action.kind === "issue-comment" &&
+        operation.command.action.body === input.action.body &&
+        operation.command.scope.url === input.scope.url &&
+        operation.command.expectedActor.id === input.expectedActor.id,
+    );
+    if (sameContent) return { outcome: "duplicate", operation: structuredClone(sameContent) };
     if (input.dependencies.some((id) => !operations.has(id)))
       return {
         outcome: "rejected",
@@ -161,6 +170,16 @@ export async function testAppGithubCommentProjectionInBrowser() {
     );
   };
   await edit("remote:issue-comment:10", "desired discussion body");
+  await wait(
+    () => !!card("remote:issue-comment:10")?.querySelector('[data-github-sync-status="queued"]'),
+    "Discussion edit missing shared queued GitHub status",
+  );
+  check(
+    !!document.querySelector(
+      '[aria-label="GitHub pending writes"] summary [data-github-sync-status="queued"]',
+    ),
+    "Global pending summary missing shared queued GitHub status",
+  );
   await fetchRemote();
   check(
     card("remote:issue-comment:10")?.querySelector("[data-comment-body]")?.textContent?.trim() ===
@@ -265,6 +284,36 @@ export async function testAppGithubCommentProjectionInBrowser() {
   await wait(() => operations.has(creation.operationId), "New issue comment not durably admitted");
   const localKey = `local:issue-comment:${creation.operationId}`;
   await wait(() => !!card(localKey), "Local creation absent from real discussion");
+  const beforeDuplicate = operations.size;
+  const duplicateCreation = await queueGithubWrite(url, {
+    kind: "issue-comment",
+    body: "new durable discussion",
+  });
+  await githubWrites.recover(scope);
+  check(
+    duplicateCreation.operationId !== creation.operationId,
+    "Separate identical submission did not use a fresh UUID",
+  );
+  check(
+    operations.size === beforeDuplicate,
+    "Content duplicate created a second durable operation",
+  );
+  check(
+    !card(`local:issue-comment:${duplicateCreation.operationId}`),
+    "Duplicate receipt left a ghost discussion row",
+  );
+  check(
+    githubWrites
+      .getState(scope)
+      .operations.filter((item) => item.command.action.kind === "issue-comment").length === 1,
+    "Actual UI state retained two pending creations",
+  );
+  check(
+    (await githubJournal.entries(scope)).find(
+      (entry) => entry.command.operationId === duplicateCreation.operationId,
+    )?.backendOwned,
+    "Duplicate UI submission was not acknowledged in IndexedDB",
+  );
   let releaseOld!: () => void, oldStarted!: () => void;
   const oldGate = new Promise<void>((resolve) => {
     releaseOld = resolve;
@@ -285,6 +334,29 @@ export async function testAppGithubCommentProjectionInBrowser() {
   const lateRead = api.fetchPrExtras(url);
   await oldStart;
   const operation = operations.get(creation.operationId)!;
+  operation.status = "inflight";
+  operation.revision++;
+  revision++;
+  await githubWrites.snapshot(scope);
+  await wait(
+    () => !!card(localKey)?.querySelector('[data-github-sync-status="inflight"] .animate-spin'),
+    "Active comment sync missing animated GitHub status",
+  );
+  operation.status = "uncertain";
+  operation.revision++;
+  revision++;
+  await githubWrites.snapshot(scope);
+  await wait(
+    () =>
+      !!card(localKey)?.querySelector(
+        '[data-github-sync-status="uncertain"][aria-label*="do not resend"]',
+      ),
+    "Uncertain comment missing accessible no-resend warning",
+  );
+  check(
+    !card(localKey)?.querySelector(".animate-spin"),
+    "Uncertain comment falsely shows active sync",
+  );
   operation.status = "synced";
   operation.revision++;
   operation.attempts = 1;
@@ -352,13 +424,37 @@ export async function testAppGithubCommentProjectionInBrowser() {
     () => [...operations.values()].some((item) => item.command.action.kind === "approve"),
     "Approval admission did not settle before identity test",
   );
+  const approvalButton = () =>
+    [...document.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Approval pending",
+    );
+  await wait(
+    () => !!approvalButton()?.querySelector('[data-github-sync-status="queued"]'),
+    "Approval missing shared queued status",
+  );
+  const approvalOperation = [...operations.values()].find(
+    (item) => item.command.action.kind === "approve",
+  )!;
+  for (const status of ["inflight", "retry-failed", "uncertain", "queued"] as const) {
+    approvalOperation.status = status;
+    approvalOperation.revision++;
+    revision++;
+    await githubWrites.snapshot(scope);
+    await wait(
+      () => !!approvalButton()?.querySelector(`[data-github-sync-status="${status}"]`),
+      `Approval missing shared ${status} status`,
+    );
+  }
   check(
     ![...document.querySelectorAll("button")].some(
       (button) => button.textContent?.trim() === "Approved",
     ),
     "Pending approval falsely appeared approved",
   );
-  check(calls === operations.size, "Background refresh re-enqueued a write");
+  check(
+    calls === operations.size + 1,
+    "Background refresh re-enqueued a write beyond the explicit content duplicate",
+  );
   check(
     ![...document.querySelectorAll('[aria-label="GitHub pending writes"] > details')].some((node) =>
       node.hasAttribute("open"),

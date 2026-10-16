@@ -7,6 +7,7 @@ import { createPendingCommentFormState } from "../lib/comment-save";
 import { createGithubEditorDraft } from "../lib/github-editor-draft";
 import { parseMarkdown } from "../lib/markdown";
 import { createRecoverableDraft } from "../lib/recoverable-drafts";
+import { GithubSyncStatus } from "./GithubSyncStatus";
 
 // Shared comment data interface that works for both PRComment and IssueComment
 export interface CommentData {
@@ -638,7 +639,10 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
           variant="primary"
           size="sm"
         >
-          {isSubmitting() ? "Commenting..." : "Comment"}
+          <Show when={isSubmitting()}>
+            <GithubSyncStatus status="saving-local" iconOnly />
+          </Show>
+          {isSubmitting() ? "Saving locally…" : "Comment"}
         </Button>
         <Button
           type="button"

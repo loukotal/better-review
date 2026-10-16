@@ -235,3 +235,115 @@ export async function testGithubOutboxInBrowser() {
   }
   return { passed };
 }
+
+/** Separate editor intents/tabs, canonical receipt, real IndexedDB reopening. */
+export async function testContentDuplicateReceiptInBrowser() {
+  let passed = 0;
+  const check = (value: unknown, message: string) => {
+    if (!value) throw new Error(message);
+    passed++;
+  };
+  const name = `github-content-dedup-${crypto.randomUUID()}`;
+  const scope: GithubPrScope = {
+    host: "github.com",
+    owner: "owner",
+    repo: "repo",
+    number: 1,
+    url: "https://github.com/owner/repo/pull/1",
+  };
+  const actor = { id: 1, login: "author" };
+  let canonical: GithubOutboxOperation | undefined;
+  let calls = 0;
+  const transport: GithubOutboxTransport = {
+    async enqueue(command) {
+      calls++;
+      if (canonical) return { outcome: "duplicate", operation: canonical };
+      canonical = {
+        command,
+        revision: 1,
+        sequence: 1,
+        status: "queued",
+        retryMode: "automatic",
+        attempts: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return { outcome: "accepted", operation: canonical };
+    },
+    async snapshot() {
+      return { scope, revision: 1, operations: canonical ? [canonical] : [] };
+    },
+    async heartbeat() {},
+    async control() {
+      throw new Error("not used");
+    },
+  };
+  let journal = createIndexedDbGithubJournal(name);
+  const secondJournal = createIndexedDbGithubJournal(name);
+  let client = createGithubOutbox({ journal, transport });
+  const other = createGithubOutbox({ journal: secondJournal, transport });
+  try {
+    const firstDraft = await journal.openEditor("first-tab", scope);
+    const secondDraft = await secondJournal.openEditor("second-tab", scope);
+    await journal.saveEditor(firstDraft.key, "same text");
+    await secondJournal.saveEditor(secondDraft.key, "same text");
+    const a = await client.submit({
+      scope,
+      actor,
+      action: { kind: "issue-comment", body: "same text" },
+      draftKey: firstDraft.key,
+    });
+    await client.recover(scope);
+    const b = await other.submit({
+      scope,
+      actor,
+      action: { kind: "issue-comment", body: "same text" },
+      draftKey: secondDraft.key,
+    });
+    await other.recover(scope);
+    await client.recover(scope);
+    check(a.operationId !== b.operationId, "separate submits use distinct UUIDs");
+    check(
+      client.getState(scope).operations.length === 1 && other.getState(scope).pendingCount === 1,
+      "two tabs render only canonical pending operation",
+    );
+    check(
+      (await journal.entries(scope)).every((entry) => entry.backendOwned),
+      "duplicate alias acknowledged, never left queued locally",
+    );
+    check(
+      (await journal.draft(secondDraft.key))?.submittedOperationId === a.operationId,
+      "duplicate draft linked to canonical operation",
+    );
+    check(
+      (await journal.openEditor("second-tab", scope)).body === "",
+      "submitted duplicate editor stays cleared",
+    );
+    check((await journal.editorDrafts(scope)).length === 0, "no restored duplicate drafts");
+    await other.close();
+    await client.close();
+    journal = createIndexedDbGithubJournal(name);
+    client = createGithubOutbox({ journal, transport });
+    const before = calls;
+    await client.recover(scope);
+    check(
+      calls === before && client.getState(scope).operations.length === 1,
+      "reload does not replay ghost alias",
+    );
+    const reused = await client.submit({
+      scope,
+      actor,
+      action: { kind: "issue-comment", body: "same text" },
+      draftKey: secondDraft.key,
+    });
+    check(
+      reused.operationId === b.operationId,
+      "submitted duplicate draft reuses original durable admission UUID",
+    );
+  } finally {
+    await other.close();
+    await client.close();
+    indexedDB.deleteDatabase(name);
+  }
+  return { passed };
+}

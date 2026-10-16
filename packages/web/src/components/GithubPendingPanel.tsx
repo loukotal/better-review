@@ -14,6 +14,7 @@ import {
 import { refreshPrListAfterReview } from "../lib/query";
 import { legacyGithubDraftRecovery } from "../lib/recoverable-drafts";
 import { trpc } from "../lib/trpc";
+import { GithubSyncStatus, githubSyncState } from "./GithubSyncStatus";
 
 /** Compact transport/recovery controls. Comment bodies belong to discussion/diff views. */
 export function GithubPendingPanel(props: {
@@ -108,6 +109,9 @@ export function GithubPendingPanel(props: {
       >
         <details>
           <summary>
+            <Show when={githubSyncState(pending())}>
+              {(status) => <GithubSyncStatus status={status()} iconOnly />}
+            </Show>
             GitHub ·{" "}
             {pending().length
               ? `${pending().length} saved locally, not synced`
@@ -169,10 +173,8 @@ export function GithubPendingPanel(props: {
                 data-operation-id={item.command.operationId}
                 class="flex flex-wrap items-center gap-2 py-1"
               >
-                <span>
-                  {item.command.action.kind} ·{" "}
-                  {item.status === "uncertain" ? "Uncertain · do not resend" : item.status}
-                </span>
+                <span>{item.command.action.kind}</span>
+                <GithubSyncStatus status={item.admissionError ? "retry-failed" : item.status} />
                 <Show when={item.operation?.error || item.admissionError}>
                   <span role="alert">{item.operation?.error?.message ?? item.admissionError}</span>
                 </Show>
@@ -214,7 +216,8 @@ export function GithubPendingPanel(props: {
               {(item) => (
                 <details>
                   <summary>
-                    {item.command.action.kind} · {item.status}
+                    {item.command.action.kind} ·{" "}
+                    <GithubSyncStatus status={item.status} showSynced />
                   </summary>
                   <pre class="whitespace-pre-wrap break-words">
                     {"body" in item.command.action

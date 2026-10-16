@@ -83,8 +83,10 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
       const receipt = store.transaction((): GithubOutboxReceipt => {
         const fingerprint = canonical(command);
         const prior = store.db
-          .prepare("SELECT fingerprint FROM operations WHERE id=?")
-          .get(command.operationId);
+          .prepare(
+            "SELECT fingerprint FROM operations WHERE id=? UNION ALL SELECT fingerprint FROM aliases WHERE id=?",
+          )
+          .get(command.operationId, command.operationId);
         if (prior)
           return prior.fingerprint === fingerprint
             ? { outcome: "duplicate", operation: store.get(command.operationId)! }
@@ -97,6 +99,8 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
           );
         if (actor.id !== command.expectedActor.id)
           return reject("identity-mismatch", "The operation belongs to another GitHub account.");
+        const admittedId = command.operationId;
+        command = store.normalize(command);
         for (const id of command.dependencies) {
           const dependency = store.get(id);
           // Requiring already-admitted parents makes cycles and forward edges impossible.
@@ -126,6 +130,13 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
               "The local reference does not name a creation of the required kind.",
             );
         }
+        const duplicate = store.contentDuplicate(command, now());
+        if (duplicate) {
+          store.db
+            .prepare("INSERT INTO aliases(id,operation_id,fingerprint) VALUES (?,?,?)")
+            .run(admittedId, duplicate.command.operationId, fingerprint);
+          return { outcome: "duplicate", operation: duplicate };
+        }
         store.db
           .prepare(
             "INSERT INTO scopes(scope,revision,sequence) VALUES (?,0,0) ON CONFLICT DO NOTHING",
@@ -149,13 +160,16 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
           updatedAt: stamp,
         };
         store.db
-          .prepare("INSERT INTO operations(id,scope,sequence,fingerprint,data) VALUES (?,?,?,?,?)")
+          .prepare(
+            "INSERT INTO operations(id,scope,sequence,fingerprint,data,content_key) VALUES (?,?,?,?,?,?)",
+          )
           .run(
             command.operationId,
             command.scope.url,
             operation.sequence,
             fingerprint,
             JSON.stringify(operation),
+            store.semantic(command).key,
           );
         for (const id of command.dependencies)
           store.db.prepare("INSERT INTO dependencies VALUES (?,?)").run(command.operationId, id);

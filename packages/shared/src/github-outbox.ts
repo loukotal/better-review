@@ -132,6 +132,8 @@ export interface GithubOutboxSnapshot {
 }
 
 export type GithubOutboxReceipt =
+  /** Content duplicates can return a different canonical operation UUID. The
+   * submitted UUID remains a durable alias with its own replay fingerprint. */
   | { outcome: "accepted" | "duplicate"; operation: GithubOutboxOperation }
   | { outcome: "rejected"; operationId: string; error: GithubOutboxError };
 

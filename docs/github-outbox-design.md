@@ -12,6 +12,33 @@ The worker, adapter, database and browser projection implement this shared contr
 - Server commits operation and per-PR sequence before receipt. Same operation ID
   plus same original payload is duplicate; different payload is conflict, including
   after revision. Keep the original admission fingerprint separately.
+- Different UUIDs with the same semantic content return `duplicate` with the existing
+  canonical operation. Admission atomically persists the submitted UUID as an alias
+  with its original fingerprint. Alias replay never expires; conflicting UUID reuse
+  still rejects. Dependencies and local targets resolve aliases before validation,
+  retaining PR/account/entity-kind checks. Controls may address an alias and operate
+  on the canonical record with the same revision and request-idempotency rules.
+- Content keys are SHA-256 over canonical PR, numeric actor ID, action and all effect
+  fields (exact text, expected body/head, full anchor, target), plus dependency-set
+  semantics. UUID, actor login and timestamps are excluded. Pending, inflight,
+  uncertain and retry-failed matches dedup indefinitely; cancelled records never
+  match. Synced matches dedup for strictly less than 60 seconds from first sync,
+  not metadata enrichment. Historical synced rows without that timestamp are not
+  recent-sync evidence. Keys recompute from current commands, including revisions
+  and newly resolved local targets; original UUID fingerprints remain immutable.
+- A resolved local target and its known remote identity compare equally; local
+  reply targets use the verified root. The target's resolved creation dependency
+  is implicit; other explicit dependencies remain ordering constraints. Intervening
+  noncancelled actions with different semantics on the same target block dedup
+  against earlier actions, preserving resolve/unresolve/resolve and edit chains.
+  Edits/deletes of a candidate creation's own comment also block creation dedup,
+  using its canonical local identity (including aliases) or confirmed remote ID.
+  Recreating the original text after such a mutation is a distinct intent;
+  mutations of unrelated comments do not block dedup.
+- Browser receipts can name a different canonical UUID. Acknowledge the submitted
+  journal entry atomically with its draft's canonical link; preserve the original
+  command for replay. Collapse aliases in browser state/projection, never replay
+  an acknowledged alias or restore its submitted draft as an unsent editor.
 - Scope is lowercase owner/repo, `github.com`, positive PR number and exact canonical
   URL. Normalize before constructing commands, not silently during admission.
 - Admission performs no network. Compare expected stable numeric GitHub user ID

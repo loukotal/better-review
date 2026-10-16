@@ -45,7 +45,7 @@ export interface GithubEditorJournal {
 export interface BrowserGithubJournal extends GithubOutboxJournal {
   admit(command: GithubOutboxCommand, draftKey?: string): Promise<void>;
   entries(scope: GithubPrScope): Promise<GithubAdmission[]>;
-  acknowledge(operation: GithubOutboxOperation): Promise<void>;
+  acknowledge(operation: GithubOutboxOperation, submittedOperationId?: string): Promise<void>;
   admissionFailed(operationId: string, message: string): Promise<void>;
   saveDraft(draft: GithubDraft): Promise<void>;
   draft(key: string): Promise<GithubDraft | undefined>;
@@ -240,12 +240,28 @@ export function createIndexedDbGithubJournal(
         await (await db()).getAllFromIndex("admissions", "scope", githubScopeKey(scope))
       ).sort((a, b) => a.localOrder - b.localOrder);
     },
-    async acknowledge(operation) {
-      const tx = (await db()).transaction("admissions", "readwrite");
-      const entry = await tx.store.get(operation.command.operationId);
+    async acknowledge(operation, submittedOperationId = operation.command.operationId) {
+      const tx = (await db()).transaction(["admissions", "drafts"], "readwrite");
+      const store = tx.objectStore("admissions");
+      const entry = await store.get(submittedOperationId);
       if (entry && (!entry.operation || entry.operation.revision <= operation.revision)) {
         // Backend may have revised the command. Preserve original admission fingerprint.
-        await tx.store.put({ ...entry, backendOwned: true, operation, admissionError: undefined });
+        await store.put({ ...entry, backendOwned: true, operation, admissionError: undefined });
+        if (entry.draftKey) {
+          const draft = await tx.objectStore("drafts").get(entry.draftKey);
+          if (draft)
+            await tx
+              .objectStore("drafts")
+              .put({ ...draft, submittedOperationId: operation.command.operationId });
+        }
+      }
+      // Refresh every receipt alias too, so reload cannot resurrect stale state.
+      for (const alias of await store.getAll()) {
+        if (
+          alias.operation?.command.operationId === operation.command.operationId &&
+          alias.operation.revision <= operation.revision
+        )
+          await store.put({ ...alias, operation });
       }
       await tx.done;
     },

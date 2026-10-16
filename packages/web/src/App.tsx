@@ -24,6 +24,7 @@ import { DiffStatsBadge } from "./components/DiffStatsBadge";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
 import { GithubCommentCard } from "./components/GithubCommentCard";
 import { GithubPendingPanel } from "./components/GithubPendingPanel";
+import { githubSyncState } from "./components/GithubSyncStatus";
 import { InlineFindingComment } from "./components/InlineFindingComment";
 import { InlineSourceView } from "./components/InlineSourceView";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
@@ -1092,6 +1093,14 @@ const AppContent: Component = () => {
                   </Button>
                 </SettingsPanel>
                 <ApproveButton
+                  approvalSyncState={githubSyncState(
+                    outboxOperations().filter(
+                      (item) =>
+                        item.command.action.kind === "approve" &&
+                        item.command.action.expectedHeadSha === diffRevision().headSha &&
+                        item.status !== "cancelled",
+                    ),
+                  )}
                   expectedHeadSha={diffRevision().headSha}
                   canSubmit={loadedPrUrl() === prUrl()}
                   approvalState={

@@ -10,6 +10,7 @@ import type { BrowserGithubOperation } from "../lib/github-outbox";
 import type { GithubCommentView, GithubThreadView } from "../lib/github-outbox-projection";
 import { queueGithubWrite, refreshGithubActor } from "../lib/github-writes";
 import { parseMarkdown } from "../lib/markdown";
+import { GithubSyncStatus, githubSyncState } from "./GithubSyncStatus";
 
 /** View-model wrapper: a local ref never masquerades as a GitHub numeric comment ID. */
 export function createGithubCommentUiState() {
@@ -47,17 +48,21 @@ export function GithubCommentCard(props: {
         ),
     );
   const ref = () => props.comment.localRef ?? props.comment.ref;
-  const stateLabel = () => {
+  const syncState = () => {
     if (!props.comment.pending) return undefined;
     const items = props.operations.filter((item) =>
       props.comment.operationIds.includes(item.command.operationId),
     );
-    if (items.some((item) => item.status === "uncertain"))
-      return "Uncertain · action needed (do not resend)";
-    if (items.some((item) => item.status === "retry-failed" || item.admissionError))
-      return "Not synced · action needed";
-    return "Saved locally · not synced";
+    return githubSyncState(items) ?? "local-pending";
   };
+  const threadSyncState = () =>
+    props.thread?.pending
+      ? (githubSyncState(
+          props.operations.filter((item) =>
+            props.thread?.operationIds.includes(item.command.operationId),
+          ),
+        ) ?? "local-pending")
+      : undefined;
   const submit = async (action: GithubWriteAction) => {
     if (saving()) return;
     setSaving(true);
@@ -114,8 +119,9 @@ export function GithubCommentCard(props: {
         when={!props.comment.deleted}
         fallback={
           <>
-            <p role="status">
-              {props.comment.pending ? `Deletion · ${stateLabel()}` : "Comment deleted"}
+            <p class="flex items-center gap-1">
+              {props.comment.pending ? "Deletion" : "Comment deleted"}
+              <Show when={syncState()}>{(status) => <GithubSyncStatus status={status()} />}</Show>
             </p>
             <details>
               <summary>Recover deleted content</summary>
@@ -140,10 +146,9 @@ export function GithubCommentCard(props: {
               {details().createdAt ? new Date(details().createdAt!).toLocaleDateString() : "GitHub"}
             </a>
           </Show>
-          <Show when={stateLabel()}>
-            <span role="status" class="text-accent">
-              {stateLabel()}
-            </span>
+          <Show when={syncState()}>{(status) => <GithubSyncStatus status={status()} />}</Show>
+          <Show when={saving()}>
+            <GithubSyncStatus status="saving-local" />
           </Show>
         </div>
         <Show
@@ -269,8 +274,10 @@ export function GithubCommentCard(props: {
                 }}
               >
                 {props.thread?.resolved ? "Unresolve" : "Resolve"}
-                {props.thread?.pending ? " (pending)" : ""}
               </Button>
+              <Show when={threadSyncState()}>
+                {(status) => <GithubSyncStatus status={status()} />}
+              </Show>
             </Show>
           </div>
         </Show>

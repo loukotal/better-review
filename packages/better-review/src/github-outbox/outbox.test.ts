@@ -179,7 +179,7 @@ test("pre-owner v1/v2 migrations preserve durable operations, dependencies and h
       // Migration only: never start a worker or make a network call.
       const migrated = await OutboxDatabase.open(f.options.databasePath);
       try {
-        assert.equal(migrated.db.prepare("PRAGMA user_version").get()?.user_version, 3);
+        assert.equal(migrated.db.prepare("PRAGMA user_version").get()?.user_version, 4);
         assert.deepEqual(
           tables.map((table) =>
             JSON.stringify(migrated.db.prepare(`SELECT * FROM ${table}`).all()),
@@ -336,6 +336,579 @@ async function operation(f: Awaited<ReturnType<typeof fixture>>, id: string, pr 
   assert.ok(op);
   return op;
 }
+
+test("content admission aliases different UUIDs durably, preserves original replay and local child identity", async (t) => {
+  const f = await fixture(t);
+  const a = command();
+  const b = command({ expectedActor: { ...actor, login: "renamed" } });
+  assert.equal((await f.box.enqueue(a)).outcome, "accepted");
+  const receipt = await f.box.enqueue(b);
+  assert.equal(receipt.outcome, "duplicate");
+  if (receipt.outcome === "rejected") return;
+  assert.equal(receipt.operation.command.operationId, a.operationId);
+  assert.equal((await f.box.snapshot(scope)).operations.length, 1);
+  await f.reopen();
+  f.advance(120_000);
+  assert.equal((await f.box.enqueue(b)).outcome, "duplicate");
+  assert.equal(
+    (await f.box.enqueue({ ...b, action: { kind: "issue-comment", body: "changed" } })).outcome,
+    "rejected",
+  );
+  const child = command({
+    action: {
+      kind: "edit-comment",
+      target: { source: "local", kind: "issue-comment", operationId: b.operationId },
+      body: "edited",
+      expectedBody: "hello",
+    },
+    dependencies: [b.operationId],
+  });
+  const admitted = await f.box.enqueue(child);
+  assert.equal(admitted.outcome, "accepted");
+  if (admitted.outcome !== "rejected") {
+    assert.deepEqual(admitted.operation.command.dependencies, [a.operationId]);
+    assert.deepEqual(admitted.operation.command.action, {
+      ...child.action,
+      target: { source: "local", kind: "issue-comment", operationId: a.operationId },
+    });
+  }
+  assert.equal((await f.box.enqueue(child)).outcome, "duplicate");
+  assert.equal(f.adapter.posts.length, 0);
+});
+
+test("content dedup uses first synced time: 59s duplicate, enrichment does not extend 61s window; aliases never expire", async (t) => {
+  const f = await fixture(t);
+  const a = command();
+  await f.box.enqueue(a);
+  await f.activate();
+  await until(async () => (await operation(f, a.operationId)).status === "synced");
+  f.advance(59_000);
+  const b = command();
+  assert.equal((await f.box.enqueue(b)).outcome, "duplicate");
+  await f.box.close();
+  const store = await OutboxDatabase.open(f.options.databasePath);
+  const op = store.get(a.operationId)!;
+  op.updatedAt = new Date(Date.parse(op.updatedAt) + 59_000).toISOString();
+  store.transaction(() => store.save(op));
+  await store.close();
+  await f.reopen();
+  f.advance(2_000);
+  assert.equal((await f.box.enqueue(command())).outcome, "accepted");
+  assert.equal((await f.box.enqueue(b)).outcome, "duplicate");
+  assert.equal((await f.box.enqueue(a)).outcome, "duplicate");
+});
+
+test("uncertain and retry-failed content remains deduped indefinitely across restart; cancellation and revision invalidate keys", async (t) => {
+  const f = await fixture(t);
+  const a = command();
+  await f.box.enqueue(a);
+  await f.box.close();
+  let store = await OutboxDatabase.open(f.options.databasePath);
+  const op = store.get(a.operationId)!;
+  op.status = "uncertain";
+  store.transaction(() => store.save(op));
+  await store.close();
+  await f.reopen();
+  f.advance(1_000_000);
+  assert.equal((await f.box.enqueue(command())).outcome, "duplicate");
+  await f.box.control({
+    requestId: randomUUID(),
+    operationId: a.operationId,
+    expectedRevision: op.revision,
+    kind: "resolve-uncertainty",
+    resolution: { kind: "confirm-not-applied" },
+  });
+  assert.equal((await f.box.enqueue(command())).outcome, "duplicate");
+  const failed = await operation(f, a.operationId);
+  await f.box.control({
+    requestId: randomUUID(),
+    operationId: a.operationId,
+    expectedRevision: failed.revision,
+    kind: "cancel",
+  });
+  const fresh = command();
+  assert.equal((await f.box.enqueue(fresh)).outcome, "accepted");
+  await f.box.control({
+    requestId: randomUUID(),
+    operationId: fresh.operationId,
+    expectedRevision: 1,
+    kind: "revise",
+    body: "revised",
+  });
+  assert.equal(
+    (await f.box.enqueue(command({ action: { kind: "issue-comment", body: "revised" } }))).outcome,
+    "duplicate",
+  );
+  assert.equal((await f.box.enqueue(command())).outcome, "accepted");
+  assert.equal((await f.box.enqueue(fresh)).outcome, "duplicate");
+});
+
+test("semantic keys retain exact text, head, full anchor, expected body, dependency ordering and thread transitions", async (t) => {
+  const f = await fixture(t);
+  const base = command({
+    action: {
+      kind: "inline-comment",
+      body: "text",
+      expectedHeadSha: "a".repeat(40),
+      anchor: { path: "a.ts", side: "RIGHT", line: 3 },
+    },
+  });
+  await f.box.enqueue(base);
+  assert.equal((await f.box.enqueue({ ...base, operationId: randomUUID() })).outcome, "duplicate");
+  assert.equal(base.action.kind, "inline-comment");
+  if (base.action.kind !== "inline-comment") return;
+  for (const action of [
+    { ...base.action, body: "text " },
+    { ...base.action, expectedHeadSha: "b".repeat(40) },
+    {
+      ...base.action,
+      anchor: { ...base.action.anchor, startLine: 2, startSide: "RIGHT" as const },
+    },
+    { ...base.action, anchor: { ...base.action.anchor, line: 4 } },
+    { ...base.action, anchor: { ...base.action.anchor, path: "b.ts" } },
+    { ...base.action, anchor: { ...base.action.anchor, side: "LEFT" as const } },
+  ])
+    assert.equal((await f.box.enqueue(command({ action }))).outcome, "accepted");
+  const target = { source: "remote", kind: "thread", nodeId: "thread-1" } as const;
+  for (const kind of ["resolve-thread", "unresolve-thread", "resolve-thread"] as const)
+    assert.equal((await f.box.enqueue(command({ action: { kind, target } }))).outcome, "accepted");
+  assert.equal(
+    (await f.box.enqueue(command({ action: { kind: "resolve-thread", target } }))).outcome,
+    "duplicate",
+  );
+  const edit = {
+    kind: "edit-comment",
+    target: { source: "remote", kind: "issue-comment", id: 123 },
+    body: "new",
+    expectedBody: "old",
+  } as const;
+  assert.equal((await f.box.enqueue(command({ action: edit }))).outcome, "accepted");
+  assert.equal(
+    (await f.box.enqueue(command({ action: { ...edit, expectedBody: "different" } }))).outcome,
+    "accepted",
+  );
+  assert.equal(
+    (
+      await f.box.enqueue(
+        command({
+          action: { kind: "issue-comment", body: "hello" },
+          dependencies: [base.operationId],
+        }),
+      )
+    ).outcome,
+    "accepted",
+  );
+  assert.equal((await f.box.enqueue(command())).outcome, "accepted");
+});
+
+test("synced local/alias targets and remote targets dedup; alias controls change only canonical operation", async (t) => {
+  const f = await fixture(t);
+  const parent = command();
+  await f.box.enqueue(parent);
+  const alias = command();
+  await f.box.enqueue(alias);
+  await f.activate();
+  await until(async () => (await operation(f, parent.operationId)).status === "synced");
+  await f.box.heartbeat({ clientId: randomUUID(), scope, visible: false });
+  const local = command({
+    action: {
+      kind: "edit-comment",
+      target: { source: "local", kind: "issue-comment", operationId: alias.operationId },
+      body: "changed",
+      expectedBody: "hello",
+    },
+    dependencies: [alias.operationId],
+  });
+  await f.box.enqueue(local);
+  const remote = command({
+    action: {
+      kind: "edit-comment",
+      target: { source: "remote", kind: "issue-comment", id: 123 },
+      body: "changed",
+      expectedBody: "hello",
+    },
+  });
+  const duplicate = await f.box.enqueue(remote);
+  assert.equal(duplicate.outcome, "duplicate");
+  if (duplicate.outcome === "rejected") return;
+  const control = {
+    requestId: randomUUID(),
+    operationId: remote.operationId,
+    expectedRevision: duplicate.operation.revision,
+    kind: "cancel",
+  } as const;
+  assert.equal((await f.box.control(control)).outcome, "applied");
+  assert.equal((await operation(f, local.operationId)).status, "cancelled");
+  assert.equal((await f.box.control(control)).outcome, "duplicate");
+  assert.equal((await f.box.control({ ...control, kind: "retry" })).outcome, "rejected");
+});
+
+test("creation content dedup preserves recreation after edits/deletes of its local, alias or remote identity", async (t) => {
+  for (const kind of ["issue-comment", "inline-comment"] as const)
+    for (const status of ["queued", "synced"] as const)
+      for (const targetSource of ["local", "alias", "remote"] as const)
+        for (const mutation of ["edit-comment", "delete-comment"] as const) {
+          if (status === "queued" && targetSource === "remote") continue;
+          await t.test(`${kind}/${status}/${targetSource}/${mutation}`, async (t) => {
+            const f = await fixture(t);
+            const action: GithubWriteAction =
+              kind === "issue-comment"
+                ? { kind, body: "hello" }
+                : {
+                    kind,
+                    body: "hello",
+                    expectedHeadSha: "a".repeat(40),
+                    anchor: { path: "a.ts", side: "RIGHT", line: 1 },
+                  };
+            const creation = command({ action });
+            const alias = command({ action });
+            await f.box.enqueue(creation);
+            assert.equal((await f.box.enqueue(alias)).outcome, "duplicate");
+            const commentKind = kind === "issue-comment" ? "issue-comment" : "review-comment";
+            if (status === "synced") {
+              await f.box.close();
+              const store = await OutboxDatabase.open(f.options.databasePath);
+              try {
+                const op = store.get(creation.operationId)!;
+                op.status = "synced";
+                const confirmed = result(op);
+                op.result =
+                  commentKind === "issue-comment"
+                    ? confirmed
+                    : {
+                        ...confirmed,
+                        kind: "review-comment",
+                        location: {
+                          path: "a.ts",
+                          side: "RIGHT",
+                          line: 1,
+                          originalLine: 1,
+                          commitSha: "a".repeat(40),
+                        },
+                      };
+                store.transaction(() => store.save(op));
+              } finally {
+                await store.close();
+              }
+              await f.reopen();
+              f.advance(59_000);
+            }
+            const unrelatedParent = command({ action: { ...action, body: "unrelated creation" } });
+            const unrelatedAlias = { ...unrelatedParent, operationId: randomUUID() };
+            await f.box.enqueue(unrelatedParent);
+            await f.box.enqueue(unrelatedAlias);
+            const unrelatedTargets = [
+              { source: "remote" as const, kind: commentKind, id: 999 },
+              {
+                source: "remote" as const,
+                kind:
+                  commentKind === "issue-comment"
+                    ? ("review-comment" as const)
+                    : ("issue-comment" as const),
+                id: 123,
+              },
+              {
+                source: "local" as const,
+                kind: commentKind,
+                operationId: unrelatedAlias.operationId,
+              },
+            ];
+            for (const target of unrelatedTargets) {
+              await f.box.enqueue(
+                command({
+                  action:
+                    mutation === "edit-comment"
+                      ? {
+                          kind: mutation,
+                          target,
+                          body: "unrelated edit",
+                          expectedBody: "unrelated creation",
+                        }
+                      : { kind: mutation, target, expectedBody: "unrelated creation" },
+                  dependencies: target.source === "local" ? [target.operationId] : [],
+                }),
+              );
+              const unchanged = await f.box.enqueue(command({ action }));
+              assert.equal(
+                unchanged.outcome,
+                "duplicate",
+                "unrelated local/remote/kind mutations must preserve original dedup, including at 59 seconds",
+              );
+              if (unchanged.outcome !== "rejected")
+                assert.equal(unchanged.operation.command.operationId, creation.operationId);
+            }
+            const target =
+              targetSource === "remote"
+                ? { source: "remote" as const, kind: commentKind, id: 123 }
+                : {
+                    source: "local" as const,
+                    kind: commentKind,
+                    operationId:
+                      targetSource === "alias" ? alias.operationId : creation.operationId,
+                  };
+            const change = command({
+              action:
+                mutation === "edit-comment"
+                  ? { kind: mutation, target, body: "changed", expectedBody: "hello" }
+                  : { kind: mutation, target, expectedBody: "hello" },
+              dependencies: target.source === "local" ? [target.operationId] : [],
+            });
+            const cancelled = { ...change, operationId: randomUUID() };
+            assert.equal((await f.box.enqueue(cancelled)).outcome, "accepted");
+            await f.box.control({
+              requestId: randomUUID(),
+              operationId: cancelled.operationId,
+              expectedRevision: 1,
+              kind: "cancel",
+            });
+            assert.equal(
+              (await f.box.enqueue(command({ action }))).outcome,
+              "duplicate",
+              "cancelled mutations must not consume the creation effect",
+            );
+            assert.equal((await f.box.enqueue(change)).outcome, "accepted");
+            const replacement = command({ action });
+            const admitted = await f.box.enqueue(replacement);
+            assert.equal(
+              admitted.outcome,
+              "accepted",
+              "recreation must survive an intervening mutation of the original creation",
+            );
+            if (admitted.outcome === "rejected") return;
+            assert.equal(admitted.operation.command.operationId, replacement.operationId);
+            // Original UUIDs/aliases must still replay to the original, even
+            // though fresh UUIDs now represent a distinct creation intent.
+            for (const original of [creation, alias]) {
+              const replay = await f.box.enqueue(original);
+              assert.equal(replay.outcome, "duplicate");
+              if (replay.outcome !== "rejected")
+                assert.equal(replay.operation.command.operationId, creation.operationId);
+            }
+            await f.reopen();
+            const unrelated = command({
+              action:
+                mutation === "edit-comment"
+                  ? {
+                      kind: mutation,
+                      target: { source: "remote", kind: commentKind, id: 999 },
+                      body: "changed elsewhere",
+                      expectedBody: "elsewhere",
+                    }
+                  : {
+                      kind: mutation,
+                      target: { source: "remote", kind: commentKind, id: 999 },
+                      expectedBody: "elsewhere",
+                    },
+            });
+            await f.box.enqueue(unrelated);
+            const repeated = await f.box.enqueue(command({ action }));
+            assert.equal(
+              repeated.outcome,
+              "duplicate",
+              "unrelated target mutations must not disable dedup",
+            );
+            if (repeated.outcome !== "rejected")
+              assert.equal(repeated.operation.command.operationId, replacement.operationId);
+            assert.equal(f.adapter.posts.length, 0);
+          });
+        }
+});
+
+test("content dedup stays scoped to canonical PR and numeric actor, never login", async (t) => {
+  let cachedActor = actor;
+  const f = await fixture(t, { getCachedActor: () => cachedActor });
+  await f.box.enqueue(command());
+  assert.equal((await f.box.enqueue(command({ scope: otherScope }))).outcome, "accepted");
+  cachedActor = { id: actor.id + 1, login: actor.login };
+  assert.equal((await f.box.enqueue(command({ expectedActor: cachedActor }))).outcome, "accepted");
+  assert.equal((await f.box.enqueue(command())).outcome, "rejected");
+  cachedActor = { ...actor, login: "new-name" };
+  assert.equal((await f.box.enqueue(command({ expectedActor: cachedActor }))).outcome, "duplicate");
+});
+
+test("v3 migration indexes pending content but never invents a recent sync time from stale enrichment", async (t) => {
+  const f = await fixture(t);
+  const pending = command();
+  const synced = command({ action: { kind: "issue-comment", body: "old synced" } });
+  const incomplete = command({ action: { kind: "issue-comment", body: "old incomplete" } });
+  for (const cmd of [pending, synced, incomplete]) await f.box.enqueue(cmd);
+  await f.box.close();
+  const db = new DatabaseSync(f.options.databasePath);
+  db.exec(
+    "DROP TABLE aliases; DROP INDEX operations_content; ALTER TABLE operations DROP COLUMN content_key; ALTER TABLE operations DROP COLUMN synced_at; PRAGMA user_version=3",
+  );
+  db.prepare("UPDATE operations SET data=json_set(data,'$.status','synced') WHERE id=?").run(
+    synced.operationId,
+  );
+  db.prepare("UPDATE operations SET data=json_remove(data,'$.command.action.body') WHERE id=?").run(
+    incomplete.operationId,
+  );
+  const original = db.prepare("SELECT fingerprint,data FROM operations ORDER BY sequence").all();
+  db.close();
+  await f.reopen();
+  assert.equal((await f.box.enqueue(command())).outcome, "duplicate");
+  assert.equal((await f.box.enqueue(command({ action: synced.action }))).outcome, "accepted");
+  assert.equal((await f.box.enqueue(command({ action: incomplete.action }))).outcome, "accepted");
+  await f.box.close();
+  const inspect = new DatabaseSync(f.options.databasePath);
+  try {
+    assert.deepEqual(
+      inspect.prepare("SELECT fingerprint,data FROM operations ORDER BY sequence LIMIT 3").all(),
+      original,
+    );
+    assert.equal(
+      inspect.prepare("SELECT synced_at FROM operations WHERE id=?").get(synced.operationId)
+        ?.synced_at,
+      null,
+    );
+    assert.equal(
+      inspect
+        .prepare("SELECT length(content_key) AS length FROM operations WHERE id=?")
+        .get(pending.operationId)?.length,
+      64,
+    );
+    assert.equal(
+      inspect.prepare("SELECT content_key FROM operations WHERE id=?").get(incomplete.operationId)
+        ?.content_key,
+      null,
+    );
+  } finally {
+    inspect.close();
+  }
+  const enriched = await OutboxDatabase.open(f.options.databasePath);
+  try {
+    const old = enriched.get(synced.operationId)!;
+    old.updatedAt = new Date().toISOString();
+    enriched.transaction(() => enriched.save(old));
+    assert.equal(
+      enriched.db.prepare("SELECT synced_at FROM operations WHERE id=?").get(synced.operationId)
+        ?.synced_at,
+      null,
+    );
+  } finally {
+    await enriched.close();
+  }
+});
+
+test("reply aliases preserve reply/edit chains, verified roots and dependency scope/kind validation", async (t) => {
+  const f = await fixture(t);
+  const parent = command({
+    action: {
+      kind: "reply",
+      body: "first reply",
+      target: { source: "remote", kind: "review-comment", id: 100 },
+    },
+  });
+  const alias = { ...parent, operationId: randomUUID() };
+  await f.box.enqueue(parent);
+  await f.box.enqueue(alias);
+  await f.box.close();
+  const store = await OutboxDatabase.open(f.options.databasePath);
+  const op = store.get(parent.operationId)!;
+  op.status = "synced";
+  op.result = {
+    kind: "review-comment",
+    id: 101,
+    inReplyToId: 100,
+    body: "first reply",
+    url: `${scope.url}#discussion_r101`,
+    author: actor,
+    createdAt: op.createdAt,
+    updatedAt: op.createdAt,
+    location: { path: "a.ts", side: "RIGHT", line: 1, originalLine: 1, commitSha: "a".repeat(40) },
+  };
+  store.transaction(() => store.save(op));
+  await store.close();
+  await f.reopen();
+  const second = command({
+    action: {
+      kind: "reply",
+      body: "second reply",
+      target: { source: "local", kind: "review-comment", operationId: alias.operationId },
+    },
+    dependencies: [alias.operationId],
+  });
+  assert.equal((await f.box.enqueue(second)).outcome, "accepted");
+  for (const id of [100, 101])
+    assert.equal(
+      (
+        await f.box.enqueue(
+          command({
+            action: {
+              kind: "reply",
+              body: "second reply",
+              target: { source: "remote", kind: "review-comment", id },
+            },
+          }),
+        )
+      ).outcome,
+      "duplicate",
+    );
+  const edit = command({
+    action: {
+      kind: "edit-comment",
+      body: "edited",
+      expectedBody: "first reply",
+      target: { source: "local", kind: "review-comment", operationId: alias.operationId },
+    },
+    dependencies: [alias.operationId],
+  });
+  assert.equal((await f.box.enqueue(edit)).outcome, "accepted");
+  assert.equal(
+    (
+      await f.box.enqueue(
+        command({
+          action: {
+            kind: "edit-comment",
+            body: "edited",
+            expectedBody: "first reply",
+            target: { source: "remote", kind: "review-comment", id: 101 },
+          },
+        }),
+      )
+    ).outcome,
+    "duplicate",
+  );
+  assert.equal(
+    (await f.box.enqueue({ ...edit, operationId: randomUUID(), scope: otherScope })).outcome,
+    "rejected",
+  );
+  assert.equal(
+    (
+      await f.box.enqueue({
+        ...edit,
+        operationId: randomUUID(),
+        action: {
+          kind: "resolve-thread",
+          target: { source: "local", kind: "thread", operationId: alias.operationId },
+        },
+      })
+    ).outcome,
+    "rejected",
+  );
+  const unknown = randomUUID();
+  assert.equal(
+    (
+      await f.box.enqueue(
+        command({
+          dependencies: [unknown],
+          action: {
+            kind: "reply",
+            body: "no fake IDs",
+            target: { source: "local", kind: "review-comment", operationId: unknown },
+          },
+        }),
+      )
+    ).outcome,
+    "rejected",
+  );
+  const explicit = command({
+    action: second.action,
+    dependencies: [alias.operationId, edit.operationId],
+  });
+  assert.equal((await f.box.enqueue(explicit)).outcome, "accepted");
+  assert.equal(f.adapter.posts.length, 0);
+});
 
 test("shutdown aborts held identity and adapter preflight before a successor acquires ownership", async (t) => {
   for (const stage of ["worker-identity", "adapter-preflight"] as const)
@@ -1248,7 +1821,7 @@ test("heartbeat and enqueue wake immediately; different PRs run concurrently, on
   await f.activate();
   await f.activate(otherScope);
   const a = command();
-  const b = command();
+  const b = command({ action: { kind: "issue-comment", body: "second write" } });
   const c = command({ scope: otherScope });
   await f.box.enqueue(a);
   await f.box.enqueue(b);
@@ -1274,7 +1847,7 @@ test("two visible tabs keep a PR active until last lease expires; hidden tab can
   await f.box.enqueue(a);
   await until(async () => (await operation(f, a.operationId)).status === "synced");
   f.advance(101);
-  const b = command();
+  const b = command({ action: { kind: "issue-comment", body: "second write" } });
   await f.box.enqueue(b);
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(f.adapter.posts.length, 1);
@@ -1398,7 +1971,7 @@ test("dispatch timeout remains uncertain and blocks the PR FIFO", async (t) => {
   await f.activate();
   f.adapter.send = () => new Promise(() => {});
   const a = command();
-  const b = command();
+  const b = command({ action: { kind: "issue-comment", body: "second write" } });
   await f.box.enqueue(a);
   await f.box.enqueue(b);
   await until(async () => (await operation(f, a.operationId)).status === "uncertain");

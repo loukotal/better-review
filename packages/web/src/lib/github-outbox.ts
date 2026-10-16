@@ -113,8 +113,9 @@ export function createGithubOutbox(options: {
     const value = state(scope);
     const operations = new Map<string, BrowserGithubOperation>();
     for (const entry of value.admissions) {
-      const operation = value.operations.get(entry.command.operationId) ?? entry.operation;
-      operations.set(entry.command.operationId, {
+      const id = entry.operation?.command.operationId ?? entry.command.operationId;
+      const operation = value.operations.get(id) ?? entry.operation;
+      operations.set(id, {
         command: operation?.command ?? entry.command,
         backendOwned: entry.backendOwned,
         status: operation?.status ?? "local-pending",
@@ -132,6 +133,21 @@ export function createGithubOutbox(options: {
         backendOwned: prior?.backendOwned ?? true,
         status: operation.status,
       });
+    }
+    const aliases = new Map(
+      value.admissions
+        .filter((entry) => entry.operation)
+        .map((entry) => [entry.command.operationId, entry.operation!.command.operationId]),
+    );
+    for (const item of operations.values()) {
+      item.command = structuredClone(item.command);
+      item.command.dependencies = [
+        ...new Set(item.command.dependencies.map((id) => aliases.get(id) ?? id)),
+      ];
+      if ("target" in item.command.action && item.command.action.target.source === "local")
+        item.command.action.target.operationId =
+          aliases.get(item.command.action.target.operationId) ??
+          item.command.action.target.operationId;
     }
     const list = [...operations.values()].sort(
       (a, b) =>
@@ -160,9 +176,9 @@ export function createGithubOutbox(options: {
       value.operations.set(operation.command.operationId, structuredClone(operation));
     }
   }
-  async function remember(operation: GithubOutboxOperation) {
+  async function remember(operation: GithubOutboxOperation, submittedOperationId?: string) {
     // Only claim ownership in the journal after this durable commit succeeds.
-    await journal.acknowledge(operation);
+    await journal.acknowledge(operation, submittedOperationId);
     merge(operation);
     await load(operation.command.scope);
   }
@@ -197,11 +213,14 @@ export function createGithubOutbox(options: {
           await journal.admissionFailed(operationId, receipt.error.message);
         } else {
           if (
-            receipt.operation.command.operationId !== operationId ||
-            receipt.operation.command.scope.url !== scope.url
+            (receipt.outcome === "accepted" &&
+              receipt.operation.command.operationId !== operationId) ||
+            receipt.operation.command.scope.url !== scope.url ||
+            receipt.operation.command.expectedActor.id !== entry.command.expectedActor.id ||
+            receipt.operation.command.action.kind !== entry.command.action.kind
           )
             throw new Error("Invalid receipt");
-          await remember(receipt.operation);
+          await remember(receipt.operation, operationId);
         }
         state(scope).error = undefined;
       } catch {
@@ -347,7 +366,10 @@ export function createGithubOutbox(options: {
         const draft = await journal.draft(draftKey);
         if (draft?.submittedOperationId) {
           const saved = (await journal.entries(command.scope)).find(
-            (entry) => entry.command.operationId === draft.submittedOperationId,
+            (entry) =>
+              entry.draftKey === draftKey &&
+              (entry.command.operationId === draft.submittedOperationId ||
+                entry.operation?.command.operationId === draft.submittedOperationId),
           );
           if (
             !saved ||
@@ -400,14 +422,18 @@ export function createGithubOutbox(options: {
       const request = structuredClone(control);
       if (!isGithubOutboxControl(request)) throw new Error("Invalid GitHub outbox control");
       await load(captured);
+      const trackedId = () =>
+        state(captured).admissions.find(
+          (entry) => entry.command.operationId === request.operationId,
+        )?.operation?.command.operationId ?? request.operationId;
       const tracked = getState(captured).operations.find(
-        (item) => item.command.operationId === request.operationId,
+        (item) => item.command.operationId === trackedId(),
       );
       if (!tracked) throw new Error("Operation does not belong to this pull request");
       // Never locally cancel a possibly admitted write. Backend decides safe cancellation.
       if (!tracked.backendOwned) await admit(captured, request.operationId, true);
       const current = getState(captured).operations.find(
-        (item) => item.command.operationId === request.operationId,
+        (item) => item.command.operationId === trackedId(),
       );
       if (!current?.backendOwned)
         throw new Error("Admission must be acknowledged before controlling this operation");
@@ -423,8 +449,11 @@ export function createGithubOutbox(options: {
     async draftForOperation(scope: GithubPrScope, operationId: string) {
       const captured = normalizeGithubPrScope(scope);
       await load(captured);
+      const canonicalId =
+        state(captured).admissions.find((entry) => entry.command.operationId === operationId)
+          ?.operation?.command.operationId ?? operationId;
       const entry = getState(captured).operations.find(
-        (item) => item.command.operationId === operationId,
+        (item) => item.command.operationId === canonicalId,
       );
       if (!entry) return undefined;
       const draft = entry.draftKey ? await journal.draft(entry.draftKey) : undefined;
@@ -432,7 +461,7 @@ export function createGithubOutbox(options: {
         body:
           draft?.body ?? ("body" in entry.command.action ? entry.command.action.body : undefined),
         draftKey: entry.draftKey,
-        submittedOperationId: operationId,
+        submittedOperationId: canonicalId,
         status: entry.status,
         // Cancellation is authoritative only after the backend confirms it.
         canRestore: entry.backendOwned && entry.status === "cancelled",
