@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { tsImport } from "tsx/esm/api";
 
+import { createBrowserGithubActions } from "./browser-github-actions.mjs";
 import config from "./browser-vite.config.mjs";
 
 // The browser contract test consumes real resolver output, not a reimplementation
@@ -57,6 +58,27 @@ async function open() {
     await route.abort("blockedbyclient");
   });
   const page = await context.newPage();
+  await page.exposeFunction("setBrowserMotionPreference", async (reducedMotion) => {
+    await page.emulateMedia({ reducedMotion });
+  });
+  await page.exposeFunction("dismissBrowserPopover", async (kind) => {
+    if (kind === "escape") await page.keyboard.press("Escape");
+    else await page.mouse.click(2, 2);
+  });
+  await page.exposeFunction("captureBrowserGithubComment", async () => {
+    await page.locator('[data-github-comment-key="remote:issue-comment:10"]').screenshot({
+      path: `${artifacts}/github-pending-comment.png`,
+      animations: "disabled",
+    });
+  });
+  let githubActions;
+  await page.exposeFunction("browserGithubActions", async (request) => {
+    githubActions ??= createBrowserGithubActions();
+    return (await githubActions).invoke(request);
+  });
+  context.on("close", () => {
+    void githubActions?.then((actions) => actions.close());
+  });
   await page.exposeFunction("decodeBrowserGithubReviewComments", decodeGithubReviewComments);
   await page.exposeFunction("resolveBrowserSourceWindow", (content, range) => {
     const ref = "a".repeat(40),

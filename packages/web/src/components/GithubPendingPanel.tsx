@@ -2,9 +2,11 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 
 import type { GithubOutboxControl } from "@better-review/shared";
 
-import { Button } from "../design-system";
+import { Button, Popover } from "../design-system";
+import { GitHubIcon } from "../icons/github-icon";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
 import type { GithubDraft } from "../lib/github-outbox-journal";
+import { createGithubSyncRefreshCoordinator } from "../lib/github-sync-refresh";
 import {
   githubPrScope,
   githubWrites,
@@ -22,9 +24,14 @@ export function GithubPendingPanel(props: {
   onRemoteSync: (url: string) => Promise<void>;
 }) {
   const [version, setVersion] = createSignal(0);
+  const [open, setOpen] = createSignal(false);
   const [error, setError] = createSignal<string>();
   const [drafts, setDrafts] = createSignal<GithubDraft[]>([]);
   const scope = createMemo(() => (props.prUrl ? githubPrScope(props.prUrl) : undefined));
+  createEffect(() => {
+    scope();
+    setOpen(false);
+  });
   const legacyDrafts = createMemo(() => {
     version();
     const current = scope();
@@ -41,7 +48,11 @@ export function GithubPendingPanel(props: {
         (item) => item.status !== "synced" && item.status !== "cancelled",
       ) ?? [],
   );
-  const refreshed = new Set<string>();
+  const refresh = createGithubSyncRefreshCoordinator({
+    refreshPr: (url) => props.onRemoteSync(url),
+    refreshList: refreshPrListAfterReview,
+  });
+  onCleanup(() => refresh.dispose());
   let draftRead = 0;
   createEffect(() => {
     version();
@@ -54,7 +65,7 @@ export function GithubPendingPanel(props: {
     void githubJournal
       .editorDrafts(current)
       .then((items) => {
-        if (serial === draftRead) setDrafts(items);
+        if (serial === draftRead) setDrafts(items.filter((item) => item.body.trim()));
       })
       .catch(() => {});
   });
@@ -76,13 +87,7 @@ export function GithubPendingPanel(props: {
     }
   });
   createEffect(() => {
-    const current = state();
-    if (!current) return;
-    for (const item of current.operations) {
-      if (item.status !== "synced" || refreshed.has(item.command.operationId)) continue;
-      refreshed.add(item.command.operationId);
-      void Promise.allSettled([props.onRemoteSync(current.scope.url), refreshPrListAfterReview()]);
-    }
+    refresh.observe(state());
   });
   const control = async (item: BrowserGithubOperation, kind: "retry" | "reconcile" | "cancel") => {
     const current = scope();
@@ -103,135 +108,132 @@ export function GithubPendingPanel(props: {
   };
   return (
     <Show when={state()?.operations.length || drafts().length || legacyDrafts().length}>
-      <section
-        aria-label="GitHub pending writes"
-        class="border-b border-border bg-bg-surface px-3 py-1 text-xs"
-      >
-        <details>
-          <summary>
-            <Show when={githubSyncState(pending())}>
-              {(status) => <GithubSyncStatus status={status()} iconOnly />}
+      <div aria-label="GitHub pending writes" class="fixed bottom-3 left-3 z-20 text-xs">
+        <Popover
+          label={pending().length ? "GitHub pending writes" : "GitHub saved content"}
+          width={360}
+          triggerSize="icon"
+          open={open()}
+          onOpenChange={setOpen}
+          trigger={
+            <span class="inline-flex items-center gap-1">
+              <Show when={githubSyncState(pending())} fallback={<GitHubIcon size={12} />}>
+                {(status) => <GithubSyncStatus status={status()} iconOnly />}
+              </Show>
+              <Show when={pending().length + drafts().length + legacyDrafts().length}>
+                <span aria-hidden="true">
+                  {pending().length + drafts().length + legacyDrafts().length}
+                </span>
+              </Show>
+            </span>
+          }
+        >
+          <Show when={open()}>
+            <Show when={legacyDrafts().length}>
+              <details>
+                <summary>Recover legacy editor text</summary>
+                <p>
+                  This older localStorage text may already have been submitted. Compare the
+                  outbox/GitHub before manually reusing it; it is never restored as a new intent
+                  automatically.
+                </p>
+                <For each={legacyDrafts()}>
+                  {(draft) => (
+                    <details>
+                      <summary>{draft.key}</summary>
+                      <pre class="whitespace-pre-wrap break-words">{draft.body}</pre>
+                    </details>
+                  )}
+                </For>
+              </details>
             </Show>
-            GitHub ·{" "}
-            {pending().length
-              ? `${pending().length} saved locally, not synced`
-              : drafts().length
-                ? `${drafts().length} unsubmitted drafts (not queued)`
-                : legacyDrafts().length
-                  ? `${legacyDrafts().length} legacy drafts available for recovery`
-                  : "All writes synced or cancelled"}
-            {pending().some(
-              (item) =>
-                item.status === "uncertain" ||
-                item.status === "retry-failed" ||
-                item.admissionError,
-            )
-              ? " · action needed"
-              : ""}
-          </summary>
-          <Show when={legacyDrafts().length}>
-            <details>
-              <summary>Recover legacy editor text</summary>
-              <p>
-                This older localStorage text may already have been submitted. Compare the
-                outbox/GitHub before manually reusing it; it is never restored as a new intent
-                automatically.
-              </p>
-              <For each={legacyDrafts()}>
-                {(draft) => (
-                  <details>
-                    <summary>{draft.key}</summary>
-                    <pre class="whitespace-pre-wrap break-words">{draft.body}</pre>
-                  </details>
-                )}
-              </For>
-            </details>
-          </Show>
-          <Show when={drafts().length}>
-            <details>
-              <summary>{drafts().length} unsubmitted drafts saved on this device</summary>
-              <For each={drafts()}>
-                {(draft) => (
-                  <details>
-                    <summary>{draft.editorSlot}</summary>
-                    <p>
-                      Unsubmitted editor content. Reopen the matching editor to continue; this is
-                      not a queued write.
-                    </p>
-                    <pre class="whitespace-pre-wrap break-words">{draft.body}</pre>
-                  </details>
-                )}
-              </For>
-            </details>
-          </Show>
-          <Show when={state()?.error || error()}>
-            <p role="alert">{error() ?? state()?.error}</p>
-          </Show>
-          <For each={pending()}>
-            {(item) => (
-              <div
-                data-operation-id={item.command.operationId}
-                class="flex flex-wrap items-center gap-2 py-1"
-              >
-                <span>{item.command.action.kind}</span>
-                <GithubSyncStatus status={item.admissionError ? "retry-failed" : item.status} />
-                <Show when={item.operation?.error || item.admissionError}>
-                  <span role="alert">{item.operation?.error?.message ?? item.admissionError}</span>
-                </Show>
-                <Show when={!item.backendOwned}>
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      const current = scope();
-                      if (current)
-                        void githubWrites.retryAdmission(current, item.command.operationId);
-                    }}
-                  >
-                    Check admission again
-                  </Button>
-                </Show>
-                <Show
-                  when={item.status === "retry-failed" && item.operation?.retryMode !== "blocked"}
-                >
-                  <Button size="sm" onClick={() => void control(item, "retry")}>
-                    Retry
-                  </Button>
-                </Show>
-                <Show when={item.status === "uncertain"}>
-                  <Button size="sm" onClick={() => void control(item, "reconcile")}>
-                    Check GitHub again (no resend)
-                  </Button>
-                </Show>
-                <Show when={item.status === "queued" || item.status === "retry-failed"}>
-                  <Button size="sm" onClick={() => void control(item, "cancel")}>
-                    Cancel queued write
-                  </Button>
-                </Show>
-              </div>
-            )}
-          </For>
-          <details>
-            <summary>Recover original saved content ({state()?.operations.length})</summary>
-            <For each={state()?.operations}>
+            <Show when={drafts().length}>
+              <details>
+                <summary>{drafts().length} unsubmitted drafts saved on this device</summary>
+                <For each={drafts()}>
+                  {(draft) => (
+                    <details>
+                      <summary>{draft.editorSlot}</summary>
+                      <p>
+                        Unsubmitted editor content. Reopen the matching editor to continue; this is
+                        not a queued write.
+                      </p>
+                      <pre class="whitespace-pre-wrap break-words">{draft.body}</pre>
+                    </details>
+                  )}
+                </For>
+              </details>
+            </Show>
+            <Show when={state()?.error || error()}>
+              <p role="alert">{error() ?? state()?.error}</p>
+            </Show>
+            <For each={pending()}>
               {(item) => (
-                <details>
-                  <summary>
-                    {item.command.action.kind} ·{" "}
-                    <GithubSyncStatus status={item.status} showSynced />
-                  </summary>
-                  <pre class="whitespace-pre-wrap break-words">
-                    {"body" in item.command.action
-                      ? item.command.action.body
-                      : "expectedBody" in item.command.action
-                        ? item.command.action.expectedBody
-                        : "Thread state change"}
-                  </pre>
-                </details>
+                <div
+                  data-operation-id={item.command.operationId}
+                  class="flex flex-wrap items-center gap-2 py-1"
+                >
+                  <span>{item.command.action.kind}</span>
+                  <GithubSyncStatus status={item.admissionError ? "retry-failed" : item.status} />
+                  <Show when={item.operation?.error || item.admissionError}>
+                    <span role="alert">
+                      {item.operation?.error?.message ?? item.admissionError}
+                    </span>
+                  </Show>
+                  <Show when={!item.backendOwned}>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const current = scope();
+                        if (current)
+                          void githubWrites.retryAdmission(current, item.command.operationId);
+                      }}
+                    >
+                      Check admission again
+                    </Button>
+                  </Show>
+                  <Show when={item.status === "retry-failed"}>
+                    <Button size="sm" onClick={() => void control(item, "retry")}>
+                      Retry
+                    </Button>
+                  </Show>
+                  <Show when={item.status === "uncertain"}>
+                    <Button size="sm" onClick={() => void control(item, "reconcile")}>
+                      Check GitHub again (no resend)
+                    </Button>
+                  </Show>
+                  <Show when={item.status === "queued" || item.status === "retry-failed"}>
+                    <Button size="sm" onClick={() => void control(item, "cancel")}>
+                      Cancel queued write
+                    </Button>
+                  </Show>
+                </div>
               )}
             </For>
-          </details>
-        </details>
-      </section>
+            <details>
+              <summary>Recover original saved content ({state()?.operations.length})</summary>
+              <p>Saved text only. Opening this history never queues or resends a write.</p>
+              <For each={state()?.operations}>
+                {(item) => (
+                  <details data-github-recovery-operation={item.command.operationId}>
+                    <summary>
+                      {item.command.action.kind} ·{" "}
+                      <GithubSyncStatus status={item.status} showSynced />
+                    </summary>
+                    <pre class="whitespace-pre-wrap break-words">
+                      {"body" in item.command.action
+                        ? item.command.action.body
+                        : "expectedBody" in item.command.action
+                          ? item.command.action.expectedBody
+                          : "Thread state change"}
+                    </pre>
+                  </details>
+                )}
+              </For>
+            </details>
+          </Show>
+        </Popover>
+      </div>
     </Show>
   );
 }

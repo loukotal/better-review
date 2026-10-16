@@ -1,4 +1,9 @@
-import type { GithubOutboxOperation, IssueComment, PRComment } from "@better-review/shared";
+import type {
+  GithubOutboxControl,
+  GithubOutboxOperation,
+  IssueComment,
+  PRComment,
+} from "@better-review/shared";
 import { isGithubOutboxCommand } from "@better-review/shared";
 
 import {
@@ -15,6 +20,8 @@ declare global {
   interface Window {
     /** Node-side production REST decoder, exposed by the isolated browser runner. */
     decodeBrowserGithubReviewComments(input: unknown): Promise<Omit<PRComment, "canEdit">[]>;
+    dismissBrowserPopover(kind: "escape" | "outside"): Promise<void>;
+    captureBrowserGithubComment(): Promise<void>;
   }
 }
 
@@ -53,6 +60,7 @@ export async function testAppGithubCommentProjectionInBrowser() {
     | (() => Promise<{ comments: PRComment[]; issueComments: IssueComment[]; status: null }>)
     | undefined;
   const operations = new Map<string, GithubOutboxOperation>();
+  const controls: GithubOutboxControl[] = [];
   let revision = 0,
     calls = 0,
     passed = 0,
@@ -117,6 +125,20 @@ export async function testAppGithubCommentProjectionInBrowser() {
     extras: { comments: remoteReviews, issueComments: remoteIssues, status: null },
     procedures: {
       "githubOutbox.enqueue": admit,
+      "githubOutbox.control": (input) => {
+        const control = input as GithubOutboxControl;
+        controls.push(control);
+        const item = operations.get(control.operationId)!;
+        if (control.kind === "cancel") {
+          item.status = "cancelled";
+          item.revision++;
+          revision++;
+        }
+        return {
+          outcome: "applied",
+          operation: structuredClone(item),
+        };
+      },
       "githubOutbox.identity": () => ({
         actor: identityKnown ? { id: 42, login: "browser-fixture" } : null,
       }),
@@ -176,10 +198,55 @@ export async function testAppGithubCommentProjectionInBrowser() {
   );
   check(
     !!document.querySelector(
-      '[aria-label="GitHub pending writes"] summary [data-github-sync-status="queued"]',
+      '[aria-label="GitHub pending writes"] button [data-github-sync-status="queued"]',
     ),
     "Global pending summary missing shared queued GitHub status",
   );
+  const pendingCard = card("remote:issue-comment:10")!;
+  const header = pendingCard.querySelector("[data-comment-header]")!;
+  check(
+    header.querySelectorAll("[data-github-sync-status]").length === 1,
+    "Comment header has duplicate sync indicators",
+  );
+  check(
+    header
+      .querySelector("[data-comment-date]")
+      ?.nextElementSibling?.hasAttribute("data-github-sync-status"),
+    "Sync icon is not beside date",
+  );
+  check(
+    header.querySelectorAll("svg").length === 1,
+    "Comment header has more than one status icon",
+  );
+  check(
+    !pendingCard.innerText.includes("not synced to GitHub"),
+    "Collapsed comment leaked sync labels",
+  );
+  check(
+    pendingCard.querySelectorAll("[data-comment-body]").length === 1,
+    "Pending operation duplicated comment body",
+  );
+  await window.captureBrowserGithubComment();
+  const statusButton = () =>
+    card("remote:issue-comment:10")!.querySelector<HTMLButtonElement>(
+      "[data-github-sync-status] button",
+    )!;
+  for (const dismissal of ["escape", "outside"] as const) {
+    statusButton().click();
+    await wait(
+      () => !!document.querySelector("[popover]:popover-open [data-operation-id]"),
+      "Sync details did not open",
+    );
+    check(
+      !!document.querySelector("[popover]:popover-open [data-operation-id]"),
+      "Sync popover omitted recovery controls",
+    );
+    await window.dismissBrowserPopover(dismissal);
+    await wait(
+      () => !document.querySelector("[popover]:popover-open"),
+      `Sync popover ignored ${dismissal}`,
+    );
+  }
   await fetchRemote();
   check(
     card("remote:issue-comment:10")?.querySelector("[data-comment-body]")?.textContent?.trim() ===
@@ -357,6 +424,37 @@ export async function testAppGithubCommentProjectionInBrowser() {
     !card(localKey)?.querySelector(".animate-spin"),
     "Uncertain comment falsely shows active sync",
   );
+  check(
+    !document.querySelector("[popover]:popover-open"),
+    "Uncertainty expanded recovery automatically",
+  );
+  card(localKey)!.querySelector<HTMLButtonElement>("[data-github-sync-status] button")!.click();
+  await wait(
+    () => !!document.querySelector("[popover]:popover-open [data-operation-id]"),
+    "Uncertain detail did not open",
+  );
+  const detailButtons = [
+    ...document.querySelectorAll<HTMLButtonElement>("[popover]:popover-open button"),
+  ];
+  check(
+    !detailButtons.some(
+      (item) => item.textContent?.trim() === "Retry" || item.textContent?.includes("Cancel queued"),
+    ),
+    "Uncertain detail exposed unsafe resend/cancel",
+  );
+  detailButtons.find((item) => item.textContent?.includes("Check GitHub again"))!.click();
+  await wait(
+    () =>
+      controls.some(
+        (item) => item.kind === "reconcile" && item.operationId === operation.command.operationId,
+      ),
+    "Check GitHub did not send reconcile control",
+  );
+  await window.dismissBrowserPopover("escape");
+  await wait(
+    () => !document.querySelector("[popover]:popover-open"),
+    "Uncertain detail did not close",
+  );
   operation.status = "synced";
   operation.revision++;
   operation.attempts = 1;
@@ -416,7 +514,7 @@ export async function testAppGithubCommentProjectionInBrowser() {
   await wait(
     () =>
       [...document.querySelectorAll("button")].some(
-        (button) => button.textContent?.trim() === "Approval pending",
+        (button) => button.getAttribute("aria-label") === "Approval pending",
       ),
     "Queued approval not labeled pending",
   );
@@ -426,7 +524,7 @@ export async function testAppGithubCommentProjectionInBrowser() {
   );
   const approvalButton = () =>
     [...document.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Approval pending",
+      (button) => button.getAttribute("aria-label") === "Approval pending",
     );
   await wait(
     () => !!approvalButton()?.querySelector('[data-github-sync-status="queued"]'),
@@ -435,6 +533,26 @@ export async function testAppGithubCommentProjectionInBrowser() {
   const approvalOperation = [...operations.values()].find(
     (item) => item.command.action.kind === "approve",
   )!;
+  const recovery = document.querySelector<HTMLButtonElement>(
+    'button[aria-label="GitHub pending writes"]',
+  )!;
+  check(
+    !document.querySelector('[aria-label="GitHub pending writes"] [data-operation-id]'),
+    "Global recovery mounted operation dump without a click",
+  );
+  recovery.click();
+  await wait(
+    () =>
+      !!document.querySelector(
+        `[popover]:popover-open [data-operation-id="${approvalOperation.command.operationId}"]`,
+      ),
+    "Aggregate recovery lost approval operation access",
+  );
+  await window.dismissBrowserPopover("escape");
+  await wait(
+    () => !document.querySelector("[popover]:popover-open"),
+    "Aggregate recovery ignored Escape",
+  );
   for (const status of ["inflight", "retry-failed", "uncertain", "queued"] as const) {
     approvalOperation.status = status;
     approvalOperation.revision++;
@@ -443,6 +561,10 @@ export async function testAppGithubCommentProjectionInBrowser() {
     await wait(
       () => !!approvalButton()?.querySelector(`[data-github-sync-status="${status}"]`),
       `Approval missing shared ${status} status`,
+    );
+    check(
+      !document.querySelector("[popover]:popover-open"),
+      `${status} expanded recovery automatically`,
     );
   }
   check(
@@ -456,9 +578,7 @@ export async function testAppGithubCommentProjectionInBrowser() {
     "Background refresh re-enqueued a write beyond the explicit content duplicate",
   );
   check(
-    ![...document.querySelectorAll('[aria-label="GitHub pending writes"] > details')].some((node) =>
-      node.hasAttribute("open"),
-    ),
+    !document.querySelector('[aria-label="GitHub pending writes"] [data-operation-id]'),
     "Transport audit dump opened by default",
   );
   identityKnown = false;
@@ -564,6 +684,30 @@ export async function testAppGithubCommentProjectionInBrowser() {
       ?.admissionError,
     "Recoverable dependency ordering became a permanent rejection",
   );
+  const orphan = await queueGithubWrite(url, {
+    kind: "resolve-thread",
+    target: { source: "remote", kind: "thread", nodeId: "orphan-thread" },
+  });
+  await wait(() => operations.has(orphan.operationId), "Orphan operation was not admitted");
+  document.querySelector<HTMLButtonElement>('button[aria-label="GitHub pending writes"]')!.click();
+  await wait(
+    () =>
+      !!document.querySelector(
+        `[popover]:popover-open [data-operation-id="${orphan.operationId}"]`,
+      ),
+    "Aggregate recovery lost unreachable thread operation",
+  );
+  const orphanDetails = document.querySelector(
+    `[popover]:popover-open [data-operation-id="${orphan.operationId}"]`,
+  )!;
+  [...orphanDetails.querySelectorAll<HTMLButtonElement>("button")]
+    .find((item) => item.textContent?.trim() === "Cancel queued write")!
+    .click();
+  await wait(
+    () => operations.get(orphan.operationId)?.status === "cancelled",
+    "Orphan operation could not be cancelled from aggregate details",
+  );
+  await window.dismissBrowserPopover("escape");
   githubWrites.activate();
   return { passed };
 }

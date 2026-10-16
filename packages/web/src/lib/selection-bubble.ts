@@ -120,9 +120,66 @@ function clippedRect(rect: AnchorRect, element: Element): AnchorRect | null {
   return result.right > result.left && result.bottom > result.top ? result : null;
 }
 
+/** Rebind only identical source at the same DOM location, never a different snippet. */
+function snapshotBoundary(root: Node, node: Node, offset: number) {
+  const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement!;
+  const row = element.closest("[data-line][data-line-type], code[data-source-line]") ?? element;
+  const path: number[] = [];
+  for (let current: Node = row; current !== root;) {
+    const parent = current.parentNode!;
+    path.unshift(Array.prototype.indexOf.call(parent.childNodes, current));
+    current = parent;
+  }
+  const content = row.textContent;
+  const identity = (element: Element) =>
+    JSON.stringify([
+      element.tagName,
+      element.getAttribute("data-line"),
+      element.getAttribute("data-line-type"),
+      element.getAttribute("data-source-line"),
+      element.closest("[data-code]")?.hasAttribute("data-additions"),
+      element.closest("[data-code]")?.hasAttribute("data-deletions"),
+    ]);
+  const rowIdentity = identity(row);
+  const prefix = document.createRange();
+  prefix.selectNodeContents(row);
+  prefix.setEnd(node, offset);
+  const textOffset = prefix.toString().length;
+  return () => {
+    let current: Node | undefined = row;
+    if (!row.isConnected) {
+      current = root;
+      for (const index of path) current = current?.childNodes[index];
+    }
+    if (
+      !(current instanceof Element) ||
+      !current.isConnected ||
+      identity(current) !== rowIdentity ||
+      current.textContent !== content
+    )
+      return null;
+    const walker = document.createTreeWalker(current, NodeFilter.SHOW_TEXT);
+    let remaining = textOffset;
+    let text: Node | null;
+    while ((text = walker.nextNode())) {
+      const length = text.textContent!.length;
+      if (remaining <= length) return { node: text, offset: remaining };
+      remaining -= length;
+    }
+    return null;
+  };
+}
+
 export function textSelectionAnchor(root: ShadowRoot | Document): SelectionBubbleAnchor | null {
-  const range = readSelectionRange(root);
-  if (!range) return null;
+  const selected = readSelectionRange(root);
+  if (!selected) return null;
+  let range: Range = selected;
+  const start = snapshotBoundary(root, range.startContainer, range.startOffset);
+  const end = snapshotBoundary(root, range.endContainer, range.endOffset);
+  const text = range.toString();
+  let startNode = range.startContainer;
+  let endNode = range.endContainer;
+  let rebound = false;
   const element =
     range.startContainer.nodeType === 1
       ? (range.startContainer as Element)
@@ -135,15 +192,29 @@ export function textSelectionAnchor(root: ShadowRoot | Document): SelectionBubbl
     root,
     ...anchorContext(element),
     rect: (trackNativeSelection = true) => {
-      if (!range.startContainer.isConnected || !range.endContainer.isConnected) return null;
+      if (!startNode.isConnected || !endNode.isConnected) {
+        const first = start(),
+          last = end();
+        if (!first || !last) return null;
+        const restored = document.createRange();
+        restored.setStart(first.node, first.offset);
+        restored.setEnd(last.node, last.offset);
+        if (restored.toString() !== text) return null;
+        range = restored;
+        startNode = first.node;
+        endNode = last.node;
+        rebound = true;
+      }
+      if (range.toString() !== text) return null;
       const current = trackNativeSelection ? readSelectionRange(root) : null;
       if (
         trackNativeSelection &&
-        (!current ||
-          current.startContainer !== range.startContainer ||
-          current.endContainer !== range.endContainer ||
-          current.startOffset !== range.startOffset ||
-          current.endOffset !== range.endOffset)
+        ((!current && !rebound) ||
+          (current &&
+            (current.startContainer !== range.startContainer ||
+              current.endContainer !== range.endContainer ||
+              current.startOffset !== range.startOffset ||
+              current.endOffset !== range.endOffset)))
       )
         return null;
       return selectionEndpointRect(textFragments(range), backwards);

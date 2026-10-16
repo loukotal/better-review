@@ -24,7 +24,7 @@ export async function testSelectionBubbleInBrowser() {
   dialog.append(source);
   const shadow = source.attachShadow({ mode: "open" });
   shadow.innerHTML = '<div style="height:500px"><span>selected source text</span></div>';
-  const text = shadow.querySelector("span")!.firstChild!;
+  let text: Node = shadow.querySelector("span")!.firstChild!;
   const mount = document.createElement("div");
   dialog.append(mount);
   const [anchor, setAnchor] = createSignal<ReturnType<typeof textSelectionAnchor>>(null);
@@ -164,6 +164,11 @@ export async function testSelectionBubbleInBrowser() {
     otherMount.remove();
     select();
     await settle();
+    const replacement = text.cloneNode(true);
+    text.parentNode!.replaceChild(replacement, text);
+    text = replacement;
+    await settle();
+    check(!!bubble(), "identical source DOM refresh must preserve the captured candidate");
     source.remove();
     await settle();
     check(!bubble(), "removing the shadow host must remove stale anchor actions");

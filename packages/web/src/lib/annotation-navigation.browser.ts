@@ -1153,6 +1153,9 @@ export async function testAppAnnotationNavigationInBrowser(
         post.expectedHeadSha !== core.headSha
       )
         throw new Error("Comment transport lost full path/line/side/body/revision");
+      document
+        .querySelector<HTMLButtonElement>('button[aria-label="GitHub pending writes"]')
+        ?.click();
       await waitFor(
         () =>
           !!document

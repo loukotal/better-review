@@ -151,6 +151,36 @@ export function createGithubOutboxProjection(
       }
       return ref;
     };
+    const ordered: BrowserGithubOperation[] = [];
+    const visited = new Set<string>();
+    function visit(item: BrowserGithubOperation) {
+      if (visited.has(item.command.operationId)) return;
+      visited.add(item.command.operationId);
+      for (const dependency of item.command.dependencies) {
+        const parent = all.get(dependency);
+        if (parent) visit(parent);
+      }
+      ordered.push(item);
+    }
+    state.operations.forEach(visit);
+    const affectedEntity = (item: BrowserGithubOperation) => {
+      const action = item.command.action;
+      if ("target" in action && action.kind !== "reply")
+        return githubEntityKey(resolve(action.target));
+      if (
+        action.kind === "issue-comment" ||
+        action.kind === "inline-comment" ||
+        action.kind === "reply"
+      )
+        return githubEntityKey(
+          resolve({
+            source: "local",
+            kind: action.kind === "issue-comment" ? "issue-comment" : "review-comment",
+            operationId: item.command.operationId,
+          }),
+        );
+      return undefined;
+    };
     function observed(operation: GithubOutboxOperation): boolean {
       const result = operation.result;
       if (!result) return false;
@@ -178,7 +208,7 @@ export function createGithubOutboxProjection(
         (item) => item.ref.nodeId === result.nodeId && item.resolved === result.resolved,
       );
     }
-    for (const item of state.operations) {
+    for (const [index, item] of ordered.entries()) {
       const action = item.command.action;
       const result = item.operation?.result;
       if (
@@ -212,6 +242,19 @@ export function createGithubOutboxProjection(
         observed(item.operation)
       ) {
         retiredHere.set(item.command.operationId, item.operation.revision);
+        // A later observed effect supersedes older confirmed writes to this entity.
+        // Otherwise retiring an inverse/delete exposes an obsolete predecessor overlay.
+        const entity = affectedEntity(item);
+        if (entity)
+          for (const prior of ordered.slice(0, index)) {
+            if (
+              prior.status === "synced" &&
+              prior.operation &&
+              read.token.confirmed.get(prior.command.operationId) === prior.operation.revision &&
+              affectedEntity(prior) === entity
+            )
+              retiredHere.set(prior.command.operationId, prior.operation.revision);
+          }
       }
     }
     const comments = new Map<string, GithubCommentView>();
@@ -250,18 +293,6 @@ export function createGithubOutboxProjection(
         operationIds: [],
         pending: false,
       });
-    const ordered: BrowserGithubOperation[] = [];
-    const visited = new Set<string>();
-    function visit(item: BrowserGithubOperation) {
-      if (visited.has(item.command.operationId)) return;
-      visited.add(item.command.operationId);
-      for (const dependency of item.command.dependencies) {
-        const parent = all.get(dependency);
-        if (parent) visit(parent);
-      }
-      ordered.push(item);
-    }
-    state.operations.forEach(visit);
     for (const item of ordered) {
       const id = item.command.operationId;
       if (

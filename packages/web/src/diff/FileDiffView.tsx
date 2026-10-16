@@ -412,9 +412,30 @@ export function FileDiffView(props: FileDiffViewProps) {
   };
 
   // Re-render when comments change (length or content)
+  const commentSignature = createMemo(() =>
+    JSON.stringify(
+      props.comments.map((comment) => ({
+        id: comment.id,
+        body: comment.body,
+        path: comment.path,
+        line: comment.line,
+        originalLine: comment.original_line,
+        side: comment.side,
+        replyTo: comment.in_reply_to_id,
+        threadId: comment.threadId,
+        resolved: comment.isResolved,
+        url: comment.html_url,
+        login: comment.user.login,
+        avatar: comment.user.avatar_url,
+        createdAt: comment.created_at,
+        updatedAt: comment.updated_at,
+        canEdit: comment.canEdit,
+      })),
+    ),
+  );
   createEffect(
     on(
-      () => props.comments.map((c) => `${c.id}:${c.body}`).join("|"),
+      commentSignature,
       () => {
         setTimeout(rerender, 0);
       },
@@ -422,29 +443,39 @@ export function FileDiffView(props: FileDiffViewProps) {
     ),
   );
 
-  // Re-render when AI annotations change
-  createEffect(
-    on(
-      () =>
-        JSON.stringify([
-          props.githubComments?.map((comment) => [
-            comment.key,
-            comment.body,
-            comment.deleted,
-            comment.pending,
-            comment.confirmed?.updatedAt,
-          ]),
-          props.githubThreads?.map((thread) => [thread.key, thread.resolved, thread.pending]),
-        ]),
-      () => setTimeout(rerender, 0),
-      { defer: true },
-    ),
+  // Polls publish fresh objects even when no annotation changed. `on` alone
+  // does not compare its return value; the memo suppresses no-op forced renders.
+  const githubAnnotationSignature = createMemo(() =>
+    JSON.stringify([
+      props.githubComments?.map((comment) => [
+        comment.key,
+        comment.body,
+        comment.deleted,
+        comment.pending,
+        comment.confirmed?.updatedAt,
+      ]),
+      props.githubThreads?.map((thread) => [thread.key, thread.resolved, thread.pending]),
+    ]),
   );
+  createEffect(on(githubAnnotationSignature, () => setTimeout(rerender, 0), { defer: true }));
 
   // Re-render when AI annotations change
+  const aiAnnotationSignature = createMemo(() =>
+    JSON.stringify(
+      (props.aiAnnotations ?? []).map((annotation) => ({
+        id: annotation.id,
+        file: annotation.file,
+        line: annotation.line,
+        severity: annotation.severity,
+        message: annotation.message,
+        sessionId: annotation.origin?.sessionId,
+        revision: annotation.origin?.revision,
+      })),
+    ),
+  );
   createEffect(
     on(
-      () => props.aiAnnotations?.map((a) => a.id).join("|") ?? "",
+      aiAnnotationSignature,
       () => {
         setTimeout(rerender, 0);
       },

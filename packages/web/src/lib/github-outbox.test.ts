@@ -437,6 +437,48 @@ test("stale remote data cannot remove pending creations, edits, deletes, approva
   assert.equal(view.threads[0].resolved, true);
 });
 
+test("observing a confirmed inverse thread transition also retires its superseded predecessor", () => {
+  const projection = createGithubOutboxProjection();
+  const target = { source: "remote", kind: "thread", nodeId: "T1" } as const;
+  const resolve = operation(
+    { ...command(1), action: { kind: "resolve-thread", target } },
+    "synced",
+  );
+  resolve.result = { kind: "thread", nodeId: "T1", resolved: true };
+  const unresolve = operation(
+    { ...command(2), action: { kind: "unresolve-thread", target }, dependencies: [id(1)] },
+    "synced",
+  );
+  unresolve.result = { kind: "thread", nodeId: "T1", resolved: false };
+  const state = browserState(resolve, unresolve);
+  projection.acceptRemote(projection.beginRead(state), {
+    ...empty(),
+    threads: [{ ref: target, resolved: false }],
+  });
+  assert.equal(projection.project(state).threads[0].resolved, false);
+});
+
+test("observing deletion cannot resurrect an earlier confirmed creation overlay", () => {
+  const projection = createGithubOutboxProjection();
+  const create = operation(command(1), "synced");
+  const remove = operation(
+    {
+      ...command(2),
+      action: {
+        kind: "delete-comment",
+        target: { source: "local", kind: "issue-comment", operationId: id(1) },
+        expectedBody: "hello",
+      },
+      dependencies: [id(1)],
+    },
+    "synced",
+  );
+  remove.result = { kind: "deleted", target: { source: "remote", kind: "issue-comment", id: 44 } };
+  const state = browserState(create, remove);
+  projection.acceptRemote(projection.beginRead(state), empty());
+  assert.equal(projection.project(state).comments.length, 0);
+});
+
 test("confirmed overlay retires only after a causally newer read observes effect; later remote edits win", () => {
   const projection = createGithubOutboxProjection();
   const pending = browserState(operation());

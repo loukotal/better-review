@@ -222,7 +222,7 @@ export async function testAppGithubComposerIntentCoverageInBrowser() {
   await wait(
     () =>
       [...document.querySelectorAll("button")].some(
-        (button) => button.textContent?.trim() === "Approval pending",
+        (button) => button.getAttribute("aria-label") === "Approval pending",
       ),
     "Approval was not acknowledged locally",
   );

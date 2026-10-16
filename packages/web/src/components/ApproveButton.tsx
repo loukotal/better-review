@@ -54,7 +54,7 @@ export function ApproveButton(props: {
   };
   return (
     <Popover
-      label="Approve PR"
+      label={props.approvalState === "pending" ? "Approval pending" : "Approve PR"}
       open={open()}
       onOpenChange={(next) => {
         if (next)
@@ -79,13 +79,7 @@ export function ApproveButton(props: {
               showSynced
             />
           </Show>
-          <span>
-            {props.approvalState === "synced"
-              ? "Approved"
-              : props.approvalState === "pending"
-                ? "Approval pending"
-                : "Approve"}
-          </span>
+          <span>{props.approvalState === "synced" ? "Approved" : "Approve"}</span>
         </>
       }
       triggerSize="sm"

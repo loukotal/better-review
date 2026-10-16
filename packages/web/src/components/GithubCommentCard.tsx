@@ -48,21 +48,19 @@ export function GithubCommentCard(props: {
         ),
     );
   const ref = () => props.comment.localRef ?? props.comment.ref;
-  const syncState = () => {
-    if (!props.comment.pending) return undefined;
-    const items = props.operations.filter((item) =>
-      props.comment.operationIds.includes(item.command.operationId),
+  const commentOperations = () =>
+    props.operations.filter(
+      (item) =>
+        props.comment.operationIds.includes(item.command.operationId) ||
+        !!props.thread?.operationIds.includes(item.command.operationId),
     );
-    return githubSyncState(items) ?? "local-pending";
+  const syncState = () => {
+    const state = githubSyncState(commentOperations());
+    if (state === "uncertain" || state === "retry-failed") return state;
+    if (saving()) return "saving-local";
+    if (!props.comment.pending && !props.thread?.pending) return undefined;
+    return state ?? "local-pending";
   };
-  const threadSyncState = () =>
-    props.thread?.pending
-      ? (githubSyncState(
-          props.operations.filter((item) =>
-            props.thread?.operationIds.includes(item.command.operationId),
-          ),
-        ) ?? "local-pending")
-      : undefined;
   const submit = async (action: GithubWriteAction) => {
     if (saving()) return;
     setSaving(true);
@@ -115,13 +113,46 @@ export function GithubCommentCard(props: {
       data-comment-deleted={props.comment.deleted ? "true" : undefined}
       class="bg-bg-elevated border border-border p-3"
     >
+      <div data-comment-header class="flex items-center gap-2 mb-1 text-sm">
+        <Show when={details().avatar}>
+          <img src={details().avatar} alt="" class="w-4 h-4 rounded-sm" />
+        </Show>
+        <span class="text-text">{details().login}</span>
+        <Show
+          when={details().url}
+          fallback={
+            <span data-comment-date class="text-text-faint">
+              {details().createdAt ? new Date(details().createdAt!).toLocaleDateString() : "Local"}
+            </span>
+          }
+        >
+          <a
+            data-comment-date
+            href={details().url}
+            target="_blank"
+            rel="noreferrer"
+            class="text-text-faint"
+          >
+            {details().createdAt ? new Date(details().createdAt!).toLocaleDateString() : "GitHub"}
+          </a>
+        </Show>
+        <Show when={syncState()}>
+          {(status) => (
+            <GithubSyncStatus
+              status={status()}
+              iconOnly
+              scope={props.scope}
+              operations={commentOperations()}
+            />
+          )}
+        </Show>
+      </div>
       <Show
         when={!props.comment.deleted}
         fallback={
           <>
-            <p class="flex items-center gap-1">
-              {props.comment.pending ? "Deletion" : "Comment deleted"}
-              <Show when={syncState()}>{(status) => <GithubSyncStatus status={status()} />}</Show>
+            <p class="text-sm text-text-muted">
+              {props.comment.pending ? "Deletion pending" : "Comment deleted"}
             </p>
             <details>
               <summary>Recover deleted content</summary>
@@ -136,33 +167,6 @@ export function GithubCommentCard(props: {
           </>
         }
       >
-        <div class="flex items-center gap-2 mb-1 text-sm">
-          <Show when={details().avatar}>
-            <img src={details().avatar} alt="" class="w-4 h-4 rounded-sm" />
-          </Show>
-          <span>{details().login}</span>
-          <Show when={details().url}>
-            <a href={details().url} target="_blank" rel="noreferrer" class="text-text-faint">
-              {details().createdAt ? new Date(details().createdAt!).toLocaleDateString() : "GitHub"}
-            </a>
-          </Show>
-          <Show when={syncState()}>{(status) => <GithubSyncStatus status={status()} />}</Show>
-          <Show when={saving()}>
-            <GithubSyncStatus status="saving-local" />
-          </Show>
-        </div>
-        <Show
-          when={
-            props.thread?.ref.source === "local" &&
-            props.comment.confirmed?.kind === "review-comment" &&
-            !props.comment.confirmed.threadId
-          }
-        >
-          <p class="text-xs text-text-muted">
-            Comment synced; waiting to discover the GitHub thread. Thread actions are queued with
-            that dependency.
-          </p>
-        </Show>
         <Show when={mode() !== "edit"}>
           <div
             data-comment-body
@@ -275,9 +279,6 @@ export function GithubCommentCard(props: {
               >
                 {props.thread?.resolved ? "Unresolve" : "Resolve"}
               </Button>
-              <Show when={threadSyncState()}>
-                {(status) => <GithubSyncStatus status={status()} />}
-              </Show>
             </Show>
           </div>
         </Show>
