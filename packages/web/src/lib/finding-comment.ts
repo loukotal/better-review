@@ -4,16 +4,23 @@ import { formatAnnotationForComment } from "../utils/formatAnnotationForClipboar
 import type { Annotation } from "../utils/parseReviewTokens";
 import { resolveFileReference } from "./file-reference";
 
-export interface FindingCommentRequest {
+declare const verifiedCommentLocation: unique symbol;
+
+/** Only validation of original finding provenance can produce a comment location. */
+export interface VerifiedCommentLocation {
+  readonly [verifiedCommentLocation]: true;
+  readonly filePath: string;
+  readonly line: number;
+  readonly side: "RIGHT";
+  readonly expectedHeadSha: string;
+}
+
+export interface FindingCommentRequest extends VerifiedCommentLocation {
   id: string;
   prUrl: string;
   sessionId: string;
   scope: string;
-  filePath: string;
-  line: number;
-  side: "RIGHT";
   body: string;
-  expectedHeadSha: string;
 }
 
 export function prepareFindingComment(
@@ -66,7 +73,15 @@ export function prepareFindingComment(
       annotation.line >= hunk.additionStart &&
       annotation.line < hunk.additionStart + hunk.additionCount,
   );
+  // The assertion is confined to the validator, after all provenance/path/line guards.
+  const location = {
+    filePath,
+    line: annotation.line,
+    side: "RIGHT",
+    expectedHeadSha: context.displayedHeadSha,
+  } as VerifiedCommentLocation;
   const request: FindingCommentRequest = {
+    ...location,
     id: crypto.randomUUID(),
     prUrl: context.prUrl,
     sessionId: context.sessionId,

@@ -1,9 +1,9 @@
 import { createSignal, Show } from "solid-js";
 import { render } from "solid-js/web";
-import superjson from "superjson";
 
 import type { ResolvedSource } from "@better-review/shared";
 
+import { sourceRequest, sourceWindow } from "../browser-tests/source-fixture";
 import type { SourceTarget } from "../lib/annotation-navigation";
 import type { SelectedSource } from "../lib/ask-ai-selection";
 import { InlineSourceView } from "./InlineSourceView";
@@ -17,7 +17,8 @@ export async function testInlineSourceViewInBrowser() {
   const head = "a".repeat(40),
     old = "b".repeat(40);
   window.fetch = async (input, init) => {
-    if (String(input).includes("/prReview.navigateSource"))
+    if (String(input).includes("/prReview.navigateSource")) {
+      const request = sourceRequest(input);
       return new Response(
         JSON.stringify({
           result: {
@@ -27,7 +28,7 @@ export async function testInlineSourceViewInBrowser() {
                 path: "src/a.ts",
                 ref: head,
                 side: "RIGHT",
-                content: "one\ntwo",
+                ...sourceWindow("one\ntwo", request.range),
                 line: 1,
                 approximate: true,
                 notice: "Showing current fallback code",
@@ -37,6 +38,7 @@ export async function testInlineSourceViewInBrowser() {
         }),
         { headers: { "content-type": "application/json" } },
       );
+    }
     return originalFetch(input, init);
   };
   const settle = async () => {
@@ -139,9 +141,7 @@ export async function testInlineSourceAmbiguityInBrowser() {
   window.fetch = async (input, init) => {
     const url = new URL(String(input), location.href);
     if (url.pathname.endsWith("/prReview.navigateSource")) {
-      const request = superjson.deserialize<{ path: string; ref: string; side: string }>(
-        JSON.parse(url.searchParams.get("input")!),
-      );
+      const request = sourceRequest(input);
       if (request.path === "missing.ts" || request.path === "removed/config.ts")
         return json({
           status: "ambiguous",
@@ -162,7 +162,7 @@ export async function testInlineSourceAmbiguityInBrowser() {
         path: request.path,
         ref: request.ref,
         side: request.side,
-        content: "current chosen source",
+        ...sourceWindow("current chosen source", request.range),
         line: 1,
         approximate: false,
         notice: null,
@@ -295,6 +295,7 @@ export async function testInlineSourceRetryInBrowser() {
   let reads = 0;
   window.fetch = async (input, init) => {
     if (!String(input).includes("/prReview.navigateSource")) return originalFetch(input, init);
+    const request = sourceRequest(input);
     reads++;
     return new Response(
       JSON.stringify(
@@ -317,7 +318,7 @@ export async function testInlineSourceRetryInBrowser() {
                     path: "ready.ts",
                     ref: head,
                     side: "RIGHT",
-                    content: "prepared source",
+                    ...sourceWindow("prepared source", request.range),
                     line: 1,
                     approximate: false,
                     notice: null,

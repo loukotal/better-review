@@ -12,21 +12,16 @@ import {
 } from "solid-js";
 
 import type { PrStatus, PrInfo } from "@better-review/shared";
-import { normalizeSourcePath, type ResolvedSource } from "@better-review/shared";
+import type { ResolvedSource } from "@better-review/shared";
 
 import { ChatPanel } from "./ChatPanel";
-import {
-  AnchoredSelectionEditor,
-  type SelectionEditorDraft,
-} from "./components/AnchoredSelectionEditor";
+import { AnchoredSelectionEditor } from "./components/AnchoredSelectionEditor";
 import { AppHeader } from "./components/AppHeader";
 import { ApproveButton } from "./components/ApproveButton";
-import { createSelectionQuestionState } from "./components/AskSelectionComposer";
-import { createCachedCommentDraft } from "./components/CachedCommentForm";
 import { CommitNavigator } from "./components/CommitNavigator";
 import { DiffStatsBadge } from "./components/DiffStatsBadge";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
-import { InlineFindingComment, type InlineFindingDraft } from "./components/InlineFindingComment";
+import { InlineFindingComment } from "./components/InlineFindingComment";
 import { InlineSourceView } from "./components/InlineSourceView";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
@@ -45,21 +40,10 @@ import {
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
-import type { SourceTarget } from "./lib/annotation-navigation";
-import {
-  selectionRevision,
-  createSelectionDraft,
-  type SelectedSource,
-  type SelectionChatController,
-} from "./lib/ask-ai-selection";
+import { type SelectedSource, type SelectionChatController } from "./lib/ask-ai-selection";
 import { savePrComment } from "./lib/comment-save";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
-import {
-  prepareFindingComment,
-  findingCommentKey,
-  type FindingCommentRequest,
-} from "./lib/finding-comment";
 import { submitPrReview } from "./lib/pr-review-action";
 import {
   queryKeys,
@@ -77,8 +61,8 @@ import {
   reconcileTranscriptAnnotations,
   type ReadingDiffResult,
 } from "./lib/query";
+import { createReviewInteractions } from "./lib/review-interactions";
 import type { SelectionBubbleAnchor } from "./lib/selection-bubble";
-import type { SelectionSourceContext } from "./lib/selection-question-message";
 import { uiTheme } from "./lib/theme";
 import { trpc } from "./lib/trpc";
 import type { Annotation } from "./utils/parseReviewTokens";
@@ -148,19 +132,8 @@ const AppContent: Component = () => {
     side?: "LEFT" | "RIGHT";
   } | null>(null);
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
-  const [sourceTarget, setSourceTarget] = createSignal<SourceTarget | null>(null);
-  const [findingNotice, setFindingNotice] = createSignal<string | null>(null);
-  const [findingComment, setFindingComment] = createSignal<FindingCommentRequest | null>(null);
-  const [inlineFinding, setInlineFinding] = createSignal<InlineFindingDraft | null>(null);
-  const inlineFindingDrafts = new Map<string, InlineFindingDraft>();
-  const [askSelection, setAskSelection] = createSignal<SelectionEditorDraft | null>(null);
   const [selectionController, setSelectionController] =
     createSignal<SelectionChatController | null>(null);
-  const [selectionClearToken, setSelectionClearToken] = createSignal(0);
-  const dismissSelection = () => {
-    setAskSelection(null);
-    setSelectionClearToken((value) => value + 1);
-  };
   const [diffRevision, setDiffRevision] = createSignal<{
     headSha?: string | null;
     comparisonBaseSha?: string | null;
@@ -244,27 +217,51 @@ const AppContent: Component = () => {
     ];
     return `${++selectionScopeVersion}:${values[0]}`;
   });
-  createEffect(on(selectionScope, () => setSourceTarget(null), { defer: true }));
+  const interactions = createReviewInteractions(
+    () => ({
+      prUrl: prUrl(),
+      loadedPrUrl: loadedPrUrl(),
+      scope: selectionScope(),
+      headSha: diffRevision().headSha,
+      comparisonBaseSha: diffRevision().comparisonBaseSha,
+      commitSha: currentCommitSha(),
+      commitScope: reviewMode() === "commit",
+      loading: loading() || loadingCommits() || switchingPr(),
+      files: files(),
+    }),
+    {
+      resolve: (target, range, signal) =>
+        trpc.prReview.navigateSource.query(
+          {
+            sessionId: target.sessionId,
+            path: target.lookup?.path ?? target.path,
+            ref: target.lookup?.ref ?? target.ref,
+            side: target.lookup?.side ?? target.side,
+            line: target.line,
+            range,
+          },
+          { signal },
+        ),
+      focus: (source) => focusResolvedSource(source),
+    },
+  );
+  const {
+    question: askSelection,
+    findingComment,
+    inlineFinding,
+    notice: findingNotice,
+    selectionClearToken,
+    dismissSelection,
+  } = interactions;
+  const sourceTarget = interactions.source.target;
+  onCleanup(interactions.source.close);
+  createEffect(on(selectionScope, interactions.source.close, { defer: true }));
   const askAboutSource = (
     selection: SelectedSource,
     anchor: SelectionBubbleAnchor,
     revision?: string,
   ) => {
-    if (switchingPr() || loadingCommits() || prUrl() !== loadedPrUrl()) return;
-    // Do not replace an unsent question when another source range is selected.
-    if (!askSelection()) {
-      const metadata = diffRevision();
-      const sourceRevision =
-        revision ??
-        selection.revision ??
-        selectionRevision(selection.side, metadata, currentCommitSha());
-      const rect = anchor.rect(false);
-      setAskSelection({
-        selection: createSelectionDraft(selection, sourceRevision, selectionScope()),
-        anchor: { ...anchor, fallbackRect: rect ?? undefined },
-        state: createSelectionQuestionState(),
-      });
-    }
+    interactions.selectSource(selection, anchor, revision);
   };
 
   const readingDiffScopeKey = createMemo(() => {
@@ -345,15 +342,6 @@ const AppContent: Component = () => {
   };
 
   const focusResolvedSource = (source: Extract<ResolvedSource, { status: "found" }>) => {
-    const revision = reviewMode() === "commit" ? currentCommitSha() : diffRevision().headSha;
-    if (
-      source.approximate ||
-      source.side !== "RIGHT" ||
-      source.ref !== revision ||
-      loading() ||
-      loadingCommits()
-    )
-      return false;
     const container = document
       .getElementById(getFileElementId(source.path))
       ?.querySelector<HTMLElement>("diffs-container");
@@ -369,100 +357,19 @@ const AppContent: Component = () => {
       );
     if (!container || (!visible && !expanded)) return false;
     scrollToFile(source.path, source.line, "RIGHT");
-    setSourceTarget(null);
     return true;
   };
-  const navigateSource = (target: SourceTarget, knownCurrent = false) => {
-    const path = normalizeSourcePath(target.path);
-    // Shorthand must be resolved against the FULL repository, not just changed files:
-    // an unchanged file can share a basename with the only changed-file match.
-    if (
-      knownCurrent &&
-      target.ref &&
-      path &&
-      fileNames().includes(path) &&
-      focusResolvedSource({
-        status: "found",
-        path,
-        ref: target.ref,
-        line: target.line ?? 1,
-        side: target.side ?? "RIGHT",
-        content: "",
-        approximate: false,
-        notice: null,
-      })
-    )
-      return;
-    setSourceTarget(target);
-    requestAnimationFrame(() =>
-      diffScrollRef?.querySelector("[data-inline-source]")?.scrollIntoView({ block: "start" }),
+  createEffect(() => {
+    const target = sourceTarget();
+    if (!target) return;
+    const scope = selectionScope();
+    requestAnimationFrame(
+      () =>
+        scope === selectionScope() &&
+        sourceTarget() === target &&
+        diffScrollRef?.querySelector("[data-inline-source]")?.scrollIntoView({ block: "start" }),
     );
-  };
-  const navigateChatFile = (
-    path: string,
-    line?: number,
-    sessionId?: string,
-    sameRevision = false,
-    ref?: string,
-  ) => {
-    if (!sessionId) return;
-    navigateSource({ path, line, sessionId, ref, side: "RIGHT" }, sameRevision);
-  };
-  const navigateSelectionSource = (selection: SelectionSourceContext, _sessionId: string) => {
-    const revision = reviewMode() === "commit" ? currentCommitSha() : diffRevision().headSha;
-    navigateSource(
-      {
-        path: selection.file,
-        line: selection.startLine,
-        ref: selection.revision,
-        side: selection.side,
-        sessionId: _sessionId,
-        captured: {
-          text: selection.text,
-          startLine: selection.startLine,
-          endLine: selection.endLine,
-        },
-      },
-      selection.revision === revision,
-    );
-  };
-  const createFindingComment = (annotation: Annotation, sessionId: string, ref?: string | null) => {
-    try {
-      if (!loadedPrUrl() || prUrl() !== loadedPrUrl() || loading() || loadingCommits())
-        throw new Error(
-          "Wait for the current PR revision to finish loading; existing drafts were preserved.",
-        );
-      const { request, inPatch } = prepareFindingComment(annotation, {
-        prUrl: loadedPrUrl()!,
-        sessionId,
-        scope: selectionScope(),
-        reviewedRef: ref,
-        displayedHeadSha: diffRevision().headSha,
-        files: files(),
-        commitScope: reviewMode() === "commit",
-      });
-      setFindingNotice(null);
-      if (inPatch) {
-        setInlineFinding(null);
-        setFindingComment(request);
-        scrollToFile(request.filePath, request.line, "RIGHT");
-      } else {
-        const key = findingCommentKey(request);
-        const entry = {
-          request,
-          draft: inlineFindingDrafts.get(key)?.draft ?? createCachedCommentDraft(request.body),
-        };
-        inlineFindingDrafts.set(key, entry);
-        setInlineFinding(entry);
-      }
-    } catch (error) {
-      setFindingNotice(
-        error instanceof Error
-          ? error.message
-          : "Could not prepare this finding. Existing drafts were preserved.",
-      );
-    }
-  };
+  });
 
   // Apply review order
   const applyReviewOrder = (order: string[]) => {
@@ -1261,6 +1168,7 @@ const AppContent: Component = () => {
         <ChatPanel
           hidden={!panelVisibility().chat || focusMode()}
           selectionScope={selectionScope()}
+          interactions={interactions}
           onSelectionController={setSelectionController}
           prUrl={loadedPrUrl()}
           initialSessionId={
@@ -1277,11 +1185,8 @@ const AppContent: Component = () => {
           }
           theme={settings().theme}
           aiAnnotations={aiAnnotations()}
-          onScrollToFile={navigateChatFile}
           onApplyReviewOrder={applyReviewOrder}
           onAnnotationsReceived={addNewAiAnnotations}
-          onCreateFindingComment={createFindingComment}
-          onSelectionSourceNavigate={navigateSelectionSource}
         />
 
         {/* Center content */}
@@ -1338,8 +1243,9 @@ const AppContent: Component = () => {
                 {(target) => (
                   <InlineSourceView
                     target={target}
-                    onClose={() => setSourceTarget(null)}
-                    onChoose={setSourceTarget}
+                    navigation={interactions.source}
+                    onClose={interactions.source.close}
+                    onChoose={(target) => void interactions.openSource(target)}
                     onResolved={focusResolvedSource}
                     onAskAi={askAboutSource}
                     askEditorOpen={!!askSelection()}
@@ -1378,7 +1284,7 @@ const AppContent: Component = () => {
                     class="mb-3 rounded border border-warning/40 bg-bg-elevated p-3 text-sm"
                   >
                     {findingNotice()}{" "}
-                    <Button type="button" size="xs" onClick={() => setFindingNotice(null)}>
+                    <Button type="button" size="xs" onClick={interactions.dismissNotice}>
                       Dismiss
                     </Button>
                   </div>
@@ -1387,21 +1293,10 @@ const AppContent: Component = () => {
                   {(entry) => (
                     <InlineFindingComment
                       entry={entry}
-                      isCurrent={() =>
-                        entry.request.scope === selectionScope() &&
-                        entry.request.prUrl === loadedPrUrl() &&
-                        entry.request.expectedHeadSha === diffRevision().headSha
-                      }
-                      onCancel={() => {
-                        inlineFindingDrafts.delete(findingCommentKey(entry.request));
-                        setInlineFinding(null);
-                      }}
+                      isCurrent={() => interactions.currentComment(entry.request)}
+                      onCancel={() => interactions.finishComment(entry)}
                       onSubmit={async (body) => {
-                        if (
-                          entry.request.scope !== selectionScope() ||
-                          entry.request.prUrl !== loadedPrUrl()
-                        )
-                          throw new Error("PR or revision changed. This draft was not submitted.");
+                        interactions.assertCurrentComment(entry.request);
                         await addComment({
                           filePath: entry.request.filePath,
                           line: entry.request.line,
@@ -1409,8 +1304,7 @@ const AppContent: Component = () => {
                           body,
                           expectedHeadSha: entry.request.expectedHeadSha,
                         });
-                        inlineFindingDrafts.delete(findingCommentKey(entry.request));
-                        if (inlineFinding() === entry) setInlineFinding(null);
+                        interactions.finishComment(entry);
                       }}
                     />
                   )}
@@ -1427,7 +1321,7 @@ const AppContent: Component = () => {
                   comments={reviewCommentsHidden() ? [] : comments()}
                   aiAnnotations={reviewCommentsHidden() ? [] : aiAnnotations()}
                   onCreateFindingComment={(annotation) =>
-                    createFindingComment(
+                    interactions.prepareComment(
                       annotation,
                       annotation.origin?.sessionId ?? "",
                       annotation.origin?.revision,

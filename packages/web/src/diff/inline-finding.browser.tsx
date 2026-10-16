@@ -86,6 +86,14 @@ export async function testInlineFindingProvenanceInBrowser() {
       };
       setAnnotations([annotation]);
       await settle();
+      // Initial diff rendering includes a worker-backed async syntax/layout pass.
+      // Wait for the condition rather than assuming eight frames is sufficient.
+      for (
+        let frame = 0;
+        frame < 180 && !host.querySelector('[aria-label="Prepare comment for src/a.ts:2"]');
+        frame++
+      )
+        await new Promise(requestAnimationFrame);
       const card = host.querySelector<HTMLElement>('[aria-label="Prepare comment for src/a.ts:2"]');
       check(!!card, `${scenario}: actual inline annotation missing`);
       for (const action of ["body", "button"]) {

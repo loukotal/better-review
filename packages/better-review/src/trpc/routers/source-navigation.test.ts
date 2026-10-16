@@ -70,6 +70,33 @@ test("source navigation RPC searches the entire immutable repository, discloses 
   assert.match(result.notice!, /approximate/);
   assert.ok(result.line < 99999);
   assert.ok(result.content.includes('"name"'));
+  const ranged = await caller.navigateSource({
+    sessionId: session.id,
+    path: result.path,
+    ref: headSha,
+    side: "LEFT",
+    line: 2,
+    range: { startLine: 2, endLine: 3 },
+  });
+  assert.ok(ranged.status === "found");
+  if (ranged.status === "found") {
+    assert.equal(ranged.content, result.content.split("\n").slice(1, 3).join("\n") + "\n");
+    assert.equal(ranged.contentStartLine, 2);
+    assert.equal(ranged.contentEndLine, 3);
+    assert.ok(ranged.totalLines! > 3);
+    assert.equal(ranged.ref, headSha);
+    assert.equal(ranged.side, "LEFT");
+    assert.equal(ranged.line, 2);
+    assert.equal(ranged.approximate, false);
+  }
+  await assert.rejects(
+    caller.navigateSource({
+      sessionId: session.id,
+      path: result.path,
+      range: { startLine: 1, endLine: 2001 },
+    }),
+    /between 1 and 2000/,
+  );
   const before = lookups;
   await assert.rejects(
     caller.navigateSource({ sessionId: session.id, path: "../secret" }),

@@ -284,9 +284,19 @@ export const prReviewRouter = router({
         ref: z.string().optional(),
         side: z.enum(["LEFT", "RIGHT"]).optional(),
         line: z.number().int().positive().optional(),
+        range: z
+          .object({
+            startLine: z.number().int().positive(),
+            endLine: z.number().int().positive(),
+          })
+          .refine(
+            (range) => range.endLine >= range.startLine && range.endLine - range.startLine < 2000,
+            "Source range must contain between 1 and 2000 lines",
+          )
+          .optional(),
       }),
     )
-    .query(({ input }) =>
+    .query(({ input, signal }) =>
       runEffect(
         Effect.gen(function* () {
           const store = yield* PrReviewSessionService;
@@ -307,14 +317,18 @@ export const prReviewRouter = router({
                   cause: error,
                 });
               }
-              const repo = gitSourceRepository(path);
+              signal?.throwIfAborted();
+              const repo = gitSourceRepository(path, { signal });
               if (await repo.hasCommit(revision.commitSha ?? revision.headSha)) return repo;
             }
             return null;
           };
           let repository = yield* Effect.tryPromise(() => readyRepository(session));
           let prepared = false;
-          const prepare = () => ensureSessionSourceCheckout(input.sessionId);
+          const prepare = () => {
+            signal?.throwIfAborted();
+            return ensureSessionSourceCheckout(input.sessionId);
+          };
           if (!repository) {
             yield* Effect.tryPromise(prepare);
             prepared = true;
@@ -378,7 +392,7 @@ export const prReviewRouter = router({
           }
           return yield* Effect.tryPromise(() =>
             resolveSourceNavigation(
-              { ...input, currentRef, allowedRefs, previousRef },
+              { ...input, currentRef, allowedRefs, previousRef, signal },
               repository!,
             ),
           );

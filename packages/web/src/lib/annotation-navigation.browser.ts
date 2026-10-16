@@ -6,6 +6,7 @@ import superjson from "superjson";
 
 import type { ReviewSnapshot } from "@better-review/shared";
 
+import { sourceWindow } from "../browser-tests/source-fixture";
 import { getFileElementId } from "../DiffViewer";
 import { formatAnnotationForComment } from "../utils/formatAnnotationForClipboard";
 import { formatSelectionQuestion } from "./ask-ai-selection";
@@ -289,6 +290,7 @@ export async function testAppAnnotationNavigationInBrowser(
         ref?: string;
         side?: "LEFT" | "RIGHT";
         line?: number;
+        range: { startLine: number; endLine: number };
       }>(JSON.parse(request.searchParams.get("input") ?? "{}"));
       if (value.sessionId === sessionId) {
         sourceReads.push(value);
@@ -370,7 +372,7 @@ export async function testAppAnnotationNavigationInBrowser(
                 path,
                 ref: fallback ? core.headSha : value.ref,
                 side: fallback ? "RIGHT" : (value.side ?? "RIGHT"),
-                content,
+                ...sourceWindow(content, value.range),
                 line: targetLine,
                 approximate:
                   fallback || targetLine !== value.line || value.path === "old-config.ts",

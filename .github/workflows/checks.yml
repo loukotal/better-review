@@ -1,0 +1,33 @@
+name: Checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm exec tsc --noEmit -p packages/better-review/tsconfig.json
+      - run: pnpm exec tsc --noEmit -p packages/web/tsconfig.json
+      - run: pnpm exec tsc --noEmit -p packages/shared/tsconfig.json
+      - run: pnpm test:browser
+      - run: pnpm --filter ./packages/web build
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-results
+          path: artifacts/browser
+          if-no-files-found: ignore

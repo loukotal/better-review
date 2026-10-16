@@ -1,14 +1,23 @@
 import type { DiffTheme } from "../diff/types";
+import { createHighlightCache } from "./highlight-cache";
 
 let shikiModulePromise: Promise<typeof import("shiki")> | undefined;
 
 function loadShiki() {
-  shikiModulePromise ??= import("shiki");
+  shikiModulePromise ??= import("shiki").catch((error: unknown) => {
+    shikiModulePromise = undefined;
+    throw error;
+  });
   return shikiModulePromise;
 }
 
-// Cache for highlighted code to avoid re-highlighting the same content
-const highlightCache = new Map<string, string>();
+const highlightCache = createHighlightCache(
+  async (code, options) => {
+    const { codeToHtml } = await loadShiki();
+    return codeToHtml(code, options);
+  },
+  { maxEntries: 500, maxBytes: 8 * 1024 * 1024 },
+);
 
 /**
  * Map DiffTheme to shiki bundled theme names.
@@ -42,57 +51,13 @@ function getShikiTheme(theme: DiffTheme): string {
  */
 export async function highlightCode(code: string, lang: string, theme: DiffTheme): Promise<string> {
   const shikiTheme = getShikiTheme(theme);
-  const cacheKey = `${shikiTheme}:${lang}:${code}`;
-  const cached = highlightCache.get(cacheKey);
-  if (cached) return cached;
-
   try {
-    const normalizedLang = normalizeLanguage(lang);
-    const { codeToHtml } = await loadShiki();
-
-    const html = await codeToHtml(code, {
-      lang: normalizedLang,
-      theme: shikiTheme,
-    });
-
-    // Cache the result (limit cache size to prevent memory issues)
-    if (highlightCache.size > 500) {
-      const firstKey = highlightCache.keys().next().value;
-      if (firstKey) highlightCache.delete(firstKey);
-    }
-    highlightCache.set(cacheKey, html);
-
-    return html;
+    return await highlightCache.highlight(code, lang, shikiTheme);
   } catch (err) {
     console.warn("[shiki] Highlighting failed:", err);
     // Return escaped code as fallback
     return `<pre class="shiki"><code>${escapeHtml(code)}</code></pre>`;
   }
-}
-
-/**
- * Normalize language aliases to Shiki-supported language names
- */
-function normalizeLanguage(lang: string): string {
-  const aliases: Record<string, string> = {
-    js: "javascript",
-    ts: "typescript",
-    jsx: "jsx",
-    tsx: "tsx",
-    sh: "bash",
-    shell: "bash",
-    zsh: "bash",
-    yml: "yaml",
-    md: "markdown",
-    py: "python",
-    rb: "ruby",
-    rs: "rust",
-    go: "go",
-    dockerfile: "docker",
-  };
-
-  const normalized = lang.toLowerCase().trim();
-  return aliases[normalized] || normalized;
 }
 
 /**

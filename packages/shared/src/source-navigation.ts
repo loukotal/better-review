@@ -32,6 +32,10 @@ export type ResolvedSource =
       ref: string;
       side: "LEFT" | "RIGHT";
       content: string;
+      /** Present only for opt-in line ranges. `line` remains an absolute source coordinate. */
+      totalLines?: number;
+      contentStartLine?: number;
+      contentEndLine?: number;
       line: number;
       approximate: boolean;
       notice: string | null;

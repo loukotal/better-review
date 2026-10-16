@@ -54,7 +54,15 @@ export function testSelectionInBrowser() {
     const outside = document.createTextNode("outside");
     host.append(outside);
     selection.setBaseAndExtent(first, 0, outside, 4);
-    rejects("reject cross-file/root range");
+    // Chromium can collapse an impossible cross-shadow-root native selection.
+    // Either null or an explicit validation error rejects it; neither may quote text.
+    let crossRootRejected = false;
+    try {
+      crossRootRejected = extractTextSelection(root, file) === null;
+    } catch {
+      crossRootRejected = true;
+    }
+    check(crossRootRejected, "reject cross-file/root range");
     range(first, 0, rows[1]!.firstChild!, 4);
     rows[1]!.setAttribute("data-line", "8");
     rejects("reject virtualized/unloaded gap");

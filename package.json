@@ -18,6 +18,7 @@
     "start": "pnpm dev",
     "start:production": "pnpm --filter ./packages/web build && pnpm --filter ./packages/better-review start",
     "test": "pnpm -r test",
+    "test:browser": "node scripts/test-browser.mjs",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist && pnpm install",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
@@ -30,19 +31,13 @@
   },
   "devDependencies": {
     "@types/node": "26.6.4",
-    "concurrently": "10.0.5",
-    "lefthook": "2.1.17",
+    "concurrently": "10.0.6",
+    "lefthook": "2.2.1",
     "oxfmt": "0.72.0",
     "oxlint": "1.87.0",
+    "playwright": "1.64.0",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
-  },
-  "overrides": {
-    "picomatch": "4.0.4",
-    "rollup": "4.59.0",
-    "vite": "8.3.3",
-    "vitefu": "1.1.3",
-    "yaml": "2.8.3"
   },
   "engines": {
     "node": ">=24.0.0",

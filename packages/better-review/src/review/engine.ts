@@ -13,17 +13,13 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 
-import type {
-  ReviewMessage,
-  ReviewPart,
-  ReviewSnapshot,
-  ReviewSettlement,
-} from "@better-review/shared";
+import type { ReviewMessage, ReviewSnapshot, ReviewSettlement } from "@better-review/shared";
 
 import type { PrReviewSession } from "../pr-review-sessions";
 import { reviewerExtension } from "./agent";
 import { measure, startMeasurement } from "./metrics";
 import type { SubmissionSandbox } from "./microsandbox";
+import { assistantParts as parts, TranscriptProjection } from "./projection";
 
 const ReviewDoc = defineDoc<{ session: string; legacySettlements: string }>({
   kind: "review.session",
@@ -33,33 +29,6 @@ const ReviewDoc = defineDoc<{ session: string; legacySettlements: string }>({
   fork: "asOf",
   initial: () => ({ session: "", legacySettlements: "[]" }),
 });
-
-function textContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n");
-}
-
-function parts(message: Extract<Message, { role: "assistant" }>): ReviewPart[] {
-  return message.content.flatMap((part): ReviewPart[] => {
-    if (part.type === "text") return [{ type: "text", text: part.text }];
-    if (part.type === "thinking") return [{ type: "reasoning", text: part.thinking }];
-    if (part.type === "toolCall")
-      return [
-        {
-          type: "dynamic-tool",
-          toolCallId: part.id,
-          toolName: part.name,
-          input: part.arguments,
-          state: "input-available",
-        },
-      ];
-    return [];
-  });
-}
 
 export async function openReviewEngine(options: {
   database: string;
@@ -185,11 +154,14 @@ export async function openReviewEngine(options: {
     } while (cursor);
     return records;
   }
-  const entryCache = new Map<number, EntryRecord>();
+  const projection = new TranscriptProjection(
+    session.revisionHistory?.[0]?.commitSha ??
+      session.revisionHistory?.[0]?.headSha ??
+      session.commitSha ??
+      session.headSha,
+  );
   const submissionCache = new Map<number, SubmissionRecord>();
   let docs: Record<string, unknown> = {};
-  let historyDirty = true;
-  let cachedHistory: { messages: ReviewMessage[]; ref: string; submissionId?: string } | undefined;
   const listeners = new Set<() => void>();
   const pendingCommits: CommitPublication[] = [];
   let hydrated = false;
@@ -200,7 +172,7 @@ export async function openReviewEngine(options: {
       if (change.type === "entry" && change.value.conversationId === conversation.id) {
         // Only newly observed commits count. Hydration/reopening and document streaming do not
         // replay usage into process-local metrics. This is not durable provider billing.
-        if (hydrated && !entryCache.has(change.value.id)) {
+        if (hydrated && !projection.hasEntry(change.value.id)) {
           for (const message of change.value.model ?? []) {
             if (change.value.kind === "pi.assistant" && message.role === "assistant") {
               measure("review.model.round_trips", 1);
@@ -214,15 +186,18 @@ export async function openReviewEngine(options: {
             }
           }
         }
-        entryCache.set(change.value.id, change.value);
-        historyDirty = true;
+        projection.addEntry(change.value);
         changed = true;
       } else if (change.type === "submission" && change.value.conversationId === conversation.id) {
         submissionCache.set(change.value.id, change.value);
-        historyDirty = true;
+        projection.addSubmission(change.value);
         changed = true;
       } else if (change.type === "document" && change.conversationId === conversation.id) {
         docs[change.record.kind] = change.value;
+        // Commit listeners can request a snapshot before syncSession's await resumes.
+        // Adopt the session alongside its revision marker, before notifying them.
+        if (change.record.kind === "review.session" && typeof change.value?.session === "string")
+          session = JSON.parse(change.value.session);
         changed = true;
       }
     }
@@ -243,15 +218,18 @@ export async function openReviewEngine(options: {
     allSubmissions(),
     conversation.watch(context),
   ]);
-  for (const entry of initialEntries) entryCache.set(entry.id, entry);
-  for (const record of initialSubmissions) submissionCache.set(record.id, record);
+  for (const entry of initialEntries) projection.addEntry(entry);
+  for (const record of initialSubmissions) {
+    submissionCache.set(record.id, record);
+    projection.addSubmission(record);
+  }
   docs = { ...initialView.value.docs };
   await initialView.stop();
   for (const publication of pendingCommits) adopt(publication);
   pendingCommits.length = 0;
   hydrated = true;
   hydrateDone();
-  measure("snapshot.hydrated.entries", entryCache.size);
+  measure("snapshot.hydrated.entries", projection.entryCount);
 
   async function snapshot(): Promise<ReviewSnapshot> {
     if (lastSnapshot) return lastSnapshot;
@@ -265,71 +243,8 @@ export async function openReviewEngine(options: {
           compactions?: unknown[];
         }
       | undefined;
-    let messages: ReviewMessage[] = [];
-    let ref =
-      session.revisionHistory?.[0]?.commitSha ??
-      session.revisionHistory?.[0]?.headSha ??
-      session.commitSha ??
-      session.headSha;
-    let submissionId: string | undefined;
-    if (historyDirty || !cachedHistory) {
-      const byEntry = new Map(submissions.map((record) => [record.entry, record]));
-      const tools = new Map<string, Extract<ReviewPart, { type: "dynamic-tool" }>>();
-      for (const entry of [...entryCache.values()].sort((a, b) => a.id - b.id)) {
-        if (entry.kind === "review.revision") {
-          ref = (entry.data as { ref: string }).ref;
-          continue;
-        }
-        if (entry.kind === "review.legacy") {
-          const message: ReviewMessage = JSON.parse(entry.data as string);
-          message.metadata.revision ??= ref;
-          messages.push(message);
-          continue;
-        }
-        if (
-          entry.kind !== "pi.user" &&
-          entry.kind !== "pi.assistant" &&
-          entry.kind !== "pi.tool-result"
-        )
-          continue;
-        const submission = byEntry.get(entry.id);
-        if (submission?.type === "input") submissionId = String(submission.id);
-        for (const model of entry.model ?? []) {
-          if (model.role === "user" || model.role === "assistant") {
-            messages.push({
-              id: `pi:${entry.id}`,
-              role: model.role,
-              submissionId,
-              metadata: { timestamp: new Date(model.timestamp).toISOString(), revision: ref },
-              parts:
-                model.role === "user"
-                  ? [{ type: "text", text: textContent(model.content) }]
-                  : parts(model),
-            });
-            for (const part of messages.at(-1)!.parts)
-              if (part.type === "dynamic-tool") tools.set(part.toolCallId, part);
-          } else if (model.role === "toolResult") {
-            const tool = tools.get(model.toolCallId);
-            if (tool?.type === "dynamic-tool") {
-              tool.state = model.isError ? "output-error" : "output-available";
-              tool.output = textContent(model.content);
-              if (model.isError) tool.errorText = tool.output;
-            }
-          }
-        }
-      }
-      // Reuse unchanged objects so streaming diffs can compare references instead of serializing history.
-      const previous = new Map(cachedHistory?.messages.map((message) => [message.id, message]));
-      messages = messages.map((message) => {
-        const old = previous.get(message.id);
-        return old && JSON.stringify(old) === JSON.stringify(message) ? old : message;
-      });
-      cachedHistory = { messages, ref, submissionId };
-      historyDirty = false;
-    } else {
-      ({ messages, ref, submissionId } = cachedHistory);
-    }
-    messages = [...messages];
+    const { messages: history, ref, submissionId } = projection.history();
+    const messages: ReviewMessage[] = [...history];
     if (live?.generation?.message)
       messages.push({
         id: `live:${live.run?.taskId}`,

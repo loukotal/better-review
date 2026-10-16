@@ -1,39 +1,10 @@
 import { Show } from "solid-js";
 import { render } from "solid-js/web";
 
-import { createPendingCommentFormState } from "../lib/comment-save";
+import { createCachedCommentDraft } from "../lib/interaction-drafts";
+export { createCachedCommentDraft } from "../lib/interaction-drafts";
 import { PendingCommentForm, type PendingCommentFormProps } from "./CommentView";
 
-export function createCachedCommentDraft(body: string) {
-  const delegates: {
-    onSubmit?: (body: string) => Promise<void>;
-    disabled?: () => boolean;
-    onDraftChange?: PendingCommentFormProps["onDraftChange"];
-  } = {};
-  const state = createPendingCommentFormState({
-    initialBody: body,
-    startLine: 1,
-    endLine: 1,
-    onCancel: () => {},
-    onSubmit: async (text) => {
-      if (delegates.disabled?.() || !delegates.onSubmit)
-        throw new Error("This comment is not ready to submit. Your draft is preserved.");
-      await delegates.onSubmit(text);
-    },
-    onDraftChange: (hasDraft) => delegates.onDraftChange?.(hasDraft),
-  });
-  return {
-    state,
-    delegates,
-    submitting: state.isSubmitting,
-    get body() {
-      return state.body();
-    },
-    set body(value: string) {
-      state.setBody(value);
-    },
-  };
-}
 export type CachedCommentDraft = ReturnType<typeof createCachedCommentDraft>;
 
 /** Keep bodies and the in-flight lock outside diff annotation render lifetimes. */

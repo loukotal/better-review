@@ -27,11 +27,7 @@ import { Button, Checkbox, IconButton, PanelHeader, Textarea, MessageForm } from
 import type { DiffTheme } from "./diff/types";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { SpinnerIcon } from "./icons/spinner-icon";
-import {
-  createSelectionSender,
-  type SourceSelection,
-  type SelectionChatController,
-} from "./lib/ask-ai-selection";
+import { type SourceSelection, type SelectionChatController } from "./lib/ask-ai-selection";
 import { parseChatFileReference } from "./lib/chat-file-reference";
 import {
   groupTranscript,
@@ -47,6 +43,7 @@ import {
   renderSemanticTextCodeBlock,
 } from "./lib/markdown";
 import { createReviewClient } from "./lib/review-client";
+import { createQuestionDelivery, type ReviewInteractions } from "./lib/review-interactions";
 import {
   ADVERSARIAL_REVIEW_PROMPT,
   buildReviewPrompt,
@@ -66,6 +63,7 @@ marked.setOptions({
 interface ChatPanelProps {
   hidden?: boolean;
   selectionScope?: string;
+  interactions?: ReviewInteractions;
   onSelectionController?: (controller: SelectionChatController | null) => void;
   prUrl: string | null;
   initialSessionId?: string;
@@ -125,7 +123,10 @@ export function ChatPanel(props: ChatPanelProps) {
   const [input, setInput] = createSignal("");
   const [linkNotice, setLinkNotice] = createSignal<string | null>(null);
   const [sendingSelection, setSendingSelection] = createSignal(false);
-  const selectionSender = createSelectionSender();
+  const selectionDelivery = createQuestionDelivery(() => ({
+    scope: props.selectionScope ?? "",
+    ready: !!props.prUrl && !disposed,
+  }));
   let disposed = false;
   onCleanup(() => {
     disposed = true;
@@ -411,9 +412,8 @@ export function ChatPanel(props: ChatPanelProps) {
     };
     setSendingSelection(true);
     try {
-      const id = await selectionSender.send({
-        draftId: selection.draftId,
-        body,
+      const delivery = props.interactions ?? selectionDelivery;
+      const id = await delivery.askAbout(selection, body, {
         target,
         isCurrent,
         client: createReviewClient,
@@ -631,7 +631,18 @@ export function ChatPanel(props: ChatPanelProps) {
       return;
     }
     setLinkNotice(null);
-    if (sid) {
+    if (props.interactions) {
+      void props.interactions.openSource(
+        {
+          sessionId: sid,
+          path: file,
+          line,
+          ref: reviewedHead ?? undefined,
+          side: "RIGHT",
+        },
+        true,
+      );
+    } else {
       props.onScrollToFile?.(file, line, sid, !!reviewedHead && reviewedHead === activeHead, ref);
     }
   };
@@ -645,7 +656,23 @@ export function ChatPanel(props: ChatPanelProps) {
       );
       return;
     }
-    props.onSelectionSourceNavigate?.(selection, sid);
+    if (props.interactions) {
+      void props.interactions.openSource(
+        {
+          sessionId: sid,
+          path: selection.file,
+          line: selection.startLine,
+          ref: selection.revision,
+          side: selection.side,
+          captured: {
+            text: selection.text,
+            startLine: selection.startLine,
+            endLine: selection.endLine,
+          },
+        },
+        true,
+      );
+    } else props.onSelectionSourceNavigate?.(selection, sid);
   };
 
   const handleApplyOrder = (files: string[]) => {
@@ -926,12 +953,20 @@ export function ChatPanel(props: ChatPanelProps) {
             onNavigate={(file, line) => handleFileClick(file, line, segmentProps.revision)}
             onCreateComment={(annotation) => {
               const sid = sessionId();
-              if (sid)
-                props.onCreateFindingComment?.(
-                  annotation,
-                  sid,
-                  segmentProps.revision ?? navigationRevision(),
-                );
+              if (sid) {
+                if (props.interactions)
+                  props.interactions.prepareComment(
+                    annotation,
+                    sid,
+                    segmentProps.revision ?? navigationRevision(),
+                  );
+                else
+                  props.onCreateFindingComment?.(
+                    annotation,
+                    sid,
+                    segmentProps.revision ?? navigationRevision(),
+                  );
+              }
             }}
           />
         </Match>

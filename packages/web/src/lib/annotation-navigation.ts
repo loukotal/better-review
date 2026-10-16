@@ -1,6 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 
-export interface SourceTarget {
+export interface OriginalSourceReference {
   sessionId: string;
   path: string;
   line?: number;
@@ -17,6 +17,9 @@ export interface SourceTarget {
     notice: string | null;
   };
 }
+
+/** Compatibility name for existing rendering callbacks. */
+export type SourceTarget = OriginalSourceReference;
 
 export function navigateAnnotation(
   target: SourceTarget,

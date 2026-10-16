@@ -10,7 +10,7 @@ overrides:
   rollup: 4.59.0
   semver: 7.7.4
   semver@6.3.1: 7.7.4
-  vite: 8.3.3
+  vite: 8.3.4
   vitefu: 1.1.3
   yaml: 2.8.3
 
@@ -26,17 +26,20 @@ importers:
         specifier: 26.6.4
         version: 26.6.4
       concurrently:
-        specifier: 10.0.5
-        version: 10.0.5
+        specifier: 10.0.6
+        version: 10.0.6
       lefthook:
-        specifier: 2.1.17
-        version: 2.1.17
+        specifier: 2.2.1
+        version: 2.2.1
       oxfmt:
         specifier: 0.72.0
         version: 0.72.0
       oxlint:
         specifier: 1.87.0
         version: 1.87.0
+      playwright:
+        specifier: 1.64.0
+        version: 1.64.0
       tsx:
         specifier: 4.23.15
         version: 4.23.15
@@ -50,17 +53,17 @@ importers:
         specifier: workspace:*
         version: link:../shared
       '@earendil-works/chord':
-        specifier: 1.0.4
-        version: 1.0.4
+        specifier: 1.1.0
+        version: 1.1.0
       '@earendil-works/pi-ai':
         specifier: 1.2.0
         version: 1.2.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
       '@earendil-works/pi-durable':
-        specifier: 1.0.4
-        version: 1.0.4(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
+        specifier: 1.1.0
+        version: 1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
       '@hono/node-server':
-        specifier: 2.1.3
-        version: 2.1.3(hono@4.13.13)
+        specifier: 2.1.4
+        version: 2.1.4(hono@4.13.13)
       '@opencode-ai/sdk':
         specifier: 1.18.35
         version: 1.18.35
@@ -71,8 +74,8 @@ importers:
         specifier: 11.19.0
         version: 11.19.0(typescript@7.0.2)
       effect:
-        specifier: 4.0.1
-        version: 4.0.1
+        specifier: 4.0.2
+        version: 4.0.2
       hono:
         specifier: 4.13.13
         version: 4.13.13
@@ -108,13 +111,13 @@ importers:
         version: 1.2.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@solidjs/router':
         specifier: 1.0.0
-        version: 1.0.0(solid-js@1.9.16)
+        version: 1.0.0(solid-js@1.9.17)
       '@tanstack/query-persist-client-core':
         specifier: 5.104.1
         version: 5.104.1
       '@tanstack/solid-query':
         specifier: 5.104.1
-        version: 5.104.1(solid-js@1.9.16)
+        version: 5.104.1(solid-js@1.9.17)
       '@trpc/client':
         specifier: 11.19.0
         version: 11.19.0(@trpc/server@11.19.0(typescript@7.0.2))(typescript@7.0.2)
@@ -140,15 +143,15 @@ importers:
         specifier: 4.5.0
         version: 4.5.0
       solid-js:
-        specifier: 1.9.16
-        version: 1.9.16
+        specifier: 1.9.17
+        version: 1.9.17
       superjson:
         specifier: 2.2.6
         version: 2.2.6
     devDependencies:
       '@tailwindcss/vite':
         specifier: 4.3.3
-        version: 4.3.3(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
+        version: 4.3.3(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
       better-review:
         specifier: workspace:*
         version: link:../better-review
@@ -159,14 +162,14 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
       vite:
-        specifier: 8.3.3
-        version: 8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
+        specifier: 8.3.4
+        version: 8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
       vite-plugin-solid:
         specifier: 2.11.14
-        version: 2.11.14(solid-js@1.9.16)(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
+        version: 2.11.14(solid-js@1.9.17)(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
       vitefu:
         specifier: 1.1.3
-        version: 1.1.3(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
+        version: 1.1.3(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
 
 packages:
 
@@ -344,8 +347,8 @@ packages:
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
 
-  '@earendil-works/chord@1.0.4':
-    resolution: {integrity: sha512-d2JZw2utoa/reoSmL07O71wsXiMDhIlnnxTb4LCNV+Oq8Evj2rGLvjVuYrlXZGbXUr0IDNfvd1RT/utCY1UhkQ==}
+  '@earendil-works/chord@1.1.0':
+    resolution: {integrity: sha512-gsHzKfyQ3t0ZIQ3cLBjJ5Vqy1TYnFyruHIV3g3BwmulCDYe5BW4yT9vaJk9QzN6YANILIO75uzuq+Gdxtzz1og==}
     engines: {node: '>=22.19.0'}
 
   '@earendil-works/pi-ai@1.2.0':
@@ -353,8 +356,8 @@ packages:
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@earendil-works/pi-durable@1.0.4':
-    resolution: {integrity: sha512-i22unyhavxrTF/KS/JcBOKprQRgepufOIztnqBKZXJCWbEHsXDzcINtjmmBSbFB/3S+4FWIl3eJ5FMbRe33Ybg==}
+  '@earendil-works/pi-durable@1.1.0':
+    resolution: {integrity: sha512-NtuB3RY24vQ+0/rWYpeHupyFWBfXuKq17to3VMYUYqfD/uuGnz6F6UTPBEm51VSxxA6LZwRcDwLX2LtRehnIgQ==}
     engines: {node: '>=22.19.0'}
 
   '@earendil-works/pi-telemetry@1.2.0':
@@ -526,11 +529,11 @@ packages:
       '@modelcontextprotocol/sdk':
         optional: true
 
-  '@hono/node-server@2.1.3':
-    resolution: {integrity: sha512-TA//nWMqPhbfdfneACk6t5a9eqbS9lABEPyKn0/xZTah3H3U2XaVg85rJFl0/Fyit0I552YDHgXGVSf3GwqbUw==}
+  '@hono/node-server@2.1.4':
+    resolution: {integrity: sha512-2g1qeHl4BduwDn6L8nkAvDrPUWPMlkQ//a5NhP/zIyaXKMjZNRV+cG9Csu+BiJFf6+68pqzjf4Hi5sJGKHuS1g==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: ^4
+      hono: ^4 || ^5.0.0-0
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -1145,7 +1148,7 @@ packages:
   '@tailwindcss/vite@4.3.3':
     resolution: {integrity: sha512-yYU8cogLeSh/ms2jh8Fj7jaba/EWa7Ja6GoUqYZaraEuCI5YS6ms6ObZgjjedm+jm6XZjdNRWBpPP6Z86oOxcw==}
     peerDependencies:
-      vite: 8.3.3
+      vite: 8.3.4
 
   '@tanstack/query-core@5.104.1':
     resolution: {integrity: sha512-TiRghcrGkUTE+M4JBxvpPSpBhxvIzQairw+cksrHYGr+2uwC77yW1SY9nYxnYRYOppvucf8rEg6b5byoz4rTpw==}
@@ -1405,8 +1408,8 @@ packages:
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
 
-  concurrently@10.0.5:
-    resolution: {integrity: sha512-JaP/CoftUrCcAFW/g//RbgEGwlelnEae6cfBLgH6ZdO6s8jPkn6p9SB9u6pdVxYXoiSnFqseOlHfrEfF82TVOg==}
+  concurrently@10.0.6:
+    resolution: {integrity: sha512-qgICXXFp2/3nAebRLmxcINKEXM1mLK3ij/y31P02VTs/KIkddIeC05n73DxOXsXMB9LFSqNU1/na3lDlOhcbIw==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -1459,8 +1462,8 @@ packages:
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
 
-  effect@4.0.1:
-    resolution: {integrity: sha512-b1VlQG9g8fwxE5QnIZuPoOP/0MsqHJSRKxUijjoM80E5q95FXrX5yWtY5XI8G+GJsBQAVSDbLS458z9a++uVvw==}
+  effect@4.0.2:
+    resolution: {integrity: sha512-YeYnLqSFrL4+tCOXRrfNP03w8FILoF/wDl+ukraJAGzXrjcS383W7LAAvGBbLatEyktmLxRq+9xJinx7QzXW5A==}
 
   electron-to-chromium@1.5.449:
     resolution: {integrity: sha512-dKeYk/3SFQz+nXi5whp3OuJzeWABEG4zCtkWJ9+Vby1E1iFM2y0gElRtQvNXRPJTsj8WAF4HMP7hvP790QtJ9g==}
@@ -1626,58 +1629,58 @@ packages:
   jws@4.0.1:
     resolution: {integrity: sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==}
 
-  lefthook-darwin-arm64@2.1.17:
-    resolution: {integrity: sha512-BHF3rD0qmwBulLLe5EdPYQVGvPibZZqHnSPpWT+LgPyYk2+GxtScLJvSD/NgCOFU49Fzs6XgOHg/zlfXcdKFfQ==}
+  lefthook-darwin-arm64@2.2.1:
+    resolution: {integrity: sha512-SyuDBT5HqNQfi607vMHrYJu45bRN7JoIFdyxLjEPVe34UnZJCesmeYBODEYTyCfRZjPOaTbton4Padu+qvqfCQ==}
     cpu: [arm64]
     os: [darwin]
 
-  lefthook-darwin-x64@2.1.17:
-    resolution: {integrity: sha512-wRgqAKw2UUQz8eR5pBRo1Cfk2Jaao3u5b6n8EsLcJ6bCVP0pLLhFrNjE1UsTCOlriN7+GgI9SC0l1+zr2eVbTA==}
+  lefthook-darwin-x64@2.2.1:
+    resolution: {integrity: sha512-qkIdM89T3OxpLp9rssPSdRQ7QKkX0l07xWxxOaZfECn5iB2xVXSD9FQSjYUMNGXtJJWOGqdKqBngGTB/ShDZtQ==}
     cpu: [x64]
     os: [darwin]
 
-  lefthook-freebsd-arm64@2.1.17:
-    resolution: {integrity: sha512-pECdcOu/oImbaQyBbmnQyNhdpu1L/bUageBoHSesDB3+2vyHEd6Q3buTUETrI+/gsL993FK5jHnyzsY1X2IFsQ==}
+  lefthook-freebsd-arm64@2.2.1:
+    resolution: {integrity: sha512-0jdr/9Q5cGuazrEVquv29AOD77aPc2jAmFU4EtqVVg3PhMJjAyt7bQeA9qdwHhaHhLnaeUZwMwo3IleVm+D4wg==}
     cpu: [arm64]
     os: [freebsd]
 
-  lefthook-freebsd-x64@2.1.17:
-    resolution: {integrity: sha512-+z+GPl4mxZC0AcJICDazAWxExz4f8JPW7rvGUQ4Ao8flfmNUoyenrtsx9PUp00KdI+8zPjIujuLMSIEN52y1hQ==}
+  lefthook-freebsd-x64@2.2.1:
+    resolution: {integrity: sha512-JFKyNZ9qQp9NsuFyAg/CJIBurIHX3AUayFXxuoDMATWAIhhlyK0YMtpWgEFIl1M2iGLBLQ3TiLoCCRnbwndNDg==}
     cpu: [x64]
     os: [freebsd]
 
-  lefthook-linux-arm64@2.1.17:
-    resolution: {integrity: sha512-q01FgqafSJo4WQ6rHj4J1AUe8WLlReZ4Sx5qIjdXMjFuQsbLKlaWUWnJMmZkQQwsi195zDGtOycU44c0vozPiw==}
+  lefthook-linux-arm64@2.2.1:
+    resolution: {integrity: sha512-na8Ezm7pK44+WsQqj9tES7v8VseM1MrNeNJhUnM8eINV22KYptWam8evfjZxY3NYxOTwn6f/Zpe/BBvcLKMaTQ==}
     cpu: [arm64]
     os: [linux]
 
-  lefthook-linux-x64@2.1.17:
-    resolution: {integrity: sha512-NyWgJyhmkPspgnhNSvkusKNjCyOOnwiE/IFKkAFkMNfTlst0Dv3UVNxe0e/DlgsGbbFLVieFKhwd4twI2RKoOQ==}
+  lefthook-linux-x64@2.2.1:
+    resolution: {integrity: sha512-wl7CR5uNkOiZ38SkW4l9O6wf/Nllbkw90ZZonXRFkbgrnPjLMhZGUt9ucewsPwBQ/ckU1t08JuBHeOywB/CFow==}
     cpu: [x64]
     os: [linux]
 
-  lefthook-openbsd-arm64@2.1.17:
-    resolution: {integrity: sha512-zhIY2sel/yHeIJbQfnlAx+xnIJf6Yh0/RG/Ont33VzCXrzMf4jczQwEAu6VdAD7Ms/Tiv3b9t8aTk7LrU4byJA==}
+  lefthook-openbsd-arm64@2.2.1:
+    resolution: {integrity: sha512-UFwL+AGSqkhQ15kuKl5FMRx/UqbcfcQbGFg5ggYzhT7qBOsTu3a9POXRxt3hsalBeMgkDWsv3IaPlj51YGpCAg==}
     cpu: [arm64]
     os: [openbsd]
 
-  lefthook-openbsd-x64@2.1.17:
-    resolution: {integrity: sha512-aHGnjzyyFBOQEJjmie7px67nNVRUJ+DUG2R/BOSABdH/sGwVYLg6GG0pjnSUkWPoIv3T+CFoG9YcGYO+h3MLoQ==}
+  lefthook-openbsd-x64@2.2.1:
+    resolution: {integrity: sha512-IMKEuxJLo91C1yjhJ42EadfXUb3ECMkvTKpSt17kwaiyZsvvZ8LGdrXwQZiLNJt2M5ECuTVCQUvDimM6mGraOw==}
     cpu: [x64]
     os: [openbsd]
 
-  lefthook-windows-arm64@2.1.17:
-    resolution: {integrity: sha512-NN6Ke+O019lhlGAbrbFDf719E4vGt0Y0O30Gr5Yoe3ZdFW6qQFOlP+gVq/shFvJ7iw6rFA/xyOu6wgM+Lytimg==}
+  lefthook-windows-arm64@2.2.1:
+    resolution: {integrity: sha512-Pi8vOvObjg8HJDl8d96s7jsI6TN33klpqv6tXSXpoKEeoAwEh5Y9NawO6bzoOpLfAxf2SfMBcuaBzFQ5zE2gjA==}
     cpu: [arm64]
     os: [win32]
 
-  lefthook-windows-x64@2.1.17:
-    resolution: {integrity: sha512-yV07jCYAzqr4UoMFtVs5frVgKzxppWd/tjr6OpXpxYqB47fomx3w9vxgEOlb2opODFTFm2wdeESLfwVO9Cy/DQ==}
+  lefthook-windows-x64@2.2.1:
+    resolution: {integrity: sha512-7FtuPrc1XzxIFLAbzneOF1hr9r/vGi2lcMpX14QG9d/mnLhwu4EyNBh48JNEqsQqrOB9QKavsNqxVl1e8zcukA==}
     cpu: [x64]
     os: [win32]
 
-  lefthook@2.1.17:
-    resolution: {integrity: sha512-UWpD0VvZNIA2eA/+x4DvFlIT7uxH7aPrPrShE6nsIrX5qHJXxgDkoslAzF73X/YL2o0/9zDw3aOfpr98XchKFw==}
+  lefthook@2.2.1:
+    resolution: {integrity: sha512-aKEwhQzGbLMkZu5vrFYKJzLvLVblWATYITmN7Ak4qRCDPCoFJhmeJZFuYf3nTXuqG9xTBE+J8xaAEPL2tpuWyw==}
     hasBin: true
 
   lightningcss-android-arm64@1.32.0:
@@ -1970,6 +1973,16 @@ packages:
     resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
 
+  playwright-core@1.64.0:
+    resolution: {integrity: sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.64.0:
+    resolution: {integrity: sha512-kVzTnYFYEyQ9RGzBjNCd2+yEqWmVbxl3AHPynv3qQ6JTjv4a+kwRcnqQwIpuP3NnrnIrE/Q6wWAIAvMfIE2/Yg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   postcss@8.5.29:
     resolution: {integrity: sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ==}
     engines: {node: ^10 || ^12 || >=14}
@@ -2059,8 +2072,8 @@ packages:
     resolution: {integrity: sha512-7++dFhtcx3353uBaq8DDR4NuxBetBzC7ZQOhmTQInHEd6bSrXdiEyzCvG07Z44UYdLShWUyXt5M/yhz8ekcb1A==}
     engines: {node: '>=8'}
 
-  shell-quote@1.9.0:
-    resolution: {integrity: sha512-Iov+JwFv/2HcTpcwNMKd8+IWNb8tboQJNQTkAY/LLVK7gGH9jy+LGkVqPxfekHl+yMmiqXszdGWXgkfml7hjqA==}
+  shell-quote@1.12.0:
+    resolution: {integrity: sha512-PcByqNyT/38F2kDNi006HAMRJaULuBzq/FOsw3qdZvX/GA9W/jamDaRskgHjubHiftXK5sIFxLNkvrXUwcof6Q==}
     engines: {node: '>= 0.4'}
 
   shiki@3.23.0:
@@ -2073,8 +2086,8 @@ packages:
   signal-exit@3.0.7:
     resolution: {integrity: sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==}
 
-  solid-js@1.9.16:
-    resolution: {integrity: sha512-vESESWrNRebA0sQv+Vr9/2wOFOL6NK2QQow7F5/WCBH4c+OVoDyQNEbiVKVL7YqE1M7MPd7z7p27KElLkaD0bw==}
+  solid-js@1.9.17:
+    resolution: {integrity: sha512-4GAmLOWPfNV8H9Jfn2LSFTpNEG6jiOKPiwd5lnLGQtehHaX6l3TOLzJqQ7mqwB/3k1Yy3zyumFVopmc/tm34ow==}
 
   solid-refresh@0.6.3:
     resolution: {integrity: sha512-F3aPsX6hVw9ttm5LYlth8Q15x6MlI/J3Dn+o3EQyRTtTxidepSTwAYdozt01/YA+7ObcciagGEyXIopGZzQtbA==}
@@ -2194,13 +2207,13 @@ packages:
     peerDependencies:
       '@testing-library/jest-dom': ^5.16.6 || ^5.17.0 || ^6.0.0 || ^7.0.0
       solid-js: ^1.7.2
-      vite: 8.3.3
+      vite: 8.3.4
     peerDependenciesMeta:
       '@testing-library/jest-dom':
         optional: true
 
-  vite@8.3.3:
-    resolution: {integrity: sha512-cTAldKPImjg6c+gk48U19POPn3GCBzZwpdsN8ZMEEcbpes+6/wvfqUd0C2y3qYY4wsj8PwgFwrZ/1jBPVttMSg==}
+  vite@8.3.4:
+    resolution: {integrity: sha512-IftLE8phJhdNRIGNEV4JCCvfNScoZQVfcXaN8TQropWGJtOHcu+iAB9pHcuGvmEb/kddw0LBe/jS8ztdC6xdiQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
@@ -2245,7 +2258,7 @@ packages:
   vitefu@1.1.3:
     resolution: {integrity: sha512-ub4okH7Z5KLjb6hDyjqrGXqWtWvoYdU3IGm/NorpgHncKoLTCfRIbvlhBm7r0YstIaQRYlp4yEbFqDcKSzXSSg==}
     peerDependencies:
-      vite: 8.3.3
+      vite: 8.3.4
     peerDependenciesMeta:
       vite:
         optional: true
@@ -2600,7 +2613,7 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@earendil-works/chord@1.0.4':
+  '@earendil-works/chord@1.1.0':
     dependencies:
       esbuild: 0.28.2
 
@@ -2629,9 +2642,9 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-durable@1.0.4(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)':
+  '@earendil-works/pi-durable@1.1.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)':
     dependencies:
-      '@earendil-works/chord': 1.0.4
+      '@earendil-works/chord': 1.1.0
       '@earendil-works/pi-ai': 1.2.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.5)
       diff: 8.0.4
       typebox: 1.3.27
@@ -2739,7 +2752,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@hono/node-server@2.1.3(hono@4.13.13)':
+  '@hono/node-server@2.1.4(hono@4.13.13)':
     dependencies:
       hono: 4.13.13
 
@@ -3073,9 +3086,9 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@solidjs/router@1.0.0(solid-js@1.9.16)':
+  '@solidjs/router@1.0.0(solid-js@1.9.17)':
     dependencies:
-      solid-js: 1.9.16
+      solid-js: 1.9.17
 
   '@stablelib/base64@1.0.1': {}
 
@@ -3155,12 +3168,12 @@ snapshots:
       '@tailwindcss/oxide-win32-arm64-msvc': 4.3.3
       '@tailwindcss/oxide-win32-x64-msvc': 4.3.3
 
-  '@tailwindcss/vite@4.3.3(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))':
+  '@tailwindcss/vite@4.3.3(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))':
     dependencies:
       '@tailwindcss/node': 4.3.3
       '@tailwindcss/oxide': 4.3.3
       tailwindcss: 4.3.3
-      vite: 8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
+      vite: 8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
 
   '@tanstack/query-core@5.104.1': {}
 
@@ -3168,10 +3181,10 @@ snapshots:
     dependencies:
       '@tanstack/query-core': 5.104.1
 
-  '@tanstack/solid-query@5.104.1(solid-js@1.9.16)':
+  '@tanstack/solid-query@5.104.1(solid-js@1.9.17)':
     dependencies:
       '@tanstack/query-core': 5.104.1
-      solid-js: 1.9.16
+      solid-js: 1.9.17
 
   '@trpc/client@11.19.0(@trpc/server@11.19.0(typescript@7.0.2))(typescript@7.0.2)':
     dependencies:
@@ -3304,12 +3317,12 @@ snapshots:
       html-entities: 2.3.3
       parse5: 7.3.0
 
-  babel-preset-solid@1.9.16(@babel/core@7.29.7)(solid-js@1.9.16):
+  babel-preset-solid@1.9.16(@babel/core@7.29.7)(solid-js@1.9.17):
     dependencies:
       '@babel/core': 7.29.7
       babel-plugin-jsx-dom-expressions: 0.40.11(@babel/core@7.29.7)
     optionalDependencies:
-      solid-js: 1.9.16
+      solid-js: 1.9.17
 
   base64-js@1.5.1: {}
 
@@ -3352,11 +3365,11 @@ snapshots:
 
   comma-separated-tokens@2.0.3: {}
 
-  concurrently@10.0.5:
+  concurrently@10.0.6:
     dependencies:
       chalk: 5.6.2
       rxjs: 7.8.2
-      shell-quote: 1.9.0
+      shell-quote: 1.12.0
       supports-color: 10.2.2
       tree-kill: 1.2.2
       yargs: 18.0.0
@@ -3395,7 +3408,7 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  effect@4.0.1: {}
+  effect@4.0.2: {}
 
   electron-to-chromium@1.5.449: {}
 
@@ -3587,48 +3600,48 @@ snapshots:
       jwa: 2.0.1
       safe-buffer: 5.2.1
 
-  lefthook-darwin-arm64@2.1.17:
+  lefthook-darwin-arm64@2.2.1:
     optional: true
 
-  lefthook-darwin-x64@2.1.17:
+  lefthook-darwin-x64@2.2.1:
     optional: true
 
-  lefthook-freebsd-arm64@2.1.17:
+  lefthook-freebsd-arm64@2.2.1:
     optional: true
 
-  lefthook-freebsd-x64@2.1.17:
+  lefthook-freebsd-x64@2.2.1:
     optional: true
 
-  lefthook-linux-arm64@2.1.17:
+  lefthook-linux-arm64@2.2.1:
     optional: true
 
-  lefthook-linux-x64@2.1.17:
+  lefthook-linux-x64@2.2.1:
     optional: true
 
-  lefthook-openbsd-arm64@2.1.17:
+  lefthook-openbsd-arm64@2.2.1:
     optional: true
 
-  lefthook-openbsd-x64@2.1.17:
+  lefthook-openbsd-x64@2.2.1:
     optional: true
 
-  lefthook-windows-arm64@2.1.17:
+  lefthook-windows-arm64@2.2.1:
     optional: true
 
-  lefthook-windows-x64@2.1.17:
+  lefthook-windows-x64@2.2.1:
     optional: true
 
-  lefthook@2.1.17:
+  lefthook@2.2.1:
     optionalDependencies:
-      lefthook-darwin-arm64: 2.1.17
-      lefthook-darwin-x64: 2.1.17
-      lefthook-freebsd-arm64: 2.1.17
-      lefthook-freebsd-x64: 2.1.17
-      lefthook-linux-arm64: 2.1.17
-      lefthook-linux-x64: 2.1.17
-      lefthook-openbsd-arm64: 2.1.17
-      lefthook-openbsd-x64: 2.1.17
-      lefthook-windows-arm64: 2.1.17
-      lefthook-windows-x64: 2.1.17
+      lefthook-darwin-arm64: 2.2.1
+      lefthook-darwin-x64: 2.2.1
+      lefthook-freebsd-arm64: 2.2.1
+      lefthook-freebsd-x64: 2.2.1
+      lefthook-linux-arm64: 2.2.1
+      lefthook-linux-x64: 2.2.1
+      lefthook-openbsd-arm64: 2.2.1
+      lefthook-openbsd-x64: 2.2.1
+      lefthook-windows-arm64: 2.2.1
+      lefthook-windows-x64: 2.2.1
 
   lightningcss-android-arm64@1.32.0:
     optional: true
@@ -3877,6 +3890,12 @@ snapshots:
 
   picomatch@4.0.4: {}
 
+  playwright-core@1.64.0: {}
+
+  playwright@1.64.0:
+    dependencies:
+      playwright-core: 1.64.0
+
   postcss@8.5.29:
     dependencies:
       nanoid: 3.3.20
@@ -3973,7 +3992,7 @@ snapshots:
 
   shebang-regex@3.0.0: {}
 
-  shell-quote@1.9.0: {}
+  shell-quote@1.12.0: {}
 
   shiki@3.23.0:
     dependencies:
@@ -3999,18 +4018,18 @@ snapshots:
 
   signal-exit@3.0.7: {}
 
-  solid-js@1.9.16:
+  solid-js@1.9.17:
     dependencies:
       csstype: 3.2.3
       seroval: 1.6.8
       seroval-plugins: 1.6.8(seroval@1.6.8)
 
-  solid-refresh@0.6.3(solid-js@1.9.16):
+  solid-refresh@0.6.3(solid-js@1.9.17):
     dependencies:
       '@babel/generator': 7.29.8
       '@babel/helper-module-imports': 7.29.7
       '@babel/types': 7.29.8
-      solid-js: 1.9.16
+      solid-js: 1.9.17
     transitivePeerDependencies:
       - supports-color
 
@@ -4139,20 +4158,20 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite-plugin-solid@2.11.14(solid-js@1.9.16)(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)):
+  vite-plugin-solid@2.11.14(solid-js@1.9.17)(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)):
     dependencies:
       '@babel/core': 7.29.7
       '@types/babel__core': 7.20.5
-      babel-preset-solid: 1.9.16(@babel/core@7.29.7)(solid-js@1.9.16)
+      babel-preset-solid: 1.9.16(@babel/core@7.29.7)(solid-js@1.9.17)
       merge-anything: 5.1.7
-      solid-js: 1.9.16
-      solid-refresh: 0.6.3(solid-js@1.9.16)
-      vite: 8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
-      vitefu: 1.1.3(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
+      solid-js: 1.9.17
+      solid-refresh: 0.6.3(solid-js@1.9.17)
+      vite: 8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
+      vitefu: 1.1.3(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
     transitivePeerDependencies:
       - supports-color
 
-  vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15):
+  vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.4
@@ -4166,9 +4185,9 @@ snapshots:
       jiti: 2.7.0
       tsx: 4.23.15
 
-  vitefu@1.1.3(vite@8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)):
+  vitefu@1.1.3(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)):
     optionalDependencies:
-      vite: 8.3.3(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
+      vite: 8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
 
   web-streams-polyfill@3.3.3: {}
 

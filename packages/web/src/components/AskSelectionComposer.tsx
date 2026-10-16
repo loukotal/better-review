@@ -1,31 +1,14 @@
-import { createSignal, For, onMount, Show } from "solid-js";
+import { For, onMount, Show } from "solid-js";
 
 import type { StoredSession } from "@better-review/shared";
 
 import { Button, Field, MessageForm, Textarea } from "../design-system";
 import { formatSelectionQuestion, type SourceSelection } from "../lib/ask-ai-selection";
+import { createSelectionQuestionState } from "../lib/interaction-drafts";
 import { selectionRevisionLabel } from "../lib/selection-question-message";
+export { createSelectionQuestionState } from "../lib/interaction-drafts";
 
 /** App-owned so portal relocation (e.g. closing historical source) cannot erase a draft. */
-export function createSelectionQuestionState() {
-  const [question, setQuestion] = createSignal("");
-  const [target, setTarget] = createSignal("current");
-  const [sending, setSending] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
-  const [collapsed, setCollapsed] = createSignal(false);
-  return {
-    question,
-    setQuestion,
-    target,
-    setTarget,
-    sending,
-    setSending,
-    error,
-    setError,
-    collapsed,
-    setCollapsed,
-  };
-}
 
 export function AskSelectionComposer(props: {
   selection: SourceSelection;
