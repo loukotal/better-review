@@ -2,6 +2,7 @@ import { createTRPCClient, httpLink } from "@trpc/client";
 import type { AppRouter } from "better-review/src/trpc/routers";
 import superjson from "superjson";
 
+import { checkApiResponse } from "./api-response";
 import { getApiAuthHeaders, getApiToken } from "./apiAuth";
 
 const trpcUrl = import.meta.env.VITE_TRPC_URL ?? "/api/trpc";
@@ -16,6 +17,7 @@ export const trpc = createTRPCClient<AppRouter>({
     httpLink({
       url: trpcUrl,
       transformer: superjson,
+      fetch: async (url, options) => checkApiResponse(await fetch(url, options)),
       headers: getApiAuthHeaders,
     }),
   ],

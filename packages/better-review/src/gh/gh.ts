@@ -74,10 +74,13 @@ const PRCommentSchema = Schema.Struct({
   html_url: Schema.String,
   user: UserSchema,
   created_at: Schema.String,
+  updated_at: Schema.optional(Schema.String),
   in_reply_to_id: Schema.optional(Schema.Number),
 });
 /** Raw PR comment from GitHub API (without canEdit) */
 export type RawPRComment = typeof PRCommentSchema.Type;
+/** Keep REST modification evidence through decoding for causal outbox retirement. */
+export const decodeGithubReviewComments = Schema.decodeUnknownSync(Schema.Array(PRCommentSchema));
 
 // Issue comments (top-level PR conversation comments)
 const IssueCommentSchema = Schema.Struct({
@@ -930,7 +933,7 @@ const ghCli: GhCli = {
         ".",
       )).trim();
       if (!result) return [];
-      return yield* parseJsonPreserve(Schema.Array(PRCommentSchema))(result);
+      return yield* Effect.sync(() => decodeGithubReviewComments(JSON.parse(result)));
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getComments", cause })),
       Effect.withSpan("GhService.getComments", { attributes: { urlOrNumber } }),

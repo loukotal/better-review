@@ -24,6 +24,7 @@ jobs:
       - run: pnpm exec tsc --noEmit -p packages/web/tsconfig.json
       - run: pnpm exec tsc --noEmit -p packages/shared/tsconfig.json
       - run: pnpm test:browser
+      - run: pnpm test:review-transport
       - run: pnpm --filter ./packages/web build
       - uses: actions/upload-artifact@v4
         if: always()

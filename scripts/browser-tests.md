@@ -4,6 +4,7 @@
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
 pnpm test:browser
+pnpm test:review-transport
 ```
 
 Linux CI installs OS dependencies with `pnpm exec playwright install --with-deps chromium`.
@@ -61,3 +62,16 @@ package TypeScript checks, executes the browser suite and web build, and uploads
 browser artifacts even on failure.
 No paid model calls, GitHub comment posts, real PR data or user browser profiles
 are needed.
+
+## HTTP/1.1 review transport
+
+`pnpm test:review-transport` starts an isolated HTTP/1.1 Vite server with local
+snapshot, persistent SSE, and mock write endpoints. Eight Chromium pages share
+one context/origin and use the production review client (no fetch interception).
+A negative control first proves six uncapped streams block browser requests.
+The capped client must keep at most two streams, hydrate all eight viewers, and
+leave mock GitHub replies, review admission, health reads and navigation working.
+The runner also checks released-slot handoff, visibility pause/resume, EOF and
+failed-fetch recovery, disposal, no-Web-Locks polling, cancellation of old polls,
+and settlement through the actual chat hook. It never reads the development
+token or contacts real GitHub/model services.

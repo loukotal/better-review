@@ -6,6 +6,7 @@ import {
   createEffect,
   createMemo,
   Show,
+  For,
   onMount,
   onCleanup,
   on,
@@ -21,6 +22,8 @@ import { ApproveButton } from "./components/ApproveButton";
 import { CommitNavigator } from "./components/CommitNavigator";
 import { DiffStatsBadge } from "./components/DiffStatsBadge";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
+import { GithubCommentCard } from "./components/GithubCommentCard";
+import { GithubPendingPanel } from "./components/GithubPendingPanel";
 import { InlineFindingComment } from "./components/InlineFindingComment";
 import { InlineSourceView } from "./components/InlineSourceView";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
@@ -41,15 +44,20 @@ import {
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
 import { type SelectedSource, type SelectionChatController } from "./lib/ask-ai-selection";
-import { savePrComment } from "./lib/comment-save";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
-import { submitPrReview } from "./lib/pr-review-action";
+import {
+  projectGithubComments,
+  subscribeGithubComments,
+  githubCommentLocation,
+  githubLocationInPatch,
+  githubThreadForComment,
+} from "./lib/github-comment-views";
+import { githubPrScope, githubWrites, queueGithubWrite } from "./lib/github-writes";
 import {
   queryKeys,
   api,
   queryClient,
-  refreshPrListAfterReview,
   fetchPrCore,
   fetchPrExtras,
   type IssueComment,
@@ -118,7 +126,21 @@ const AppContent: Component = () => {
   const [readingDiffErrors, setReadingDiffErrors] = createSignal(new Map<string, string>());
   const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
   const [comments, setComments] = createSignal<PRComment[]>([]);
+  const [outboxVersion, setOutboxVersion] = createSignal(0);
+  const unsubscribeOutbox = githubWrites.subscribe(() => setOutboxVersion((value) => value + 1));
+  onCleanup(unsubscribeOutbox);
+  onCleanup(subscribeGithubComments(() => setOutboxVersion((value) => value + 1)));
+  const outboxOperations = createMemo(() => {
+    outboxVersion();
+    const url = loadedPrUrl();
+    return url ? githubWrites.getState(githubPrScope(url)).operations : [];
+  });
   const [issueComments, setIssueComments] = createSignal<IssueComment[]>([]);
+  const githubView = createMemo(() => {
+    outboxVersion();
+    const url = loadedPrUrl();
+    return url ? projectGithubComments(url) : undefined;
+  });
   const [error, setError] = createSignal<PrLoadError | null>(null);
   const [settings, setSettings] = createSignal<DiffSettings>(loadDiffSettings());
 
@@ -194,6 +216,21 @@ const AppContent: Component = () => {
   const [currentCommitIndex, setCurrentCommitIndex] = createSignal(0);
   const [commitDiff, setCommitDiff] = createSignal<string | null>(null);
   const [loadingCommits, setLoadingCommits] = createSignal(false);
+  const unplacedGithubComments = createMemo(
+    () =>
+      githubView()?.comments.filter((comment) => {
+        if (comment.ref.kind !== "review-comment") return false;
+        if (reviewMode() === "commit" || diffViewMode() === "reading") return true;
+        const location = githubCommentLocation(comment, outboxOperations(), githubView()?.comments);
+        const file = files().find((file) => file.name === location?.path);
+        return (
+          !location ||
+          !file ||
+          !githubLocationInPatch(location, file) ||
+          (!!location.expectedHeadSha && location.expectedHeadSha !== diffRevision().headSha)
+        );
+      }) ?? [],
+  );
 
   // Active diff based on review mode
   const activeDiff = createMemo(() => {
@@ -763,179 +800,114 @@ const AppContent: Component = () => {
     }
   };
 
-  // Helper to update comments in both local state and TanStack Query cache
-  const updateCommentsCache = (url: string, newComments: PRComment[]) => {
-    setComments(newComments);
-    queryClient.setQueryData(queryKeys.pr.comments(url), newComments);
+  const writeScope = () => {
+    const url = loadedPrUrl();
+    if (!url || url !== prUrl())
+      throw new Error("Wait for the selected PR to load. Your draft is preserved.");
+    return url;
   };
 
-  const addComment = (draft: DiffCommentDraft) =>
-    savePrComment(draft, {
-      loadedPrUrl,
-      mutate: (input) =>
-        submitPrReview(() => trpc.pr.addComment.mutate(input), refreshPrListAfterReview),
-      onSaved: (url, data) => {
-        if (data.comment) updateCommentsCache(url, [...comments(), data.comment]);
+  const addComment = async (draft: DiffCommentDraft) => {
+    const url = writeScope();
+    const expectedHeadSha = draft.expectedHeadSha;
+    if (!expectedHeadSha)
+      throw new Error(
+        "This comment has no verified viewed head. Reload its source; your draft is preserved.",
+      );
+    await queueGithubWrite(
+      url,
+      {
+        kind: "inline-comment",
+        expectedHeadSha,
+        body: draft.body,
+        anchor: {
+          path: draft.filePath,
+          side: draft.side,
+          line: draft.endLine ?? draft.line,
+          ...(draft.startLine !== undefined && draft.startLine !== (draft.endLine ?? draft.line)
+            ? { startLine: draft.startLine, startSide: draft.side }
+            : {}),
+        },
       },
-    });
+      draft.draftKey,
+    );
+  };
 
-  const replyToComment = async (commentId: number, body: string) => {
-    try {
-      const data = await trpc.pr.replyToComment.mutate({
-        prUrl: prUrl()!,
-        commentId,
+  const replyToComment = async (commentId: number, body: string, draftKey?: string) => {
+    await queueGithubWrite(
+      writeScope(),
+      {
+        kind: "reply",
+        target: { source: "remote", kind: "review-comment", id: commentId },
         body,
-      });
-      if (data.comment) {
-        const url = loadedPrUrl();
-        if (url) updateCommentsCache(url, [...comments(), data.comment]);
-      }
-      return data;
-    } catch (err) {
-      console.error("Failed to reply to comment:", err);
-      throw err instanceof Error ? err : new Error("Failed to reply");
-    }
+      },
+      draftKey,
+    );
   };
-
-  const editComment = async (commentId: number, body: string) => {
-    try {
-      const data = await trpc.pr.editComment.mutate({
-        prUrl: loadedPrUrl()!,
-        commentId,
-        body,
-      });
-      if (data.comment) {
-        const url = loadedPrUrl();
-        if (url) {
-          const newComments = comments().map((c) =>
-            c.id === commentId ? { ...c, body: data.comment.body } : c,
-          );
-          updateCommentsCache(url, newComments);
-        }
-      }
-      return data;
-    } catch (err) {
-      console.error("Failed to edit comment:", err);
-      return {
-        error: err instanceof Error ? err.message : "Failed to edit comment",
-      };
-    }
-  };
-
-  const deleteComment = async (commentId: number) => {
-    try {
-      await trpc.pr.deleteComment.mutate({
-        prUrl: loadedPrUrl()!,
-        commentId,
-      });
-      const url = loadedPrUrl();
-      if (url) {
-        updateCommentsCache(
-          url,
-          comments().filter((c) => c.id !== commentId),
-        );
-      }
-      return { success: true };
-    } catch (err) {
-      console.error("Failed to delete comment:", err);
-      return {
-        error: err instanceof Error ? err.message : "Failed to delete comment",
-      };
-    }
-  };
-
-  const resolveThread = async (threadId: string, resolved: boolean) => {
-    const url = loadedPrUrl();
-    if (!url) return;
-    try {
-      if (resolved) {
-        await trpc.pr.resolveThread.mutate({ prUrl: url, threadId });
-      } else {
-        await trpc.pr.unresolveThread.mutate({ prUrl: url, threadId });
-      }
-      // Update local state: mark all comments in this thread as resolved/unresolved
-      const newComments = comments().map((c) =>
-        c.threadId === threadId ? { ...c, isResolved: resolved } : c,
-      );
-      updateCommentsCache(url, newComments);
-      return { success: true };
-    } catch (err) {
-      console.error("Failed to resolve/unresolve thread:", err);
-      return {
-        error: err instanceof Error ? err.message : "Failed to resolve thread",
-      };
-    }
-  };
-
-  // Helper to update issue comments in both local state and TanStack Query cache
-  const updateIssueCommentsCache = (
-    url: string,
-    newComments: typeof issueComments extends () => infer T ? T : never,
+  const editComment = async (
+    commentId: number,
+    body: string,
+    draftKey?: string,
+    expectedBody?: string,
   ) => {
-    setIssueComments(newComments);
-    queryClient.setQueryData(queryKeys.pr.issueComments(url), newComments);
-  };
-
-  const addIssueComment = async (body: string) => {
-    const url = loadedPrUrl();
-    if (!url) return;
-    try {
-      const data = await trpc.pr.addIssueComment.mutate({
-        prUrl: url,
+    const target = comments().find((c) => c.id === commentId);
+    if (!target) throw new Error("Comment not loaded. Your draft is preserved.");
+    await queueGithubWrite(
+      writeScope(),
+      {
+        kind: "edit-comment",
+        target: { source: "remote", kind: "review-comment", id: commentId },
+        expectedBody: expectedBody ?? target.body,
         body,
-      });
-      if (data.comment) {
-        updateIssueCommentsCache(url, [...issueComments(), data.comment]);
-      }
-    } catch (err) {
-      console.error("Failed to add issue comment:", err);
-      throw err;
-    }
+      },
+      draftKey,
+    );
   };
-
-  const editIssueComment = async (commentId: number, body: string) => {
-    const url = loadedPrUrl();
-    if (!url) return;
-    try {
-      const data = await trpc.pr.editIssueComment.mutate({
-        prUrl: url,
-        commentId,
+  const deleteComment = async (commentId: number) => {
+    const target = comments().find((c) => c.id === commentId);
+    if (!target) throw new Error("Comment not loaded.");
+    await queueGithubWrite(writeScope(), {
+      kind: "delete-comment",
+      target: { source: "remote", kind: "review-comment", id: commentId },
+      expectedBody: target.body,
+    });
+  };
+  const resolveThread = async (threadId: string, resolved: boolean) => {
+    await queueGithubWrite(writeScope(), {
+      kind: resolved ? "resolve-thread" : "unresolve-thread",
+      target: { source: "remote", kind: "thread", nodeId: threadId },
+    });
+  };
+  const addIssueComment = async (body: string, draftKey?: string) => {
+    await queueGithubWrite(writeScope(), { kind: "issue-comment", body }, draftKey);
+  };
+  const editIssueComment = async (
+    commentId: number,
+    body: string,
+    draftKey?: string,
+    expectedBody?: string,
+  ) => {
+    const target = issueComments().find((c) => c.id === commentId);
+    if (!target) throw new Error("Comment not loaded. Your draft is preserved.");
+    await queueGithubWrite(
+      writeScope(),
+      {
+        kind: "edit-comment",
+        target: { source: "remote", kind: "issue-comment", id: commentId },
+        expectedBody: expectedBody ?? target.body,
         body,
-      });
-      if (data.comment) {
-        const newComments = issueComments().map((c) =>
-          c.id === commentId
-            ? {
-                ...c,
-                body: data.comment.body,
-                updated_at: data.comment.updated_at,
-              }
-            : c,
-        );
-        updateIssueCommentsCache(url, newComments);
-      }
-    } catch (err) {
-      console.error("Failed to edit issue comment:", err);
-      throw err;
-    }
+      },
+      draftKey,
+    );
   };
-
   const deleteIssueComment = async (commentId: number) => {
-    const url = loadedPrUrl();
-    if (!url) return;
-    try {
-      await trpc.pr.deleteIssueComment.mutate({
-        prUrl: url,
-        commentId,
-      });
-      updateIssueCommentsCache(
-        url,
-        issueComments().filter((c) => c.id !== commentId),
-      );
-    } catch (err) {
-      console.error("Failed to delete issue comment:", err);
-      throw err;
-    }
+    const target = issueComments().find((c) => c.id === commentId);
+    if (!target) throw new Error("Comment not loaded.");
+    await queueGithubWrite(writeScope(), {
+      kind: "delete-comment",
+      target: { source: "remote", kind: "issue-comment", id: commentId },
+      expectedBody: target.body,
+    });
   };
 
   return (
@@ -1084,7 +1056,12 @@ const AppContent: Component = () => {
                   aria-controls="pr-conversation"
                   onClick={() => setConversationOpen(!conversationOpen())}
                 >
-                  Conversation{issueComments().length ? ` (${issueComments().length})` : ""}
+                  Conversation
+                  {githubView()?.comments.filter(
+                    (comment) => comment.ref.kind === "issue-comment" && !comment.deleted,
+                  ).length
+                    ? ` (${githubView()!.comments.filter((comment) => comment.ref.kind === "issue-comment" && !comment.deleted).length})`
+                    : ""}
                 </Button>
                 <Show when={nextPr()}>
                   {(next) => (
@@ -1103,19 +1080,40 @@ const AppContent: Component = () => {
                     variant="ghost"
                     size="sm"
                     aria-pressed={!reviewCommentsHidden()}
-                    disabled={aiAnnotations().length === 0 && comments().length === 0}
+                    disabled={
+                      aiAnnotations().length === 0 &&
+                      !githubView()?.comments.some(
+                        (comment) => comment.ref.kind === "review-comment",
+                      )
+                    }
                     onClick={() => setReviewCommentsHidden((hidden) => !hidden)}
                   >
                     Inline comments
                   </Button>
                 </SettingsPanel>
-                <ApproveButton />
+                <ApproveButton
+                  expectedHeadSha={diffRevision().headSha}
+                  canSubmit={loadedPrUrl() === prUrl()}
+                  approvalState={
+                    githubView()?.approvals.find(
+                      (approval) => approval.commitSha === diffRevision().headSha,
+                    )?.pending
+                      ? "pending"
+                      : githubView()?.approvals.some(
+                            (approval) => approval.commitSha === diffRevision().headSha,
+                          )
+                        ? "synced"
+                        : undefined
+                  }
+                />
               </div>
             </div>
             {/* PR Comments (top-level conversation) */}
             <div id="pr-conversation" hidden={!conversationOpen()}>
               <PrCommentsPanel
                 embedded
+                prUrl={loadedPrUrl()}
+                githubView={githubView()}
                 comments={issueComments()}
                 loading={loadingComments()}
                 repoOwner={prInfo()?.owner}
@@ -1129,6 +1127,16 @@ const AppContent: Component = () => {
         </AppHeader>
       </Show>
 
+      <GithubPendingPanel
+        prUrl={loadedPrUrl() === prUrl() ? loadedPrUrl() : null}
+        onRemoteSync={async (url) => {
+          const data = await api.fetchPrExtras(url);
+          if (!loadedPrUrl() || githubPrScope(loadedPrUrl()!).url !== url) return;
+          if (data.comments) setComments(data.comments);
+          if (data.issueComments) setIssueComments(data.issueComments);
+          if (data.status) setPrStatus(data.status);
+        }}
+      />
       {/* Focus mode exit bar */}
       <Show when={focusMode()}>
         <div class="flex items-center justify-between px-3 py-1.5 bg-bg-surface border-b border-accent/30">
@@ -1295,7 +1303,7 @@ const AppContent: Component = () => {
                       entry={entry}
                       isCurrent={() => interactions.currentComment(entry.request)}
                       onCancel={() => interactions.finishComment(entry)}
-                      onSubmit={async (body) => {
+                      onSubmit={async (body, draftKey) => {
                         interactions.assertCurrentComment(entry.request);
                         await addComment({
                           filePath: entry.request.filePath,
@@ -1303,15 +1311,47 @@ const AppContent: Component = () => {
                           side: "RIGHT",
                           body,
                           expectedHeadSha: entry.request.expectedHeadSha,
+                          draftKey,
                         });
                         interactions.finishComment(entry);
                       }}
                     />
                   )}
                 </Show>
+                <Show when={!reviewCommentsHidden() && unplacedGithubComments().length}>
+                  <section
+                    aria-label="Review comments outside displayed patch"
+                    class="mb-3 space-y-2"
+                  >
+                    <h3 class="text-sm text-text-muted">
+                      Review comments outside the displayed patch
+                    </h3>
+                    <For each={unplacedGithubComments().map((comment) => comment.key)}>
+                      {(key) => (
+                        <GithubCommentCard
+                          comment={unplacedGithubComments().find((comment) => comment.key === key)!}
+                          scope={githubPrScope(loadedPrUrl()!)}
+                          operations={outboxOperations()}
+                          thread={githubThreadForComment(
+                            unplacedGithubComments().find((comment) => comment.key === key)!,
+                            githubView()?.threads ?? [],
+                            outboxOperations(),
+                          )}
+                        />
+                      )}
+                    </For>
+                  </section>
+                </Show>
                 <DiffViewer
                   findingComment={findingComment()}
                   commentHeadSha={diffRevision().headSha}
+                  githubOperations={outboxOperations()}
+                  githubComments={
+                    reviewCommentsHidden() || diffViewMode() === "reading"
+                      ? []
+                      : githubView()?.comments
+                  }
+                  githubThreads={githubView()?.threads}
                   askEditorOpen={!!askSelection()}
                   commitScope={reviewMode() === "commit"}
                   onAskAi={askAboutSource}

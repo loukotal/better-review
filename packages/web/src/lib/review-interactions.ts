@@ -350,7 +350,13 @@ export function createReviewInteractions(
           const key = findingCommentKey(prepared.request);
           const entry = {
             request: prepared.request,
-            draft: drafts.get(key)?.draft ?? createCachedCommentDraft(prepared.request.body),
+            draft:
+              drafts.get(key)?.draft ??
+              createCachedCommentDraft(
+                prepared.request.body,
+                `finding:${key}`,
+                prepared.request.prUrl,
+              ),
           };
           drafts.set(key, entry);
           setInlineFinding(entry);

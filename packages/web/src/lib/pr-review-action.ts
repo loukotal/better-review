@@ -1,4 +1,4 @@
-/** A cache refresh failure must never turn a successful GitHub review into a failed submission. */
+/** GitHub admission completes the action; list refresh runs independently afterward. */
 export async function submitPrReview<T>(
   submit: () => Promise<T>,
   refreshList: () => Promise<unknown>,
@@ -6,10 +6,6 @@ export async function submitPrReview<T>(
     console.error("PR list refresh failed:", error),
 ): Promise<T> {
   const result = await submit();
-  try {
-    await refreshList();
-  } catch (error) {
-    onRefreshError(error);
-  }
+  void Promise.resolve().then(refreshList).catch(onRefreshError);
   return result;
 }

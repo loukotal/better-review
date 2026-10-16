@@ -14,7 +14,7 @@ export interface InlineFindingDraft {
 export function InlineFindingComment(props: {
   entry: InlineFindingDraft;
   isCurrent: () => boolean;
-  onSubmit: (body: string) => Promise<void>;
+  onSubmit: (body: string, draftKey?: string) => Promise<void>;
   onCancel: () => void;
 }) {
   const [source, { refetch }] = createResource(

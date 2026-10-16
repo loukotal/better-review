@@ -13,7 +13,7 @@ export function CachedCommentForm(props: {
   startLine: number;
   endLine: number;
   disabled?: () => boolean;
-  onSubmit: (body: string) => Promise<void>;
+  onSubmit: (body: string, draftKey?: string) => Promise<void>;
   onCancel: () => void;
   onDraftChange?: PendingCommentFormProps["onDraftChange"];
 }) {
@@ -28,7 +28,9 @@ export function CachedCommentForm(props: {
           is preserved.
         </p>
       </Show>
-      <fieldset disabled={props.disabled?.() || props.draft.submitting()}>
+      <fieldset
+        disabled={props.disabled?.() || props.draft.submitting() || !props.draft.state.ready()}
+      >
         <PendingCommentForm
           state={props.draft.state}
           startLine={props.startLine}
@@ -36,8 +38,8 @@ export function CachedCommentForm(props: {
           initialBody={props.draft.body}
           onDraftChange={props.onDraftChange}
           onCancel={props.onCancel}
-          onSubmit={async (body) => {
-            await props.onSubmit(body);
+          onSubmit={async (body, key) => {
+            await props.onSubmit(body, key);
           }}
         />
       </fieldset>

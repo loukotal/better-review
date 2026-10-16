@@ -20,6 +20,8 @@ export interface PRComment {
   html_url: string;
   user: GhUser;
   created_at: string;
+  /** GitHub REST modification time; absent in older cached review-comment records. */
+  updated_at?: string;
   in_reply_to_id?: number;
   /** Whether the current user can edit/delete this comment */
   canEdit: boolean;

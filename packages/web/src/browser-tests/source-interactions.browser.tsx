@@ -692,6 +692,10 @@ export async function testCurrentCommentGuardRetainsBrowserDraftInBrowser() {
       "verified current comment source did not load",
     );
     const entry = interactions.inlineFinding()!;
+    await browserWait(
+      () => !!host.querySelector("textarea:not(:disabled)"),
+      "Durable inline draft did not hydrate",
+    );
     const textarea = host.querySelector("textarea")!;
     textarea.value = "User-edited current source draft";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));

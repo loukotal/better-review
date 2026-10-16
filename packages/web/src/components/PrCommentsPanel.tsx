@@ -3,17 +3,29 @@ import { type Component, For, Show, createSignal, createMemo } from "solid-js";
 import { Button, MessageForm, Textarea } from "../design-system";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CommentIcon } from "../icons/comment-icon";
+import type { projectGithubComments } from "../lib/github-comment-views";
+import { createGithubEditorDraft } from "../lib/github-editor-draft";
+import { githubPrScope } from "../lib/github-writes";
 import type { IssueComment } from "../lib/query";
+import { createRecoverableDraft } from "../lib/recoverable-drafts";
 import { CommentView } from "./CommentView";
+import { GithubCommentCard } from "./GithubCommentCard";
 
 interface PrCommentsPanelProps {
+  githubView?: ReturnType<typeof projectGithubComments>;
+  prUrl?: string | null;
   embedded?: boolean;
   comments: IssueComment[];
   loading?: boolean;
   repoOwner?: string | null;
   repoName?: string | null;
-  onAddComment?: (body: string) => Promise<void>;
-  onEditComment?: (commentId: number, body: string) => Promise<void>;
+  onAddComment?: (body: string, draftKey?: string) => Promise<void>;
+  onEditComment?: (
+    commentId: number,
+    body: string,
+    draftKey?: string,
+    expectedBody?: string,
+  ) => Promise<void>;
   onDeleteComment?: (commentId: number) => Promise<void>;
 }
 
@@ -150,14 +162,31 @@ function groupIntoThreads(comments: IssueComment[]): CommentThread[] {
 export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
   const [expanded, setExpanded] = createSignal(props.embedded ?? false);
   const [showNewCommentForm, setShowNewCommentForm] = createSignal(false);
-  const [newCommentBody, setNewCommentBody] = createSignal("");
+  const draft = props.prUrl
+    ? createGithubEditorDraft({
+        slot: () => (props.prUrl ? `${props.prUrl}:conversation:new` : undefined),
+        url: () => props.prUrl,
+        initial: () => ({ body: "" }),
+      })
+    : undefined;
+  const {
+    body: newCommentBody,
+    setBody: setNewCommentBody,
+    storageError,
+  } = draft
+    ? { body: draft.body, setBody: draft.setBody, storageError: draft.error }
+    : createRecoverableDraft(() => undefined);
   const [isSubmitting, setIsSubmitting] = createSignal(false);
+  const [saveError, setSaveError] = createSignal<string | null>(null);
   // Track which comment ID we're replying to (null = new top-level comment)
   const [replyingToId, setReplyingToId] = createSignal<number | null>(null);
   const [replyingToUsername, setReplyingToUsername] = createSignal<string | null>(null);
 
-  const hasComments = createMemo(() => props.comments.length > 0);
-  const commentCount = createMemo(() => props.comments.length);
+  const views = createMemo(() =>
+    props.githubView?.comments.filter((comment) => comment.ref.kind === "issue-comment"),
+  );
+  const hasComments = createMemo(() => (views()?.length ?? props.comments.length) > 0);
+  const commentCount = createMemo(() => views()?.length ?? props.comments.length);
 
   // Group comments into threads
   const threads = createMemo(() => groupIntoThreads(props.comments));
@@ -175,7 +204,6 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
   const cancelReply = () => {
     setReplyingToId(null);
     setReplyingToUsername(null);
-    setNewCommentBody("");
     setShowNewCommentForm(false);
   };
 
@@ -184,11 +212,20 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
     if (!body || !props.onAddComment || isSubmitting()) return;
 
     setIsSubmitting(true);
+    setSaveError(null);
     try {
-      await props.onAddComment(body);
+      if (draft) await draft.submit((text, key) => props.onAddComment!(text.trim(), key));
+      else {
+        await props.onAddComment(body);
+        setNewCommentBody("");
+      }
       cancelReply();
     } catch (error) {
-      console.error("Failed to add comment:", error);
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "Could not save comment locally. Your draft is preserved.",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -224,7 +261,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
           placeholder={`Reply to @${replyingToUsername()}...`}
           aria-label="Comment reply"
           class="w-full min-h-20 resize-y"
-          disabled={isSubmitting()}
+          disabled={isSubmitting() || !(draft?.ready() ?? true)}
           autofocus
         />
         <div class="flex items-center justify-end gap-2">
@@ -239,7 +276,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
           </Button>
           <Button
             type="submit"
-            disabled={!newCommentBody().trim() || isSubmitting()}
+            disabled={!newCommentBody().trim() || isSubmitting() || !(draft?.ready() ?? true)}
             variant="primary"
             size="sm"
           >
@@ -253,6 +290,14 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
   return (
     <Show when={!props.loading}>
       <div class="border-t border-border">
+        <Show when={saveError()}>
+          <p role="alert" class="text-xs text-error">
+            {saveError()}
+          </p>
+        </Show>
+        <Show when={storageError()}>
+          <p role="alert">{storageError()}</p>
+        </Show>
         <Show when={!props.embedded}>
           {/* Header */}
           <Button
@@ -288,49 +333,64 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                 <div class="text-sm text-text-faint py-2">No conversation comments yet</div>
               }
             >
-              <For each={threads()}>
-                {(thread) => (
-                  <div class="bg-bg-elevated border border-border p-3">
-                    {/* Root comment */}
-                    <CommentView
-                      comment={thread.root}
-                      githubContext={githubContext()}
-                      showEdited
-                      onEdit={props.onEditComment}
-                      onDelete={props.onDeleteComment}
-                      onReply={props.onAddComment ? handleReply : undefined}
+              <Show
+                when={views()}
+                fallback={
+                  <For each={threads()}>
+                    {(thread) => (
+                      <div class="bg-bg-elevated border border-border p-3">
+                        {/* Root comment */}
+                        <CommentView
+                          comment={thread.root}
+                          githubContext={githubContext()}
+                          showEdited
+                          onEdit={props.onEditComment}
+                          onDelete={props.onDeleteComment}
+                          onReply={props.onAddComment ? handleReply : undefined}
+                        />
+                        {/* Reply form after root (if replying to root) */}
+                        <Show when={replyingToId() === thread.root.id}>{renderReplyForm()}</Show>
+                        {/* Replies */}
+                        <For each={thread.replies}>
+                          {(reply) => (
+                            <>
+                              <div class="mt-2">
+                                <CommentView
+                                  comment={reply}
+                                  githubContext={githubContext()}
+                                  showEdited
+                                  isReply
+                                  onEdit={props.onEditComment}
+                                  onDelete={props.onDeleteComment}
+                                  onReply={props.onAddComment ? handleReply : undefined}
+                                />
+                              </div>
+                              {/* Reply form after this reply (if replying to it) */}
+                              <Show when={replyingToId() === reply.id}>{renderReplyForm()}</Show>
+                            </>
+                          )}
+                        </For>
+                      </div>
+                    )}
+                  </For>
+                }
+              >
+                <For each={views()?.map((comment) => comment.key)}>
+                  {(key) => (
+                    <GithubCommentCard
+                      comment={views()!.find((comment) => comment.key === key)!}
+                      scope={githubPrScope(props.prUrl!)}
+                      operations={props.githubView?.operations ?? []}
                     />
-                    {/* Reply form after root (if replying to root) */}
-                    <Show when={replyingToId() === thread.root.id}>{renderReplyForm()}</Show>
-                    {/* Replies */}
-                    <For each={thread.replies}>
-                      {(reply) => (
-                        <>
-                          <div class="mt-2">
-                            <CommentView
-                              comment={reply}
-                              githubContext={githubContext()}
-                              showEdited
-                              isReply
-                              onEdit={props.onEditComment}
-                              onDelete={props.onDeleteComment}
-                              onReply={props.onAddComment ? handleReply : undefined}
-                            />
-                          </div>
-                          {/* Reply form after this reply (if replying to it) */}
-                          <Show when={replyingToId() === reply.id}>{renderReplyForm()}</Show>
-                        </>
-                      )}
-                    </For>
-                  </div>
-                )}
-              </For>
+                  )}
+                </For>
+              </Show>
             </Show>
 
             {/* New top-level comment form */}
             <Show when={props.onAddComment && !replyingToId()}>
               <Show
-                when={showNewCommentForm()}
+                when={showNewCommentForm() || !!newCommentBody()}
                 fallback={
                   <Button
                     type="button"
@@ -355,7 +415,7 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                     placeholder="Write a comment..."
                     aria-label="New conversation comment"
                     class="w-full min-h-20 resize-y"
-                    disabled={isSubmitting()}
+                    disabled={isSubmitting() || !(draft?.ready() ?? true)}
                     autofocus
                   />
                   <div class="flex items-center justify-between">
@@ -372,7 +432,9 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                       </Button>
                       <Button
                         type="submit"
-                        disabled={!newCommentBody().trim() || isSubmitting()}
+                        disabled={
+                          !newCommentBody().trim() || isSubmitting() || !(draft?.ready() ?? true)
+                        }
                         variant="primary"
                         size="sm"
                       >

@@ -19,6 +19,7 @@
     "start:production": "pnpm --filter ./packages/web build && pnpm --filter ./packages/better-review start",
     "test": "pnpm -r test",
     "test:browser": "node scripts/test-browser.mjs",
+    "test:review-transport": "node scripts/test-review-transport.mjs",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist && pnpm install",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",

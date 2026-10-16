@@ -20,6 +20,10 @@ import {
   type CachedCommentDraft,
 } from "../components/CachedCommentForm";
 import { renderCommentThread } from "../components/CommentView";
+import {
+  renderGithubCommentCard,
+  createGithubCommentUiState,
+} from "../components/GithubCommentCard";
 import { SelectionBubble } from "../components/SelectionBubble";
 import type { DiffCommentDraft } from "../DiffViewer";
 import { CheckIcon } from "../icons/check-icon";
@@ -27,6 +31,14 @@ import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CircleIcon } from "../icons/circle-icon";
 import { extractLines, extractTextSelection, type SelectedSource } from "../lib/ask-ai-selection";
 import type { FindingCommentRequest } from "../lib/finding-comment";
+import {
+  githubCommentLocation,
+  githubLocationInPatch,
+  githubThreadForComment,
+} from "../lib/github-comment-views";
+import type { BrowserGithubOperation } from "../lib/github-outbox";
+import type { GithubCommentView, GithubThreadView } from "../lib/github-outbox-projection";
+import { githubPrScope } from "../lib/github-writes";
 import { fetchFileContentCached } from "../lib/query";
 import {
   lineSelectionAnchor,
@@ -64,6 +76,9 @@ const GENERATED_FILE_PATTERNS = [
 ];
 
 interface FileDiffViewProps {
+  githubComments?: GithubCommentView[];
+  githubThreads?: GithubThreadView[];
+  githubOperations?: BrowserGithubOperation[];
   findingComment?: FindingCommentRequest | null;
   commentHeadSha?: string | null;
   onAskAi?: (selection: SelectedSource, anchor: SelectionBubbleAnchor) => void;
@@ -75,8 +90,13 @@ interface FileDiffViewProps {
   comments: PRComment[];
   aiAnnotations?: Annotation[];
   onAddComment: (draft: Omit<DiffCommentDraft, "filePath">) => Promise<unknown>;
-  onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
-  onEditComment: (commentId: number, body: string) => Promise<unknown>;
+  onReplyToComment: (commentId: number, body: string, draftKey?: string) => Promise<unknown>;
+  onEditComment: (
+    commentId: number,
+    body: string,
+    draftKey?: string,
+    expectedBody?: string,
+  ) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<unknown>;
   onDismissAiAnnotation?: (annotationId: string) => void;
@@ -109,6 +129,10 @@ interface FileDiffViewProps {
   activeSearchMatch?: { line: number; side: "LEFT" | "RIGHT"; query: string };
   readOnly?: boolean;
 }
+
+type DiffAnnotationMetadata =
+  | AnnotationMetadata
+  | { type: "github-comment"; comment: GithubCommentView; thread?: GithubThreadView };
 
 // Group comments into threads by their root comment
 function groupCommentsIntoThreads(comments: PRComment[]) {
@@ -144,8 +168,8 @@ function groupCommentsIntoThreads(comments: PRComment[]) {
 export function FileDiffView(props: FileDiffViewProps) {
   let _containerRef: HTMLDivElement | undefined;
   let instance:
-    | FocusableFileDiff<AnnotationMetadata>
-    | FocusableVirtualizedFileDiff<AnnotationMetadata>
+    | FocusableFileDiff<DiffAnnotationMetadata>
+    | FocusableVirtualizedFileDiff<DiffAnnotationMetadata>
     | undefined;
   let nonVirtualized = false;
   let cancelFocus: (() => void) | undefined;
@@ -288,24 +312,52 @@ export function FileDiffView(props: FileDiffViewProps) {
   };
 
   const threads = createMemo(() => groupCommentsIntoThreads(props.comments));
+  const githubUiStates = new Map<string, ReturnType<typeof createGithubCommentUiState>>();
 
   const lineAnnotations = createMemo(() => {
-    const result: DiffLineAnnotation<AnnotationMetadata>[] = [];
+    const result: DiffLineAnnotation<DiffAnnotationMetadata>[] = [];
+    for (const comment of props.githubComments ?? []) {
+      if (comment.ref.kind !== "review-comment") continue;
+      const location = githubCommentLocation(
+        comment,
+        props.githubOperations ?? [],
+        props.githubComments,
+      );
+      if (
+        !location ||
+        location.path !== props.file.name ||
+        !githubLocationInPatch(location, props.file) ||
+        (location.expectedHeadSha && location.expectedHeadSha !== props.commentHeadSha) ||
+        props.commitScope
+      )
+        continue;
+      const thread = githubThreadForComment(
+        comment,
+        props.githubThreads ?? [],
+        props.githubOperations ?? [],
+      );
+      result.push({
+        side: location.side === "LEFT" ? "deletions" : "additions",
+        lineNumber: location.line,
+        metadata: { type: "github-comment", comment, thread },
+      });
+    }
     const threadMap = threads();
 
     // Add threads as annotations
-    Array.from(threadMap.values()).forEach(({ root, replies }) => {
-      // Use line if available, otherwise fall back to original_line for outdated comments
-      const lineNumber = root.line ?? root.original_line;
-      // Skip comments without any line information
-      if (lineNumber === null) return;
+    if (props.githubComments === undefined)
+      Array.from(threadMap.values()).forEach(({ root, replies }) => {
+        // Use line if available, otherwise fall back to original_line for outdated comments
+        const lineNumber = root.line ?? root.original_line;
+        // Skip comments without any line information
+        if (lineNumber === null) return;
 
-      result.push({
-        side: (root.side === "LEFT" ? "deletions" : "additions") as AnnotationSide,
-        lineNumber,
-        metadata: { type: "thread", rootComment: root, replies },
+        result.push({
+          side: (root.side === "LEFT" ? "deletions" : "additions") as AnnotationSide,
+          lineNumber,
+          metadata: { type: "thread", rootComment: root, replies },
+        });
       });
-    });
 
     // Add AI annotations
     if (props.aiAnnotations) {
@@ -331,7 +383,7 @@ export function FileDiffView(props: FileDiffViewProps) {
           endLine: pending.endLine,
           side: pending.side,
           initialBody: pending.initialBody,
-          expectedHeadSha: pending.expectedHeadSha ?? props.commentHeadSha ?? undefined,
+          expectedHeadSha: pending.expectedHeadSha,
           scope: pending.scope ?? props.selectionScope,
         },
       });
@@ -366,6 +418,25 @@ export function FileDiffView(props: FileDiffViewProps) {
       () => {
         setTimeout(rerender, 0);
       },
+      { defer: true },
+    ),
+  );
+
+  // Re-render when AI annotations change
+  createEffect(
+    on(
+      () =>
+        JSON.stringify([
+          props.githubComments?.map((comment) => [
+            comment.key,
+            comment.body,
+            comment.deleted,
+            comment.pending,
+            comment.confirmed?.updatedAt,
+          ]),
+          props.githubThreads?.map((thread) => [thread.key, thread.resolved, thread.pending]),
+        ]),
+      () => setTimeout(rerender, 0),
       { defer: true },
     ),
   );
@@ -671,7 +742,7 @@ export function FileDiffView(props: FileDiffViewProps) {
    */
   const renderHunkSeparator = (
     hunk: HunkData,
-    _fileDiffInstance: FileDiff<AnnotationMetadata>,
+    _fileDiffInstance: FileDiff<DiffAnnotationMetadata>,
   ): HTMLElement => {
     const container = document.createElement("div");
     container.className = "hunk-sep";
@@ -742,7 +813,7 @@ export function FileDiffView(props: FileDiffViewProps) {
     instance?.cleanUp();
     for (const dispose of disposeList.splice(0)) dispose();
     el.innerHTML = "";
-    const options: FileDiffOptions<AnnotationMetadata> = {
+    const options: FileDiffOptions<DiffAnnotationMetadata> = {
       diffStyle: props.settings.diffStyle,
       theme: props.settings.theme,
       lineDiffType: props.settings.lineDiffType,
@@ -796,16 +867,45 @@ export function FileDiffView(props: FileDiffViewProps) {
           const side = range.side === "deletions" ? "LEFT" : "RIGHT";
           const startLine = Math.min(range.start, range.end);
           const endLine = Math.max(range.start, range.end);
-          setPendingComment({ startLine, endLine, side });
+          setPendingComment({
+            startLine,
+            endLine,
+            side,
+            expectedHeadSha: props.commentHeadSha ?? undefined,
+            scope: props.selectionScope,
+          });
           // Re-render to show the pending comment form
           setTimeout(rerender, 0);
         }
       },
-      renderAnnotation: (annotation: { metadata: AnnotationMetadata }) => {
+      renderAnnotation: (annotation: { metadata: DiffAnnotationMetadata }) => {
         const { metadata } = annotation;
         const div = document.createElement("div");
 
-        if (metadata.type === "thread") {
+        if (metadata.type === "github-comment" && props.prUrl) {
+          const key = metadata.comment.key;
+          const uiState = githubUiStates.get(key) ?? createGithubCommentUiState();
+          githubUiStates.set(key, uiState);
+          const dispose = renderGithubCommentCard(div, {
+            uiState,
+            get comment() {
+              return (
+                props.githubComments?.find((comment) => comment.key === key) ?? metadata.comment
+              );
+            },
+            scope: githubPrScope(props.prUrl),
+            get operations() {
+              return props.githubOperations ?? [];
+            },
+            get thread() {
+              return (
+                props.githubThreads?.find((thread) => thread.key === metadata.thread?.key) ??
+                metadata.thread
+              );
+            },
+          });
+          disposeList.push(dispose);
+        } else if (metadata.type === "thread") {
           const { rootComment, replies } = metadata;
           div.className = "p-2.5 my-1 mx-2 bg-bg-elevated border border-border";
 
@@ -814,14 +914,14 @@ export function FileDiffView(props: FileDiffViewProps) {
             rootComment,
             replies,
             githubContext: githubContext(),
-            onEdit: async (commentId, body) => {
-              await props.onEditComment(commentId, body);
+            onEdit: async (commentId, body, key, expectedBody) => {
+              await props.onEditComment(commentId, body, key, expectedBody);
             },
             onDelete: async (commentId) => {
               await props.onDeleteComment(commentId);
             },
-            onReply: async (body) => {
-              await props.onReplyToComment(rootComment.id, body);
+            onReply: async (body, key) => {
+              await props.onReplyToComment(rootComment.id, body, key);
             },
             isResolved: rootComment.isResolved,
             onResolve: rootComment.threadId
@@ -847,7 +947,12 @@ export function FileDiffView(props: FileDiffViewProps) {
           // Render the PendingCommentForm component into the div
           const key = `${metadata.expectedHeadSha ?? "manual"}:${metadata.side}:${metadata.startLine}:${metadata.endLine}`;
           const draft =
-            commentDrafts.get(key) ?? createCachedCommentDraft(metadata.initialBody ?? "");
+            commentDrafts.get(key) ??
+            createCachedCommentDraft(
+              metadata.initialBody ?? "",
+              `${props.prUrl}:${props.file.name}:${key}`,
+              props.prUrl,
+            );
           commentDrafts.set(key, draft);
           div.dataset.commentFile = props.file.name;
           div.dataset.commentLine = String(metadata.endLine);
@@ -857,7 +962,7 @@ export function FileDiffView(props: FileDiffViewProps) {
             startLine: metadata.startLine,
             endLine: metadata.endLine,
             disabled: () => !!metadata.scope && metadata.scope !== props.selectionScope,
-            onSubmit: async (body) => {
+            onSubmit: async (body, draftKey) => {
               await props.onAddComment({
                 line: metadata.endLine,
                 side: metadata.side,
@@ -865,10 +970,13 @@ export function FileDiffView(props: FileDiffViewProps) {
                 startLine: metadata.startLine,
                 endLine: metadata.endLine,
                 expectedHeadSha: metadata.expectedHeadSha,
+                draftKey,
               });
               setPendingComment(null);
               commentDrafts.delete(key);
               window.getSelection()?.removeAllRanges();
+              // Durable intent no longer inserts a fake remote comment to trigger this render.
+              setTimeout(rerender, 0);
             },
             onCancel: () => {
               setPendingComment(null);

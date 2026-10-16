@@ -18,6 +18,8 @@ import { runCommand } from "./command";
 import { corsMiddleware, getCorsHeaders, withCors } from "./cors";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
 import { GhService, type PrStatus } from "./gh/gh";
+import { createGithubOutboxAdapter } from "./github-outbox/github";
+import { startGithubOutboxRuntime, stopGithubOutboxRuntime } from "./github-outbox/runtime";
 import { PrCheckoutService } from "./pr-checkout";
 import { getErrorMessage } from "./response";
 import { createReviewApp, startReviewRuntime, stopReviewRuntime } from "./review/runtime";
@@ -1118,6 +1120,16 @@ const main = Effect.gen(function* () {
 
   yield* Effect.tryPromise(() => startReviewRuntime());
   yield* Effect.addFinalizer(() => Effect.promise(stopReviewRuntime));
+  // A locked, unsupported or damaged outbox must disable writes, not all read APIs.
+  // Keep its records untouched; outbox RPCs return SERVICE_UNAVAILABLE until repaired.
+  yield* Effect.tryPromise(() => startGithubOutboxRuntime(createGithubOutboxAdapter())).pipe(
+    Effect.catch(() =>
+      Effect.logError(
+        "[github-outbox] Startup failed; GitHub writes are unavailable. Read APIs remain available. Check the outbox database schema/ownership before restarting.",
+      ),
+    ),
+  );
+  yield* Effect.addFinalizer(() => Effect.promise(stopGithubOutboxRuntime));
 
   // Start the PR list background refresh loop (fetches every 15 min)
   yield* prListCache.backgroundLoop.pipe(

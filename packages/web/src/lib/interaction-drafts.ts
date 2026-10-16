@@ -23,21 +23,23 @@ export function createSelectionQuestionState() {
   };
 }
 
-export function createCachedCommentDraft(body: string) {
+export function createCachedCommentDraft(body: string, draftKey?: string, prUrl?: string | null) {
   const delegates: {
-    onSubmit?: (body: string) => Promise<void>;
+    onSubmit?: (body: string, draftKey?: string) => Promise<void>;
     disabled?: () => boolean;
     onDraftChange?: (hasDraft: boolean) => void;
   } = {};
   const state = createPendingCommentFormState({
     initialBody: body,
+    draftKey,
+    prUrl,
     startLine: 1,
     endLine: 1,
     onCancel: () => {},
-    onSubmit: async (text) => {
+    onSubmit: async (text, key) => {
       if (delegates.disabled?.() || !delegates.onSubmit)
         throw new Error("This comment is not ready to submit. Your draft is preserved.");
-      await delegates.onSubmit(text);
+      await delegates.onSubmit(text, key);
     },
     onDraftChange: (hasDraft) => delegates.onDraftChange?.(hasDraft),
   });

@@ -19,11 +19,28 @@ import type { Annotation } from "../utils/parseReviewTokens";
 import { annotationDismissalKey, reconcileAnnotationDismissals } from "./annotation-dismissals";
 import { fetchWithApiAuth } from "./apiAuth";
 import { getFileRevision } from "./file-revision";
+import {
+  acceptGithubCommentRead,
+  beginGithubCommentRead,
+  seedGithubCommentRead,
+} from "./github-comment-views";
+import { queueGithubWrite } from "./github-writes";
 import { trpc } from "./trpc";
 
 // Create a dedicated IndexedDB store for query cache
 const queryStore = createStore("better-review-query", "cache");
 const CACHE_KEY = "tanstack-query-cache";
+
+/** Hide only the adapter-owned terminal marker, never arbitrary HTML comments. */
+export function cleanGithubCommentBody(body: string): string {
+  return body.replace(
+    /(?:\n\n)?<!-- better-review:op:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12} -->$/i,
+    "",
+  );
+}
+function cleanComment<T extends { body: string }>(comment: T): T {
+  return { ...comment, body: cleanGithubCommentBody(comment.body) };
+}
 
 // Create QueryClient with sensible defaults
 export const queryClient = new QueryClient({
@@ -154,17 +171,16 @@ export const api = {
 
   async fetchComments(url: string, _signal?: AbortSignal): Promise<PRComment[]> {
     const result = await trpc.pr.comments.query({ url });
-    return [...(result.comments ?? [])];
+    return [...(result.comments ?? [])].map(cleanComment);
   },
 
   async fetchIssueComments(url: string, _signal?: AbortSignal): Promise<IssueComment[]> {
     const result = await trpc.pr.issueComments.query({ url });
-    return [...(result.comments ?? [])] as IssueComment[];
+    return ([...(result.comments ?? [])] as IssueComment[]).map(cleanComment);
   },
 
-  async addIssueComment(prUrl: string, body: string): Promise<IssueComment> {
-    const result = await trpc.pr.addIssueComment.mutate({ prUrl, body });
-    return result.comment as IssueComment;
+  async addIssueComment(prUrl: string, body: string) {
+    return await queueGithubWrite(prUrl, { kind: "issue-comment", body });
   },
 
   async fetchStatus(url: string, _signal?: AbortSignal): Promise<PrStatus> {
@@ -305,12 +321,17 @@ export const api = {
   },
 
   async fetchPrExtras(url: string, _signal?: AbortSignal): Promise<PrExtrasData> {
+    const token = beginGithubCommentRead(url);
     const result = await trpc.pr.extras.query({ url });
-    return {
-      comments: result.comments ? [...result.comments] : null,
-      issueComments: result.issueComments ? ([...result.issueComments] as IssueComment[]) : null,
+    const data = {
+      comments: result.comments ? [...result.comments].map(cleanComment) : null,
+      issueComments: result.issueComments
+        ? ([...result.issueComments] as IssueComment[]).map(cleanComment)
+        : null,
       status: result.status,
     };
+    acceptGithubCommentRead(token, data);
+    return data;
   },
 };
 
@@ -366,6 +387,7 @@ export async function fetchPrExtras(url: string): Promise<PrExtrasData> {
     staleTime: PR_LOAD_STALE_TIME,
   });
   cachePrExtras(url, data);
+  seedGithubCommentRead(url, data);
   return data;
 }
 

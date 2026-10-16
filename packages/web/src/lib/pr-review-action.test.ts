@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { submitPrReview } from "./pr-review-action";
 
-test("a successful review refreshes the PR list before returning", async () => {
+test("a successful review returns while the PR list refresh is still pending", async () => {
   const events: string[] = [];
   const refreshed = Promise.withResolvers<void>();
   const result = { success: true };
@@ -18,10 +18,10 @@ test("a successful review refreshes the PR list before returning", async () => {
       events.push("refreshed");
     },
   );
-  await Promise.resolve();
+  assert.equal(await submitting, result);
   assert.deepEqual(events, ["submitted", "refreshing"]);
   refreshed.resolve();
-  assert.equal(await submitting, result);
+  await refreshed.promise;
   assert.deepEqual(events, ["submitted", "refreshing", "refreshed"]);
 });
 
@@ -42,6 +42,7 @@ test("list refresh failures do not turn a completed review into a submission fai
   const result = { success: true };
   const error = new Error("GitHub list unavailable");
   let reported: unknown;
+  const refreshReported = Promise.withResolvers<void>();
   assert.equal(
     await submitPrReview(
       async () => result,
@@ -50,9 +51,27 @@ test("list refresh failures do not turn a completed review into a submission fai
       },
       (failure) => {
         reported = failure;
+        refreshReported.resolve();
       },
     ),
     result,
   );
+  await refreshReported.promise;
   assert.equal(reported, error);
+});
+
+test("a synchronous refresh error is reported in the background", async () => {
+  const error = new Error("Refresh setup failed");
+  const reported = Promise.withResolvers<unknown>();
+  assert.equal(
+    await submitPrReview(
+      async () => "saved",
+      () => {
+        throw error;
+      },
+      reported.resolve,
+    ),
+    "saved",
+  );
+  assert.equal(await reported.promise, error);
 });

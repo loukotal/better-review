@@ -13,6 +13,10 @@ const { resolveSourceNavigation } = await tsImport(
   "../packages/better-review/src/source-navigation.ts",
   import.meta.url,
 );
+const { decodeGithubReviewComments } = await tsImport(
+  "../packages/better-review/src/gh/gh.ts",
+  import.meta.url,
+);
 
 const requireWeb = createRequire(new URL("../packages/web/package.json", import.meta.url));
 const { createServer } = await import(requireWeb.resolve("vite"));
@@ -53,6 +57,7 @@ async function open() {
     await route.abort("blockedbyclient");
   });
   const page = await context.newPage();
+  await page.exposeFunction("decodeBrowserGithubReviewComments", decodeGithubReviewComments);
   await page.exposeFunction("resolveBrowserSourceWindow", (content, range) => {
     const ref = "a".repeat(40),
       path = "src/contract.ts";
@@ -99,6 +104,22 @@ async function trustedDismissal(page) {
   await page.evaluate(() => window.browserTests.disposeDismissal());
   return { passed };
 }
+async function durableDraftReload(page, test) {
+  const first = await page.evaluate(
+    (test) => window.browserTests.run({ ...test, mode: "before" }),
+    test,
+  );
+  // The mounted Router changed history to /review. Reload the fixture document,
+  // not the live app entrypoint (whose requests must never escape the fixture).
+  await page.evaluate(() => history.replaceState(null, "", "/browser-tests.html"));
+  await page.reload();
+  await page.waitForFunction(() => !!window.browserTests);
+  const second = await page.evaluate(
+    (test) => window.browserTests.run({ ...test, mode: "after" }),
+    test,
+  );
+  return { passed: first.passed + second.passed };
+}
 try {
   server = await createServer({ ...config, configFile: false });
   await server.listen();
@@ -117,7 +138,9 @@ try {
       const result = await Promise.race([
         test.kind === "trusted-dismissal"
           ? trustedDismissal(fixture.page)
-          : fixture.page.evaluate((test) => window.browserTests.run(test), test),
+          : test.name === "testAppGithubDraftIntentReloadInBrowser"
+            ? durableDraftReload(fixture.page, test)
+            : fixture.page.evaluate((test) => window.browserTests.run(test), test),
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error("Fixture exceeded 30 seconds")), 30_000);
           timer.unref();

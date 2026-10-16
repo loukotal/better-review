@@ -8,6 +8,8 @@ import type { DiffSettings, PRComment } from "./diff/types";
 import type { SelectedSource } from "./lib/ask-ai-selection";
 import { searchDiffFiles } from "./lib/diff-search";
 import type { FindingCommentRequest } from "./lib/finding-comment";
+import type { BrowserGithubOperation } from "./lib/github-outbox";
+import type { GithubCommentView, GithubThreadView } from "./lib/github-outbox-projection";
 import type { SelectionBubbleAnchor } from "./lib/selection-bubble";
 import type { Annotation } from "./utils/parseReviewTokens";
 
@@ -21,6 +23,7 @@ export function getFileElementId(fileName: string): string {
 }
 
 export interface DiffCommentDraft {
+  draftKey?: string;
   expectedHeadSha?: string;
   filePath: string;
   line: number;
@@ -31,6 +34,9 @@ export interface DiffCommentDraft {
 }
 
 interface Props {
+  githubComments?: GithubCommentView[];
+  githubThreads?: GithubThreadView[];
+  githubOperations?: BrowserGithubOperation[];
   findingComment?: FindingCommentRequest | null;
   commentHeadSha?: string | null;
   onAskAi?: (selection: SelectedSource, anchor: SelectionBubbleAnchor) => void;
@@ -43,8 +49,13 @@ interface Props {
   aiAnnotations?: Annotation[];
   loadingComments?: boolean;
   onAddComment: (draft: DiffCommentDraft) => Promise<unknown>;
-  onReplyToComment: (commentId: number, body: string) => Promise<unknown>;
-  onEditComment: (commentId: number, body: string) => Promise<unknown>;
+  onReplyToComment: (commentId: number, body: string, draftKey?: string) => Promise<unknown>;
+  onEditComment: (
+    commentId: number,
+    body: string,
+    draftKey?: string,
+    expectedBody?: string,
+  ) => Promise<unknown>;
   onDeleteComment: (commentId: number) => Promise<unknown>;
   onResolveThread?: (threadId: string, resolved: boolean) => Promise<unknown>;
   onDismissAiAnnotation?: (annotationId: string) => void;
@@ -334,6 +345,9 @@ export function DiffViewer(props: Props) {
                 }}
               >
                 <FileDiffView
+                  githubOperations={props.githubOperations}
+                  githubComments={props.githubComments}
+                  githubThreads={props.githubThreads}
                   findingComment={
                     props.findingComment?.filePath === file.name ? props.findingComment : undefined
                   }

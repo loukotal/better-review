@@ -4,7 +4,9 @@ import { render } from "solid-js/web";
 import { Button, MessageForm, Textarea } from "../design-system";
 import { GitHubIcon } from "../icons/github-icon";
 import { createPendingCommentFormState } from "../lib/comment-save";
+import { createGithubEditorDraft } from "../lib/github-editor-draft";
 import { parseMarkdown } from "../lib/markdown";
+import { createRecoverableDraft } from "../lib/recoverable-drafts";
 
 // Shared comment data interface that works for both PRComment and IssueComment
 export interface CommentData {
@@ -35,7 +37,12 @@ export interface CommentViewProps {
   githubContext?: GitHubContext | null;
   showEdited?: boolean;
   isReply?: boolean;
-  onEdit?: (commentId: number, body: string) => Promise<void>;
+  onEdit?: (
+    commentId: number,
+    body: string,
+    draftKey?: string,
+    expectedBody?: string,
+  ) => Promise<void>;
   onDelete?: (commentId: number) => Promise<void>;
   /** For issue comments - creates a new comment with quote and mention */
   onReply?: (commentId: number, username: string, quotedBody: string) => void;
@@ -47,7 +54,24 @@ export interface CommentViewProps {
  */
 export const CommentView: Component<CommentViewProps> = (props) => {
   const [isEditing, setIsEditing] = createSignal(false);
-  const [editBody, setEditBody] = createSignal("");
+  const prUrl = () =>
+    props.comment.html_url.match(
+      /^(https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+)(?:[#/?]|$)/,
+    )?.[1];
+  const durableEdit = prUrl()
+    ? createGithubEditorDraft({
+        slot: () => `${props.comment.html_url}:edit`,
+        url: prUrl,
+        lazy: true,
+      })
+    : undefined;
+  const {
+    body: editBody,
+    setBody: setEditBody,
+    storageError,
+  } = durableEdit
+    ? { body: durableEdit.body, setBody: durableEdit.setBody, storageError: durableEdit.error }
+    : createRecoverableDraft(() => `${props.comment.html_url}:edit:${props.comment.id}`);
   const [editError, setEditError] = createSignal<string | null>(null);
   const [isSubmitting, setIsSubmitting] = createSignal(false);
 
@@ -62,14 +86,18 @@ export const CommentView: Component<CommentViewProps> = (props) => {
   const indentClass = () => (props.isReply ? "ml-3 pl-3 border-l border-border" : "");
 
   const startEditing = () => {
-    setEditBody(props.comment.body);
+    if (durableEdit)
+      void durableEdit.open({
+        body: props.comment.body,
+        context: { expectedBody: props.comment.body },
+      });
+    else if (!editBody()) setEditBody(props.comment.body);
     setEditError(null);
     setIsEditing(true);
   };
 
   const cancelEditing = () => {
     setIsEditing(false);
-    setEditBody("");
     setEditError(null);
   };
 
@@ -88,7 +116,11 @@ export const CommentView: Component<CommentViewProps> = (props) => {
     setIsSubmitting(true);
     setEditError(null);
     try {
-      await props.onEdit(props.comment.id, body);
+      if (durableEdit)
+        await durableEdit.submit((text, key, context) =>
+          props.onEdit!(props.comment.id, text.trim(), key, context.expectedBody),
+        );
+      else await props.onEdit(props.comment.id, body);
       setIsEditing(false);
       setEditBody("");
     } catch (err) {
@@ -146,7 +178,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
               onInput={(e) => setEditBody(e.currentTarget.value)}
               onKeyDown={handleKeyDown}
               class="w-full min-h-20 resize-y"
-              disabled={isSubmitting()}
+              disabled={isSubmitting() || !(durableEdit?.ready() ?? true)}
             />
             <div class="flex gap-2 mt-1.5">
               <Button type="submit" disabled={isSubmitting()} variant="primary" size="sm">
@@ -166,6 +198,9 @@ export const CommentView: Component<CommentViewProps> = (props) => {
               <div class="mt-2 px-2 py-1.5 border border-error/50 bg-error/10 text-error text-sm">
                 {editError()}
               </div>
+            </Show>
+            <Show when={storageError()}>
+              <p role="alert">{storageError()}</p>
             </Show>
           </MessageForm>
         }
@@ -266,12 +301,23 @@ export function renderCommentView(container: HTMLElement, props: CommentViewProp
 // ============================================================================
 
 interface ReplyFormProps {
-  onSubmit: (body: string) => Promise<void>;
+  prUrl?: string;
+  draftKey?: string;
+  onSubmit: (body: string, draftKey?: string) => Promise<void>;
   onCancel: () => void;
 }
 
 const ReplyForm: Component<ReplyFormProps> = (props) => {
-  const [body, setBody] = createSignal("");
+  const durable = props.prUrl
+    ? createGithubEditorDraft({
+        slot: () => props.draftKey,
+        url: () => props.prUrl,
+        initial: () => ({ body: "" }),
+      })
+    : undefined;
+  const { body, setBody, storageError } = durable
+    ? { body: durable.body, setBody: durable.setBody, storageError: durable.error }
+    : createRecoverableDraft(() => props.draftKey);
   const [isSubmitting, setIsSubmitting] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -283,8 +329,11 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
     setIsSubmitting(true);
     setError(null);
     try {
-      await props.onSubmit(text);
-      setBody("");
+      if (durable) await durable.submit((text, key) => props.onSubmit(text.trim(), key));
+      else {
+        await props.onSubmit(text);
+        setBody("");
+      }
     } catch (err) {
       console.error("Failed to reply:", err);
       setError(err instanceof Error ? err.message : "Failed to reply");
@@ -315,12 +364,15 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
         onKeyDown={handleKeyDown}
         placeholder="Write a reply..."
         class="w-full min-h-20 resize-y"
-        disabled={isSubmitting()}
+        disabled={isSubmitting() || !(durable?.ready() ?? true)}
       />
       <Show when={error()}>
         <div class="mt-1 text-xs text-error" role="alert">
           {error()}
         </div>
+      </Show>
+      <Show when={storageError()}>
+        <p role="alert">{storageError()}</p>
       </Show>
       <div class="flex gap-2 mt-1.5">
         <Button
@@ -349,9 +401,14 @@ export interface CommentThreadProps {
   rootComment: CommentData;
   replies: CommentData[];
   githubContext?: GitHubContext | null;
-  onEdit: (commentId: number, body: string) => Promise<void>;
+  onEdit: (
+    commentId: number,
+    body: string,
+    draftKey?: string,
+    expectedBody?: string,
+  ) => Promise<void>;
   onDelete: (commentId: number) => Promise<void>;
-  onReply: (body: string) => Promise<void>;
+  onReply: (body: string, draftKey?: string) => Promise<void>;
   /** Whether this thread is resolved */
   isResolved?: boolean;
   /** Callback to resolve or unresolve the thread */
@@ -365,6 +422,7 @@ export const CommentThread: Component<CommentThreadProps> = (props) => {
   const [showAllReplies, setShowAllReplies] = createSignal(false);
   const [isReplying, setIsReplying] = createSignal(false);
   const [isResolving, setIsResolving] = createSignal(false);
+  const [resolveError, setResolveError] = createSignal<string | null>(null);
 
   const shouldCollapse = () => props.replies.length >= 3;
   const hiddenCount = () => props.replies.length - 2;
@@ -372,10 +430,11 @@ export const CommentThread: Component<CommentThreadProps> = (props) => {
   const handleResolveToggle = async () => {
     if (!props.onResolve || isResolving()) return;
     setIsResolving(true);
+    setResolveError(null);
     try {
       await props.onResolve(!props.isResolved);
     } catch (err) {
-      console.error("Failed to resolve/unresolve thread:", err);
+      setResolveError(err instanceof Error ? err.message : "Could not save thread change locally.");
     } finally {
       setIsResolving(false);
     }
@@ -448,6 +507,11 @@ export const CommentThread: Component<CommentThreadProps> = (props) => {
         </For>
       </Show>
 
+      <Show when={resolveError()}>
+        <p role="alert" class="text-xs text-error">
+          {resolveError()}
+        </p>
+      </Show>
       {/* Thread actions: reply + resolve */}
       <div class="flex items-center gap-3 mt-2">
         <Show
@@ -459,8 +523,14 @@ export const CommentThread: Component<CommentThreadProps> = (props) => {
           }
         >
           <ReplyForm
-            onSubmit={async (body) => {
-              await props.onReply(body);
+            prUrl={
+              props.rootComment.html_url.match(
+                /^(https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+)(?:[#/?]|$)/,
+              )?.[1]
+            }
+            draftKey={`${props.rootComment.html_url}:reply:${props.rootComment.id}`}
+            onSubmit={async (body, key) => {
+              await props.onReply(body, key);
               setIsReplying(false);
             }}
             onCancel={() => setIsReplying(false)}
@@ -499,12 +569,14 @@ export function renderCommentThread(container: HTMLElement, props: CommentThread
 // ============================================================================
 
 export interface PendingCommentFormProps {
+  prUrl?: string | null;
+  draftKey?: string;
   /** Optional owner-held state survives diff annotation re-renders and finding switches. */
   state?: ReturnType<typeof createPendingCommentFormState>;
   startLine: number;
   endLine: number;
   initialBody?: string;
-  onSubmit: (body: string) => Promise<void>;
+  onSubmit: (body: string, draftKey?: string) => Promise<void>;
   onCancel: () => void;
   onDraftChange?: (hasDraft: boolean) => void;
 }
@@ -513,7 +585,7 @@ export interface PendingCommentFormProps {
  * Form for adding a new comment on a line selection.
  */
 export const PendingCommentForm: Component<PendingCommentFormProps> = (props) => {
-  const { body, setBody, isSubmitting, saveError, submit } =
+  const { body, setBody, ready, isSubmitting, saveError, storageError, submit } =
     props.state ?? createPendingCommentFormState(props);
 
   onMount(() => props.onDraftChange?.(body().trim().length > 0));
@@ -535,29 +607,34 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
   return (
     <MessageForm onSubmit={submit} aria-label="New inline comment">
       <div class="text-sm text-accent mb-2">{lineLabel()}</div>
-      <Textarea
-        aria-label="Comment"
-        ref={(el) => setTimeout(() => el.focus(), 0)}
-        value={body()}
-        onInput={(e) => {
-          const value = e.currentTarget.value;
-          setBody(value);
-          props.onDraftChange?.(value.trim().length > 0);
-        }}
-        onKeyDown={handleKeyDown}
-        placeholder="Write a comment..."
-        class="w-full min-h-20 resize-y"
-        disabled={isSubmitting()}
-      />
+      <Show when={ready()} fallback={<p role="status">Loading durable draft…</p>}>
+        <Textarea
+          aria-label="Comment"
+          ref={(el) => setTimeout(() => el.focus(), 0)}
+          value={body()}
+          onInput={(e) => {
+            const value = e.currentTarget.value;
+            setBody(value);
+            props.onDraftChange?.(value.trim().length > 0);
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder="Write a comment..."
+          class="w-full min-h-20 resize-y"
+          disabled={isSubmitting() || !ready()}
+        />
+      </Show>
       <Show when={saveError()}>
         <div role="alert" class="text-sm text-error mt-2">
           {saveError()}
         </div>
       </Show>
+      <Show when={storageError()}>
+        <p role="alert">{storageError()}</p>
+      </Show>
       <div class="flex gap-2 mt-2">
         <Button
           type="submit"
-          disabled={!body().trim() || isSubmitting()}
+          disabled={!body().trim() || isSubmitting() || !ready()}
           variant="primary"
           size="sm"
         >

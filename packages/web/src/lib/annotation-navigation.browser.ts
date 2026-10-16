@@ -4,12 +4,13 @@
 import { parsePatchFiles } from "@pierre/diffs";
 import superjson from "superjson";
 
-import type { ReviewSnapshot } from "@better-review/shared";
+import type { ReviewSnapshot, GithubOutboxCommand } from "@better-review/shared";
 
 import { sourceWindow } from "../browser-tests/source-fixture";
 import { getFileElementId } from "../DiffViewer";
 import { formatAnnotationForComment } from "../utils/formatAnnotationForClipboard";
 import { formatSelectionQuestion } from "./ask-ai-selection";
+import { githubJournal } from "./github-writes";
 import { queryClient, queryKeys, type PrCoreData } from "./query";
 
 export async function testAppAnnotationNavigationInBrowser(
@@ -410,9 +411,39 @@ export async function testAppAnnotationNavigationInBrowser(
         });
       }
     }
+    if (request.pathname.endsWith("/githubOutbox.enqueue")) {
+      const command = superjson.deserialize<GithubOutboxCommand>(JSON.parse(String(init?.body)));
+      if (command.action.kind !== "inline-comment") throw new Error("Unexpected fixture write");
+      const action = command.action;
+      const intent = (await githubJournal.entries(command.scope)).find(
+        (entry) => entry.command.operationId === command.operationId,
+      );
+      commentPosts.push({
+        draftKey: intent?.draftKey,
+        body: action.body,
+        expectedHeadSha: action.expectedHeadSha,
+        filePath: action.anchor.path,
+        line: action.anchor.line,
+        side: action.anchor.side,
+      });
+      return json({
+        result: {
+          data: {
+            json: {
+              outcome: "rejected",
+              operationId: command.operationId,
+              error: {
+                code: "permission",
+                retryable: false,
+                message: "fixture comment rejected; retained locally, no publish",
+              },
+            },
+          },
+        },
+      });
+    }
     if (request.pathname.endsWith("/pr.addComment")) {
-      commentPosts.push(superjson.deserialize(JSON.parse(String(init?.body))));
-      throw new Error("fixture comment rejected; no publish");
+      throw new Error("New UI must not call the legacy direct-write endpoint");
     }
     return originalFetch(input, init);
   };
@@ -729,15 +760,13 @@ export async function testAppAnnotationNavigationInBrowser(
       );
       if (
         commentPosts[0].expectedHeadSha !== core.headSha ||
+        typeof commentPosts[0].draftKey !== "string" ||
         commentPosts[0].line !== line ||
         commentPosts[0].filePath !== file.name
       )
         throw new Error("Inline submission lost validated coordinates/provenance");
       passed++;
-      await waitFor(() => !editor()?.disabled, "Intercepted failure did not settle");
-      Array.from(editor()!.form!.querySelectorAll<HTMLButtonElement>("button"))
-        .find((button) => button.textContent?.trim() === "Cancel")!
-        .click();
+      await waitFor(() => !editor(), "Durably journaled editor did not close");
       // Same message IDs, changed origin: this must invalidate annotations, not merge cached PR-wide findings.
       for (const message of snapshot.messages)
         if (message.role === "assistant") message.metadata.revision = oldRef;
@@ -1117,6 +1146,7 @@ export async function testAppAnnotationNavigationInBrowser(
       const post = commentPosts[0];
       if (
         post.filePath !== file.name ||
+        typeof post.draftKey !== "string" ||
         post.line !== line ||
         post.side !== "RIGHT" ||
         post.body !== "User-edited finding draft" ||
@@ -1124,11 +1154,18 @@ export async function testAppAnnotationNavigationInBrowser(
       )
         throw new Error("Comment transport lost full path/line/side/body/revision");
       await waitFor(
-        () => !!nativeEditor()?.closest("form")?.textContent?.includes("fixture comment rejected"),
-        "Failed explicit post must retain a visible error",
+        () =>
+          !!document
+            .querySelector('[aria-label="GitHub pending writes"]')
+            ?.textContent?.includes("fixture comment rejected"),
+        "Rejected admission must retain a visible outbox error",
       );
-      if (nativeEditor()!.value !== "User-edited finding draft")
-        throw new Error("Failed comment post dropped user draft");
+      if (
+        !document
+          .querySelector('[aria-label="GitHub pending writes"]')
+          ?.textContent?.includes("User-edited finding draft")
+      )
+        throw new Error("Rejected admission dropped journaled content");
       passed++;
       return {
         passed,

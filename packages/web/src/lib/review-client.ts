@@ -1,6 +1,7 @@
 import { applyReviewUpdate, type ReviewSnapshot, type ReviewUpdate } from "@better-review/shared";
 
 import { fetchWithApiAuth } from "./apiAuth";
+import { observeReview } from "./review-observation";
 
 export interface ReviewClient {
   history(): Promise<ReviewSnapshot>;
@@ -43,28 +44,41 @@ export function createReviewClient(sessionId: string): ReviewClient {
       await request("/compact", {});
     },
     observe(snapshot, error, connected) {
-      const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let attempt = 0;
-      const connect = async () => {
-        try {
+      return observeReview({
+        error,
+        poll: async (signal, current) => {
+          const response = await fetchWithApiAuth(url, { signal });
+          if (!response.ok) {
+            await response.body?.cancel();
+            throw new Error(`Review snapshot failed (${response.status})`);
+          }
+          const value: ReviewSnapshot = await response.json();
+          if (current()) {
+            snapshot(value);
+            if (current()) connected();
+          }
+        },
+        stream: async (signal, isCurrent, healthy) => {
           const response = await fetchWithApiAuth(url + "/events", {
-            signal: controller.signal,
+            signal,
             headers: { accept: "text/event-stream" },
           });
-          if (!response.ok || !response.body)
+          if (!response.ok || !response.body) {
+            await response.body?.cancel();
             throw new Error(`Review stream failed (${response.status})`);
+          }
           const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
           let buffer = "";
           let current: ReviewSnapshot | undefined;
           let version = 0;
           try {
-            while (!controller.signal.aborted) {
+            while (isCurrent()) {
               const chunk = await reader.read();
+              if (!isCurrent()) return;
               if (chunk.done) break;
               buffer += chunk.value;
               let end: number;
-              while ((end = buffer.indexOf("\n\n")) !== -1) {
+              while (isCurrent() && (end = buffer.indexOf("\n\n")) !== -1) {
                 const frame = buffer.slice(0, end);
                 buffer = buffer.slice(end + 2);
                 const data = frame
@@ -84,8 +98,8 @@ export function createReviewClient(sessionId: string): ReviewClient {
                   version = update.version;
                   snapshot(current);
                 }
-                if (data) {
-                  attempt = 0;
+                if (data && isCurrent()) {
+                  healthy();
                   connected();
                 }
               }
@@ -94,19 +108,9 @@ export function createReviewClient(sessionId: string): ReviewClient {
             await reader.cancel().catch(() => undefined);
             reader.releaseLock();
           }
-          if (!controller.signal.aborted)
-            throw new Error("Review stream disconnected; reconnecting…");
-        } catch (cause) {
-          if (controller.signal.aborted) return;
-          error(cause instanceof Error ? cause.message : "Review connection failed");
-          timer = setTimeout(() => void connect(), Math.min(1000 * 2 ** attempt++, 10000));
-        }
-      };
-      void connect();
-      return () => {
-        controller.abort();
-        clearTimeout(timer);
-      };
+          if (isCurrent()) throw new Error("Review stream disconnected; reconnecting…");
+        },
+      });
     },
   };
 }

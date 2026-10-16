@@ -4,7 +4,33 @@ import { test } from "node:test";
 import { Effect } from "effect";
 
 import { isDiffCommentTargetInPatch, parseFullDiff } from "../diff";
-import { buildUnifiedDiffFromPullFiles, GhError, isPullRequestDiffTooLarge } from "./gh";
+import {
+  buildUnifiedDiffFromPullFiles,
+  decodeGithubReviewComments,
+  GhError,
+  isPullRequestDiffTooLarge,
+} from "./gh";
+
+test("review-comment decoder preserves actual REST modification evidence and accepts legacy records", () => {
+  const comment = {
+    id: 1,
+    node_id: "comment-node",
+    path: "src/a.ts",
+    line: 2,
+    original_line: 2,
+    side: "RIGHT",
+    body: "external edit",
+    html_url: "https://github.com/o/r/pull/1#discussion_r1",
+    user: { login: "reviewer", avatar_url: "" },
+    created_at: "2026-01-01T00:00:00Z",
+  };
+  const updated_at = "2026-01-03T12:34:56Z";
+  assert.equal(decodeGithubReviewComments([{ ...comment, updated_at }])[0]?.updated_at, updated_at);
+  const legacy = decodeGithubReviewComments([comment])[0];
+  assert.equal(legacy?.updated_at, undefined);
+  assert.equal(legacy?.created_at, comment.created_at);
+  assert.throws(() => decodeGithubReviewComments([{ ...comment, updated_at: 123 }]));
+});
 
 test("preserves the underlying gh failure in raw Effect errors", async () => {
   const message = "failed to connect to api.github.com: GitHub is unavailable";

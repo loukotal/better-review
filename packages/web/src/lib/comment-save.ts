@@ -2,6 +2,8 @@ import { createSignal } from "solid-js";
 
 import type { PendingCommentFormProps } from "../components/CommentView";
 import type { DiffCommentDraft } from "../DiffViewer";
+import { createGithubEditorDraft } from "./github-editor-draft";
+import { createRecoverableDraft } from "./recoverable-drafts";
 import type { trpc } from "./trpc";
 
 type AddComment = typeof trpc.pr.addComment.mutate;
@@ -32,7 +34,17 @@ export async function savePrComment(
 }
 
 export function createPendingCommentFormState(props: PendingCommentFormProps) {
-  const [body, setBody] = createSignal(props.initialBody ?? "");
+  const durable =
+    props.prUrl && props.draftKey
+      ? createGithubEditorDraft({
+          slot: () => props.draftKey,
+          url: () => props.prUrl,
+          initial: () => ({ body: props.initialBody ?? "" }),
+        })
+      : undefined;
+  const { body, setBody, storageError } = durable
+    ? { body: durable.body, setBody: durable.setBody, storageError: durable.error }
+    : createRecoverableDraft(() => props.draftKey, props.initialBody ?? "");
   const [isSubmitting, setIsSubmitting] = createSignal(false);
   const [saveError, setSaveError] = createSignal<string | null>(null);
 
@@ -44,8 +56,11 @@ export function createPendingCommentFormState(props: PendingCommentFormProps) {
     setSaveError(null);
     setIsSubmitting(true);
     try {
-      await props.onSubmit(text);
-      setBody("");
+      if (durable) await durable.submit((body, key) => props.onSubmit(body.trim(), key));
+      else {
+        await props.onSubmit(text);
+        setBody("");
+      }
       props.onDraftChange?.(false);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Failed to add comment");
@@ -54,5 +69,13 @@ export function createPendingCommentFormState(props: PendingCommentFormProps) {
     }
   };
 
-  return { body, setBody, isSubmitting, saveError, submit };
+  return {
+    body,
+    setBody,
+    ready: durable?.ready ?? (() => true),
+    isSubmitting,
+    saveError,
+    storageError,
+    submit,
+  };
 }
