@@ -1,8 +1,11 @@
 /** Browser UI contract checks with mock admission only; never starts a paid LLM request. */
+import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 
+import type { StoredSession } from "@better-review/shared";
+
 import { createSelectionDraft, createSelectionSender } from "../lib/ask-ai-selection";
-import { AskSelectionComposer } from "./AskSelectionComposer";
+import { AskSelectionComposer, createSelectionQuestionState } from "./AskSelectionComposer";
 
 export async function testBusyNewConversationInBrowser() {
   const sender = createSelectionSender();
@@ -122,4 +125,97 @@ export async function testBusyNewConversationInBrowser() {
   check(sends[0]?.key !== sends[1]?.key, "separate drafts must not share admission keys");
   check(sends[0]?.body === sends[1]?.body, "fixture questions/context must be genuinely identical");
   return { passed, creates, admissions: sends.length };
+}
+
+export async function testSelectionConversationPickerInBrowser() {
+  const [current, setCurrent] = createSignal<string | null>("session-a");
+  const state = createSelectionQuestionState();
+  const sessions = ["session-a", "session-b"].map(
+    (id) => ({ id, createdAt: 0, headSha: "0123456" }) as StoredSession,
+  );
+  const host = document.createElement("div");
+  document.body.append(host);
+  const sends: string[] = [];
+  const dispose = render(
+    () => (
+      <AskSelectionComposer
+        selection={createSelectionDraft(
+          { file: "a.ts", side: "RIGHT", startLine: 1, endLine: 1, text: "source" },
+          "head",
+          "scope",
+        )}
+        state={state}
+        stale={false}
+        disabled={false}
+        currentBusy={false}
+        currentSessionId={current()}
+        sessions={sessions}
+        onDismiss={() => {}}
+        onSend={async (_body, target) => {
+          sends.push(target);
+          return true;
+        }}
+      />
+    ),
+    host,
+  );
+  let passed = 0;
+  const check = (condition: boolean, message: string) => {
+    if (!condition) throw new Error(message);
+    passed++;
+  };
+  try {
+    const picker = host.querySelector("select")!;
+    const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const form = host.querySelector("form")!;
+    const choose = (value: string) => {
+      picker.value = value;
+      picker.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    state.setQuestion("Keep this draft");
+    check(!picker.querySelector('[value="session-a"]'), "current session is not duplicated");
+    choose("session-b");
+    setCurrent("session-b");
+    check(
+      picker.value === "session-b",
+      "explicit saved target stays selected when it becomes current",
+    );
+    check(
+      !!picker.querySelector('[value="session-b"]'),
+      "selected current session option is retained",
+    );
+    setCurrent("session-a");
+    check(picker.value === "session-b", "switching current does not redirect a saved target");
+    form.requestSubmit();
+    await Promise.resolve();
+    check(sends[0] === "session-b", "saved destination is used for sending");
+    choose("new");
+    setCurrent(null);
+    check(picker.value === "new", "new target survives loss of current session");
+    state.setTarget("current");
+    check(
+      picker.value === "current" && submit.disabled,
+      "missing current remains explicit and cannot send",
+    );
+    check(picker.selectedOptions[0]?.disabled, "missing current option is unavailable");
+    check(
+      picker.selectedOptions[0]?.textContent?.includes("unavailable") === true,
+      "missing current has an honest label",
+    );
+    setCurrent("session-a");
+    check(
+      picker.value === "current" && !submit.disabled,
+      "current alias remains current when restored",
+    );
+    check(state.question() === "Keep this draft", "session switches preserve question");
+    for (const width of [240, 320]) {
+      host.style.width = `${width}px`;
+      await new Promise(requestAnimationFrame);
+      check(host.scrollWidth <= width, `composer fits ${width}px`);
+    }
+    return { passed };
+  } finally {
+    dispose();
+    host.remove();
+  }
 }

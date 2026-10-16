@@ -404,7 +404,7 @@ async function refMatchesCommit(
   return result.exitCode === 0 && result.stdout.trim() === commitSha;
 }
 
-function repoGitDirFor(input: Pick<PreparePrCheckoutInput, "owner" | "repo">): string {
+export function repoGitDirFor(input: Pick<PreparePrCheckoutInput, "owner" | "repo">): string {
   return join(
     STORE_BASE_DIR,
     "git-cache",

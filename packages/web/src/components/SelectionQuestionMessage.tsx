@@ -38,7 +38,7 @@ export function SelectionQuestionMessage(props: SelectionQuestionMessageProps) {
         return (
           <div class="min-w-0 space-y-2" aria-label="Question about selected code">
             <p class="whitespace-pre-wrap wrap-break-word leading-relaxed">{message.question}</p>
-            <div class="min-w-0 overflow-hidden border border-border bg-bg">
+            <div class="min-w-0 overflow-hidden rounded-md border border-border bg-bg">
               <div class="min-w-0 border-b border-border px-2 py-1.5">
                 <button
                   type="button"

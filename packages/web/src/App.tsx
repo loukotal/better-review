@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 
 import type { PrStatus, PrInfo } from "@better-review/shared";
+import { normalizeSourcePath, type ResolvedSource } from "@better-review/shared";
 
 import { ChatPanel } from "./ChatPanel";
 import {
@@ -26,12 +27,11 @@ import { CommitNavigator } from "./components/CommitNavigator";
 import { DiffStatsBadge } from "./components/DiffStatsBadge";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
 import { InlineFindingComment, type InlineFindingDraft } from "./components/InlineFindingComment";
+import { InlineSourceView } from "./components/InlineSourceView";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReadingDiffEmpty, ReadingDiffSummary } from "./components/ReadingDiffState";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
-import { SelectionSourcePreview } from "./components/SelectionSourcePreview";
-import { SourceDialog } from "./components/SourceDialog";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
@@ -45,7 +45,7 @@ import {
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
-import { navigateAnnotation, type SourceTarget } from "./lib/annotation-navigation";
+import type { SourceTarget } from "./lib/annotation-navigation";
 import {
   selectionRevision,
   createSelectionDraft,
@@ -55,7 +55,6 @@ import {
 import { savePrComment } from "./lib/comment-save";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
-import { resolveFileReference } from "./lib/file-reference";
 import {
   prepareFindingComment,
   findingCommentKey,
@@ -150,7 +149,6 @@ const AppContent: Component = () => {
   } | null>(null);
   const [readFiles, setReadFiles] = createSignal<Set<string>>(new Set());
   const [sourceTarget, setSourceTarget] = createSignal<SourceTarget | null>(null);
-  const [selectionSource, setSelectionSource] = createSignal<SelectionSourceContext | null>(null);
   const [findingNotice, setFindingNotice] = createSignal<string | null>(null);
   const [findingComment, setFindingComment] = createSignal<FindingCommentRequest | null>(null);
   const [inlineFinding, setInlineFinding] = createSignal<InlineFindingDraft | null>(null);
@@ -246,6 +244,7 @@ const AppContent: Component = () => {
     ];
     return `${++selectionScopeVersion}:${values[0]}`;
   });
+  createEffect(on(selectionScope, () => setSourceTarget(null), { defer: true }));
   const askAboutSource = (
     selection: SelectedSource,
     anchor: SelectionBubbleAnchor,
@@ -345,6 +344,60 @@ const AppContent: Component = () => {
     }
   };
 
+  const focusResolvedSource = (source: Extract<ResolvedSource, { status: "found" }>) => {
+    const revision = reviewMode() === "commit" ? currentCommitSha() : diffRevision().headSha;
+    if (
+      source.approximate ||
+      source.side !== "RIGHT" ||
+      source.ref !== revision ||
+      loading() ||
+      loadingCommits()
+    )
+      return false;
+    const container = document
+      .getElementById(getFileElementId(source.path))
+      ?.querySelector<HTMLElement>("diffs-container");
+    const file = files().find((file) => file.name === source.path);
+    const visible = file?.hunks.some(
+      (hunk) =>
+        source.line >= hunk.additionStart && source.line < hunk.additionStart + hunk.additionCount,
+    );
+    const expanded =
+      container?.dataset.expandedHead === source.ref &&
+      container.shadowRoot?.querySelector(
+        `[data-additions] [data-line="${source.line}"], [data-unified] [data-line="${source.line}"]`,
+      );
+    if (!container || (!visible && !expanded)) return false;
+    scrollToFile(source.path, source.line, "RIGHT");
+    setSourceTarget(null);
+    return true;
+  };
+  const navigateSource = (target: SourceTarget, knownCurrent = false) => {
+    const path = normalizeSourcePath(target.path);
+    // Shorthand must be resolved against the FULL repository, not just changed files:
+    // an unchanged file can share a basename with the only changed-file match.
+    if (
+      knownCurrent &&
+      target.ref &&
+      path &&
+      fileNames().includes(path) &&
+      focusResolvedSource({
+        status: "found",
+        path,
+        ref: target.ref,
+        line: target.line ?? 1,
+        side: target.side ?? "RIGHT",
+        content: "",
+        approximate: false,
+        notice: null,
+      })
+    )
+      return;
+    setSourceTarget(target);
+    requestAnimationFrame(() =>
+      diffScrollRef?.querySelector("[data-inline-source]")?.scrollIntoView({ block: "start" }),
+    );
+  };
   const navigateChatFile = (
     path: string,
     line?: number,
@@ -353,69 +406,25 @@ const AppContent: Component = () => {
     ref?: string,
   ) => {
     if (!sessionId) return;
-    const container = document
-      .getElementById(getFileElementId(path))
-      ?.querySelector<HTMLElement>("diffs-container");
-    if (
-      sameRevision &&
-      ref &&
-      container?.dataset.expandedHead === ref &&
-      line &&
-      container.shadowRoot?.querySelector(
-        `[data-additions] [data-line="${line}"], [data-unified] [data-line="${line}"]`,
-      )
-    ) {
-      scrollToFile(path, line, "RIGHT");
-      return;
-    }
-    navigateAnnotation(
-      { path, line, sessionId, ref },
-      files(),
-      sameRevision && !loading() && !loadingCommits(),
-      {
-        diff: (path, line) => {
-          if (document.getElementById(getFileElementId(path))) scrollToFile(path, line, "RIGHT");
-          else setSourceTarget({ path, line, sessionId, ref });
-        },
-        source: setSourceTarget,
-      },
-    );
+    navigateSource({ path, line, sessionId, ref, side: "RIGHT" }, sameRevision);
   };
   const navigateSelectionSource = (selection: SelectionSourceContext, _sessionId: string) => {
-    const path = resolveFileReference(selection.file, fileNames());
     const revision = reviewMode() === "commit" ? currentCommitSha() : diffRevision().headSha;
-    const file = files().find((file) => file.name === path);
-    const container = path
-      ? document
-          .getElementById(getFileElementId(path))
-          ?.querySelector<HTMLElement>("diffs-container")
-      : null;
-    const expanded =
-      container?.dataset.expandedHead === selection.revision &&
-      !!container.shadowRoot?.querySelector(
-        `[data-additions] [data-line="${selection.startLine}"], [data-unified] [data-line="${selection.startLine}"]`,
-      );
-    if (
-      selection.side === "RIGHT" &&
-      path &&
-      container &&
-      selection.revision === revision &&
-      (expanded ||
-        file?.hunks.some(
-          (hunk) =>
-            selection.startLine >= hunk.additionStart &&
-            selection.startLine < hunk.additionStart + hunk.additionCount,
-        ))
-    )
-      scrollToFile(path, selection.startLine, "RIGHT");
-    else if (selection.side === "RIGHT" && path && /^[a-f\d]{40,64}$/i.test(selection.revision))
-      setSourceTarget({
-        path,
+    navigateSource(
+      {
+        path: selection.file,
         line: selection.startLine,
         ref: selection.revision,
+        side: selection.side,
         sessionId: _sessionId,
-      });
-    else setSelectionSource(selection);
+        captured: {
+          text: selection.text,
+          startLine: selection.startLine,
+          endLine: selection.endLine,
+        },
+      },
+      selection.revision === revision,
+    );
   };
   const createFindingComment = (annotation: Annotation, sessionId: string, ref?: string | null) => {
     try {
@@ -1235,36 +1244,13 @@ const AppContent: Component = () => {
       </Show>
 
       {/* Main content */}
-      <Show when={selectionSource()} keyed>
-        {(selection) => (
-          <SelectionSourcePreview
-            selection={selection}
-            reason={
-              !resolveFileReference(selection.file, fileNames())
-                ? "This file reference is ambiguous or unsafe. Showing the captured selection instead of guessing a repository path."
-                : undefined
-            }
-            onClose={() => setSelectionSource(null)}
-          />
-        )}
-      </Show>
-      <Show when={sourceTarget()} keyed>
-        {(target) => (
-          <SourceDialog
-            target={target}
-            onClose={() => setSourceTarget(null)}
-            askEditorOpen={!!askSelection()}
-            onAskAi={askAboutSource}
-          />
-        )}
-      </Show>
       <Show when={askSelection()} keyed>
         {(draft) => (
           <AnchoredSelectionEditor
             draft={draft}
             controller={selectionController()}
             scope={selectionScope()}
-            sourceDialogOpen={!!sourceTarget()}
+            sourceDialogOpen={false}
             isCurrent={() => askSelection() === draft && draft.selection.scope === selectionScope()}
             onDismiss={dismissSelection}
           />
@@ -1348,6 +1334,18 @@ const AppContent: Component = () => {
               }}
               class={`flex-1 overflow-y-auto pb-3 ${focusMode() ? "px-1" : "px-2"}`}
             >
+              <Show when={sourceTarget()} keyed>
+                {(target) => (
+                  <InlineSourceView
+                    target={target}
+                    onClose={() => setSourceTarget(null)}
+                    onChoose={setSourceTarget}
+                    onResolved={focusResolvedSource}
+                    onAskAi={askAboutSource}
+                    askEditorOpen={!!askSelection()}
+                  />
+                )}
+              </Show>
               <Show
                 when={activeDiff()}
                 fallback={

@@ -14,6 +14,9 @@ export function parseChatFileReference(
     inlineCode &&
     !lineText &&
     !file.includes("/") &&
+    !/\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|php|c|h|cpp|hpp|cs|swift|vue|svelte|sql|json|ya?ml|toml|md|sh)$/i.test(
+      file,
+    ) &&
     !files.some((path) => path === file || path.endsWith(`/${file}`))
   )
     return null;

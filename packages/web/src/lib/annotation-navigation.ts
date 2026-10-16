@@ -5,6 +5,17 @@ export interface SourceTarget {
   path: string;
   line?: number;
   ref?: string;
+  side?: "LEFT" | "RIGHT";
+  captured?: { text: string; startLine: number; endLine: number };
+  notice?: string;
+  /** User-selected lookup target; never replaces original ref/side/captured provenance. */
+  lookup?: {
+    path: string;
+    ref: string;
+    side: "LEFT" | "RIGHT";
+    approximate: boolean;
+    notice: string | null;
+  };
 }
 
 export function navigateAnnotation(

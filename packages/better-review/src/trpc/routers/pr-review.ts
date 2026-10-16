@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { access } from "node:fs/promises";
 
 import { Effect } from "effect";
 import { z } from "zod";
 
 import {
   buildReviewPrompt,
+  normalizeSourcePath,
   STRUCTURED_REVIEW_PROMPT,
   conversationIsRunning,
   reviewConversationStatus,
@@ -14,7 +16,7 @@ import {
 
 import { parseFullDiff } from "../../diff";
 import { GhService } from "../../gh/gh";
-import { preparedWorktreePath, PrCheckoutService } from "../../pr-checkout";
+import { preparedWorktreePath, PrCheckoutService, repoGitDirFor } from "../../pr-checkout";
 import {
   PrReviewSessionService,
   isPrReviewSession,
@@ -28,9 +30,11 @@ import {
 import { reviewConversations } from "../../review/runtime";
 import {
   ensureSessionCheckout,
+  ensureSessionSourceCheckout,
   getSessionCheckoutStatus,
   prepareSessionCheckoutInBackground,
 } from "../../session-checkout";
+import { gitSourceRepository, resolveSourceNavigation } from "../../source-navigation";
 import { PrContextService, parsePrUrl } from "../../state";
 import { router, publicProcedure, runEffect } from "../index";
 
@@ -266,6 +270,118 @@ export const prReviewRouter = router({
           if (content === null)
             return yield* Effect.fail(new Error("Source not found at the reviewed revision"));
           return { path: input.path, ref, content };
+        }),
+      ),
+    ),
+  navigateSource: publicProcedure
+    .input(
+      z.object({
+        sessionId: z.string(),
+        path: z
+          .string()
+          .min(1)
+          .refine((path) => !!normalizeSourcePath(path), "Unsafe repository-relative source path"),
+        ref: z.string().optional(),
+        side: z.enum(["LEFT", "RIGHT"]).optional(),
+        line: z.number().int().positive().optional(),
+      }),
+    )
+    .query(({ input }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const store = yield* PrReviewSessionService;
+          const stored = yield* store.get(input.sessionId);
+          if (!isPrReviewSession(stored))
+            return yield* Effect.fail(new Error("Review session not found"));
+          let session: PrReviewSession = stored;
+          // Readiness means the immutable commit exists, not just its cache directory.
+          // A deleted worktree is fine when the shared object cache can serve the review.
+          const readyRepository = async (revision: PrReviewSession) => {
+            for (const path of new Set([repoGitDirFor(revision), revision.worktreePath])) {
+              if (!path) continue;
+              try {
+                await access(path);
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+                throw new Error("Cannot access source repository. Check permissions and retry.", {
+                  cause: error,
+                });
+              }
+              const repo = gitSourceRepository(path);
+              if (await repo.hasCommit(revision.commitSha ?? revision.headSha)) return repo;
+            }
+            return null;
+          };
+          let repository = yield* Effect.tryPromise(() => readyRepository(session));
+          let prepared = false;
+          const prepare = () => ensureSessionSourceCheckout(input.sessionId);
+          if (!repository) {
+            yield* Effect.tryPromise(prepare);
+            prepared = true;
+            const refreshed = yield* store.get(input.sessionId);
+            if (!isPrReviewSession(refreshed))
+              return yield* Effect.fail(new Error("Review session not found"));
+            session = refreshed;
+            repository = yield* Effect.tryPromise(() => readyRepository(session));
+          }
+          if (!repository)
+            return yield* Effect.fail(
+              new Error(
+                "Current source commit is not available after checkout preparation. Retry when preparation finishes.",
+              ),
+            );
+          // Commit diffs compare with the first parent; full PR diffs compare with
+          // the merge-base, NOT the moving PR base tip.
+          let previousRef = yield* Effect.tryPromise(() => repository!.comparisonRef(session)).pipe(
+            Effect.catch(() => Effect.succeed(null)),
+          );
+          if (!previousRef && !prepared) {
+            yield* Effect.tryPromise(prepare);
+            const refreshed = yield* store.get(input.sessionId);
+            if (!isPrReviewSession(refreshed))
+              return yield* Effect.fail(new Error("Review session not found"));
+            session = refreshed;
+            repository = yield* Effect.tryPromise(() => readyRepository(session));
+            if (!repository)
+              return yield* Effect.fail(
+                new Error(
+                  "Current source commit is unavailable. Retry after checkout preparation.",
+                ),
+              );
+            previousRef = yield* Effect.tryPromise(() => repository!.comparisonRef(session));
+          }
+          if (!previousRef)
+            return yield* Effect.fail(
+              new Error(
+                "Review comparison source is unavailable. Retry after checkout preparation.",
+              ),
+            );
+          const currentRef = session.commitSha ?? session.headSha;
+          const allowedRefs = [
+            currentRef,
+            previousRef,
+            session.headSha,
+            ...(session.revisionHistory ?? []).flatMap((revision) => [
+              revision.headSha,
+              ...(revision.commitSha ? [revision.commitSha] : []),
+            ]),
+          ];
+          // Authorize saved comparisons too, when their objects remain available.
+          for (const revision of session.revisionHistory ?? []) {
+            const historic = revision.commitSha ?? revision.headSha;
+            if (yield* Effect.tryPromise(() => repository!.hasCommit(historic))) {
+              const comparison = yield* Effect.tryPromise(() =>
+                repository!.comparisonRef(revision),
+              ).pipe(Effect.catch(() => Effect.succeed(null)));
+              if (comparison) allowedRefs.push(comparison);
+            }
+          }
+          return yield* Effect.tryPromise(() =>
+            resolveSourceNavigation(
+              { ...input, currentRef, allowedRefs, previousRef },
+              repository!,
+            ),
+          );
         }),
       ),
     ),

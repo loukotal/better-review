@@ -20,6 +20,9 @@ test("chat markdown/code references preserve path and first source line for colo
     line: 161,
   });
   assert.equal(parseChatFileReference("user.id", files, true), null);
+  assert.deepEqual(parseChatFileReference("user-rent-config.ts", [], true), {
+    file: "user-rent-config.ts",
+  });
   assert.equal(parseChatFileReference("https://example.com/src/a.ts", files), null);
   assert.equal(parseChatFileReference("mailto:person.ts", files), null);
   assert.equal(parseChatFileReference("javascript:evil.ts", files), null);

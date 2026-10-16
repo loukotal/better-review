@@ -39,7 +39,6 @@ import {
   currentActivity,
   thinkingTail,
 } from "./lib/chat-transcript";
-import { resolveFileReference } from "./lib/file-reference";
 import {
   applySafeMarkdownRenderer,
   escapeHtmlText,
@@ -622,16 +621,9 @@ export function ChatPanel(props: ChatPanelProps) {
 
   // Handle file reference clicks
   const handleFileClick = (file: string, line?: number, ref?: string) => {
-    const resolved = resolveFileReference(file, props.files);
     const sid = sessionId();
     const reviewedHead = ref ?? navigationRevision();
     const activeHead = props.reviewMode === "commit" ? props.commitSha : props.displayedHeadSha;
-    if (!resolved) {
-      setLinkNotice(
-        `The file reference “${file}” is ambiguous or unsafe. Use a full repository-relative path.`,
-      );
-      return;
-    }
     if (!sid) {
       setLinkNotice(
         "Wait for the review conversation to finish loading, then open the code link again.",
@@ -639,14 +631,8 @@ export function ChatPanel(props: ChatPanelProps) {
       return;
     }
     setLinkNotice(null);
-    if (resolved && sid) {
-      props.onScrollToFile?.(
-        resolved,
-        line,
-        sid,
-        !!reviewedHead && reviewedHead === activeHead,
-        ref,
-      );
+    if (sid) {
+      props.onScrollToFile?.(file, line, sid, !!reviewedHead && reviewedHead === activeHead, ref);
     }
   };
 
@@ -758,18 +744,23 @@ export function ChatPanel(props: ChatPanelProps) {
     const renderer = applySafeMarkdownRenderer(new marked.Renderer());
     const originalLink = renderer.link.bind(renderer);
     const originalCodespan = renderer.codespan.bind(renderer);
-    const sourceButton = (file: string, line: number | undefined, label: string) =>
-      `<button type="button" data-chat-file="${escapeHtmlText(file).replace(/"/g, "&quot;")}"${line ? ` data-chat-line="${line}"` : ""} class="font-mono text-accent hover:underline" title="Open reviewed source">${label}</button>`;
+    const sourceButton = (file: string, line: number | undefined, label: string) => {
+      const display = parseChatFileReference(label, props.files)
+        ? label.trim().split(/[\\/]/).pop() || label
+        : label;
+      const title = `${file}${line ? `:${line}` : ""}`;
+      return `<button type="button" data-chat-file="${escapeHtmlText(file).replace(/"/g, "&quot;")}"${line ? ` data-chat-line="${line}"` : ""} class="inline-block max-w-full truncate align-bottom rounded px-1 text-left font-mono text-[0.9em] text-text-muted underline decoration-border underline-offset-2 hover:text-accent hover:decoration-accent focus-visible:outline focus-visible:outline-accent" title="${escapeHtmlText(title).replace(/"/g, "&quot;")}">${escapeHtmlText(display)}</button>`;
+    };
     renderer.link = (token: Tokens.Link) => {
       const reference = parseChatFileReference(token.href, props.files);
       return reference
-        ? sourceButton(reference.file, reference.line, escapeHtmlText(token.text))
+        ? sourceButton(reference.file, reference.line, token.text)
         : originalLink(token);
     };
     renderer.codespan = (token: Tokens.Codespan) => {
       const reference = parseChatFileReference(token.text, props.files, true);
       return reference
-        ? sourceButton(reference.file, reference.line, escapeHtmlText(token.text))
+        ? sourceButton(reference.file, reference.line, token.text)
         : originalCodespan(token);
     };
     renderer.code = (token: Tokens.Code) => {

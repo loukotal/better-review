@@ -12,7 +12,14 @@ import { formatSelectionQuestion } from "./ask-ai-selection";
 import { queryClient, queryKeys, type PrCoreData } from "./query";
 
 export async function testAppAnnotationNavigationInBrowser(
-  mode: "navigation" | "prefill" | "links" | "inline" | "dismissal" = "navigation",
+  mode:
+    | "navigation"
+    | "prefill"
+    | "links"
+    | "inline"
+    | "dismissal"
+    | "source"
+    | "live-source" = "navigation",
 ) {
   const originalUrl = location.href;
   const url = new URL(originalUrl);
@@ -49,6 +56,45 @@ export async function testAppAnnotationNavigationInBrowser(
       expected: "source",
     },
     { label: "unknown-revision", path: file.name, line, ref: undefined, expected: "source" },
+    ...(mode === "source" || mode === "live-source"
+      ? [
+          {
+            label: "missing-history",
+            path: "user-rent-config.ts",
+            line: 76,
+            ref: oldRef,
+            expected: "source",
+          },
+          {
+            label: "renamed-source",
+            path: "old-config.ts",
+            line: 2,
+            ref: core.headSha,
+            expected: "source",
+          },
+          {
+            label: "ambiguous-source",
+            path: "config.ts",
+            line: 2,
+            ref: core.headSha,
+            expected: "source",
+          },
+          {
+            label: "ambiguous-visible",
+            path: file.name.split("/").pop()!,
+            line,
+            ref: core.headSha,
+            expected: "source",
+          },
+          {
+            label: "unsafe-source",
+            path: "../secret.ts",
+            line: 2,
+            ref: core.headSha,
+            expected: "source",
+          },
+        ]
+      : []),
   ];
   const snapshot: ReviewSnapshot = {
     sessionId,
@@ -68,6 +114,30 @@ export async function testAppAnnotationNavigationInBrowser(
       ],
     })),
   };
+  if (mode === "source")
+    snapshot.messages.push({
+      id: "ambiguous-previous-selection",
+      role: "user",
+      metadata: { timestamp: new Date().toISOString() },
+      parts: [
+        {
+          type: "text",
+          text: formatSelectionQuestion(
+            {
+              draftId: "previous-choice",
+              scope: "fixture",
+              file: "config.ts",
+              side: "LEFT",
+              startLine: 2,
+              endLine: 2,
+              revision: oldRef,
+              text: "original historical captured fixture",
+            },
+            "selection-ambiguous-history-fixture",
+          ),
+        },
+      ],
+    });
   snapshot.messages.push(
     {
       id: "selection-right",
@@ -122,7 +192,7 @@ export async function testAppAnnotationNavigationInBrowser(
       parts: [
         {
           type: "text",
-          text: `File token [[file:${file.name}:${line}]]. Markdown [markdown-link-fixture](./${file.name}#L${line}). Inline \`${file.name.split("/").pop()}:${line}\`. Expanded [[file:${file.name}:1]]. Unsafe [[file:../${file.name}:${line}]].`,
+          text: `File token [[file:${file.name}:${line}]]. Markdown [markdown-link-fixture](./${file.name}#L${line}). Inline \`${file.name.split("/").pop()}:${line}\`. Expanded [[file:${file.name}:1]]. Unsafe [[file:../${file.name}:${line}]]. Unchanged [unchanged-source-link](user-rent-config.ts:76) and \`user-rent-config.ts:76\`.`,
         },
       ],
     },
@@ -212,6 +282,111 @@ export async function testAppAnnotationNavigationInBrowser(
       }
       return json(snapshot);
     }
+    if (request.pathname.endsWith("/prReview.navigateSource")) {
+      const value = superjson.deserialize<{
+        sessionId: string;
+        path: string;
+        ref?: string;
+        side?: "LEFT" | "RIGHT";
+        line?: number;
+      }>(JSON.parse(request.searchParams.get("input") ?? "{}"));
+      if (value.sessionId === sessionId) {
+        sourceReads.push(value);
+        if (mode === "live-source") {
+          const liveSessionId = new URL(originalUrl).searchParams.get("sessionId");
+          if (!liveSessionId)
+            throw new Error("Live source regression requires the attached saved session");
+          request.searchParams.set(
+            "input",
+            JSON.stringify(superjson.serialize({ ...value, sessionId: liveSessionId })),
+          );
+          return originalFetch(request, init);
+        }
+        if (value.path.includes(".."))
+          return json({
+            error: {
+              json: {
+                message: "Unsafe repository-relative source path",
+                code: -32600,
+                data: { code: "BAD_REQUEST", httpStatus: 400 },
+              },
+            },
+          });
+        if (value.path === "config.ts")
+          return json({
+            result: {
+              data: {
+                json: {
+                  status: "ambiguous",
+                  candidates: ["a/config.ts", "b/config.ts"],
+                  ref: core.headSha,
+                  side: "RIGHT",
+                  approximate: value.ref !== core.headSha,
+                  notice:
+                    "Multiple source files match config.ts. Choose the repository-relative path.",
+                },
+              },
+            },
+          });
+        if (mode === "source" && value.path === file.name.split("/").pop())
+          return json({
+            result: {
+              data: {
+                json: {
+                  status: "ambiguous",
+                  candidates: [file.name, `other/${value.path}`],
+                  ref: core.headSha,
+                  side: "RIGHT",
+                  approximate: false,
+                  notice:
+                    "Multiple source files match, including an unchanged file. Choose the repository-relative path.",
+                },
+              },
+            },
+          });
+        const fallback =
+          (value.path === "user-rent-config.ts" && value.ref !== core.headSha) || !value.ref;
+        const path =
+          value.path === file.name.split("/").pop()
+            ? file.name
+            : value.path === "user-rent-config.ts"
+              ? "functions/src/config/user-rent-config.ts"
+              : value.path === "old-config.ts"
+                ? "functions/src/config/new-config.ts"
+                : value.path;
+        const short = value.path.includes("config.ts");
+        const content =
+          value.side === "LEFT"
+            ? "one\ntwo\nthree\nfour\nfive\nsix\nold version selection fixture"
+            : short
+              ? "one\ntwo\nthree"
+              : Array.from({ length: line + 2 }, (_, i) => `fixture source ${i + 1}`).join("\n");
+        const targetLine = Math.min(value.line ?? 1, content.split("\n").length);
+        return json({
+          result: {
+            data: {
+              json: {
+                status: "found",
+                path,
+                ref: fallback ? core.headSha : value.ref,
+                side: fallback ? "RIGHT" : (value.side ?? "RIGHT"),
+                content,
+                line: targetLine,
+                approximate:
+                  fallback || targetLine !== value.line || value.path === "old-config.ts",
+                notice: fallback
+                  ? "Requested revision unavailable. Showing current immutable reviewed revision; line correspondence is approximate, not a comment target."
+                  : targetLine !== value.line
+                    ? `Requested line ${value.line} is outside this file. Showing nearest line ${targetLine} (approximate).`
+                    : value.path === "old-config.ts"
+                      ? "Renamed path; approximate correspondence."
+                      : null,
+              },
+            },
+          },
+        });
+      }
+    }
     if (request.pathname.endsWith("/prReview.source")) {
       const value = superjson.deserialize<{ sessionId: string; path: string; ref?: string }>(
         JSON.parse(request.searchParams.get("input") ?? "{}"),
@@ -262,6 +437,169 @@ export async function testAppAnnotationNavigationInBrowser(
       () => !!buttonFor("current-visible"),
       "Real ChatPanel did not hydrate saved-session fixture",
     );
+    if (mode === "live-source") {
+      buttonFor("missing-history")!.click();
+      await waitFor(
+        () =>
+          !!document.querySelector(
+            '[data-inline-source] [data-source-line="76"][data-selected-line]',
+          ) &&
+          document.activeElement ===
+            document.querySelector('[data-inline-source] [data-source-line="76"]'),
+        "Live basename lookup failed to focus unchanged source at line 76",
+      );
+      const pane = document.querySelector<HTMLElement>("[data-inline-source]")!;
+      if (
+        !pane.textContent?.includes("functions/src/users/user-rent/user-rent-config.ts") ||
+        !pane.textContent.includes("approximate") ||
+        pane.dataset.sourceRef !== core.headSha ||
+        document.querySelector("dialog[open]") ||
+        document.querySelector('form[aria-label="New inline comment"]') ||
+        writes ||
+        commentPosts.length
+      )
+        throw new Error(
+          "Live filename fallback lost path/revision notice or opened a modal/comment",
+        );
+      return {
+        passed: 1,
+        chain:
+          "real AnnotationBlock filename → real backend repository cache → main inline source line 76",
+        modelCalls: 0,
+        posts: 0,
+      };
+    }
+    if (mode === "source") {
+      const pane = () => document.querySelector<HTMLElement>("[data-inline-source]");
+      const noEditor = () =>
+        !document.querySelector('form[aria-label="New inline comment"]') &&
+        !document.querySelector("dialog[open]");
+      const clickSource = async (label: string, expectedPath: string, targetLine: number) => {
+        buttonFor(label)!.click();
+        await waitFor(
+          () =>
+            !!pane()?.querySelector(`[data-source-line="${targetLine}"][data-selected-line]`) &&
+            !!pane()?.textContent?.includes(expectedPath) &&
+            document.activeElement === pane()?.querySelector(`[data-source-line="${targetLine}"]`),
+          `${label} did not focus inline source`,
+        );
+        if (
+          !noEditor() ||
+          document.activeElement !== pane()?.querySelector(`[data-source-line="${targetLine}"]`)
+        )
+          throw new Error(`${label} opened a modal/editor or failed source focus`);
+        passed++;
+      };
+      await clickSource("missing-history", "functions/src/config/user-rent-config.ts", 3);
+      if (
+        !pane()?.textContent?.includes("approximate") ||
+        pane()?.dataset.sourceRef !== core.headSha
+      )
+        throw new Error("Missing history fallback lost revision/line approximation notice");
+      passed++;
+      getSelection()?.removeAllRanges();
+      buttonFor("missing-history")!
+        .closest(".my-5")!
+        .querySelector<HTMLElement>(".whitespace-pre-wrap")!
+        .click();
+      await waitFor(
+        () =>
+          !!document
+            .querySelector("[data-finding-comment-notice]")
+            ?.textContent?.includes("historical"),
+        "Fallback navigation incorrectly authorized historical comment prefill",
+      );
+      if (!noEditor())
+        throw new Error("Historical finding mapped a stale line into a current PR draft");
+      passed++;
+      for (const label of ["unchanged-source-link", "user-rent-config.ts:76"]) {
+        const button = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-file]")).find(
+          (button) => button.textContent === label,
+        )!;
+        button.click();
+        await waitFor(
+          () =>
+            !!pane()?.textContent?.includes("functions/src/config/user-rent-config.ts") &&
+            !!pane()?.textContent?.includes("Requested line 76"),
+          "Markdown/backtick source links diverged from filename resolution",
+        );
+        if (!noEditor()) throw new Error("Ordinary source links opened a modal/comment");
+        passed++;
+      }
+      await clickSource("renamed-source", "functions/src/config/new-config.ts", 2);
+      buttonFor("ambiguous-visible")!.click();
+      await waitFor(
+        () => !!pane()?.textContent?.includes("including an unchanged file"),
+        "Changed-file-only basename matching bypassed repository ambiguity",
+      );
+      Array.from(pane()!.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === file.name)!
+        .click();
+      await waitFor(
+        () =>
+          !pane() &&
+          !!document
+            .getElementById(getFileElementId(file.name))
+            ?.querySelector("diffs-container")
+            ?.shadowRoot?.querySelector(`[data-line="${line}"][data-selected-line]`),
+        "Chosen exact source path did not focus the actual diff",
+      );
+      passed++;
+      buttonFor("ambiguous-source")!.click();
+      await waitFor(
+        () => !!pane()?.textContent?.includes("Multiple source files"),
+        "Ambiguous source did not offer candidates",
+      );
+      Array.from(pane()!.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === "b/config.ts")!
+        .click();
+      await waitFor(
+        () =>
+          !!pane()?.textContent?.includes("b/config.ts") &&
+          !!pane()?.querySelector("[data-selected-line]"),
+        "Explicit repository path choice did not navigate",
+      );
+      passed++;
+      const previousCard = Array.from(
+        document.querySelectorAll<HTMLElement>('[aria-label="Question about selected code"]'),
+      ).find((card) => card.textContent?.includes("selection-ambiguous-history-fixture"))!;
+      previousCard.querySelector<HTMLButtonElement>("button")!.click();
+      await waitFor(
+        () => !!pane()?.textContent?.includes("Multiple source files"),
+        "Historical selection did not reach shared ambiguity resolver",
+      );
+      Array.from(pane()!.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === "b/config.ts")!
+        .click();
+      await waitFor(
+        () =>
+          !!pane()?.textContent?.includes("original historical captured fixture") &&
+          !pane()?.textContent?.includes("Looking up") &&
+          sourceReads.some((read) => read.path === "b/config.ts" && read.ref === core.headSha),
+        "Chosen fallback lookup dropped captured historical selection",
+      );
+      if (
+        pane()?.dataset.sourceRef !== oldRef ||
+        pane()?.dataset.sourceSide !== "LEFT" ||
+        !noEditor()
+      )
+        throw new Error("Fallback candidate relabeled original LEFT selection as current source");
+      passed++;
+      buttonFor("unsafe-source")!.click();
+      await waitFor(
+        () => !!pane()?.textContent?.includes("Unsafe repository-relative"),
+        "Unsafe path not rejected in inline navigation",
+      );
+      if (!noEditor() || writes || commentPosts.length)
+        throw new Error("Source navigation created a comment/model mutation");
+      passed++;
+      return {
+        passed,
+        chain: "filename/markdown/backticks → shared source resolver → inline main viewer",
+        posts: 0,
+        modelCalls: 0,
+      };
+    }
     if (mode === "inline" || mode === "dismissal") {
       const inlineCard = () =>
         Array.from(
@@ -517,14 +855,14 @@ export async function testAppAnnotationNavigationInBrowser(
         currentGroup.querySelectorAll<HTMLButtonElement>("button[title]"),
       ).find((button) => button.title.startsWith("../"))!;
       unsafe.click();
-      await new Promise(requestAnimationFrame);
-      if (
-        !document
-          .querySelector('#chat-panel [role="status"]')
-          ?.parentElement?.textContent?.includes("unsafe") &&
-        !document.querySelector("#chat-panel")?.textContent?.includes("ambiguous or unsafe")
-      )
-        throw new Error("Unresolved source links must explain ambiguity/unsafe paths");
+      await waitFor(
+        () =>
+          !!document
+            .querySelector("[data-inline-source]")
+            ?.textContent?.includes("Unsafe repository-relative"),
+        "Unresolved source links must explain unsafe paths",
+      );
+      document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')!.click();
       passed++;
       const selectionCard = (label: string) =>
         Array.from(
@@ -537,20 +875,20 @@ export async function testAppAnnotationNavigationInBrowser(
       selectionCard("selection-left-fixture").querySelector<HTMLButtonElement>("button")!.click();
       await waitFor(
         () =>
-          !!document.querySelector('[data-selection-source-side="LEFT"] [data-source-line="7"]'),
+          !!document.querySelector(
+            '[data-inline-source][data-source-side="LEFT"] [data-source-line="7"]',
+          ),
         "Previous-version selection link lost side/old line",
       );
       if (
         !document
-          .querySelector('[data-selection-source-side="LEFT"]')
+          .querySelector('[data-inline-source][data-source-side="LEFT"]')
           ?.textContent?.includes("old version selection fixture") ||
         document.querySelectorAll('form[aria-label="New inline comment"]').length !== noComments
       )
         throw new Error("Previous selection must show exact captured old text without prefill");
       passed++;
-      document
-        .querySelector<HTMLButtonElement>('dialog[open] button[aria-label="Close dialog"]')!
-        .click();
+      document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')!.click();
       const historicalGroup = Array.from(
         document.querySelectorAll<HTMLElement>("#chat-panel .wrap-break-word"),
       ).find(
@@ -562,9 +900,7 @@ export async function testAppAnnotationNavigationInBrowser(
         () => sourceReads.some((read) => read.ref === oldRef),
         "Historical code link lost source revision",
       );
-      document
-        .querySelector<HTMLButtonElement>('dialog[open] button[aria-label="Close dialog"]')!
-        .click();
+      document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')!.click();
       passed++;
       const input = document.querySelector<HTMLTextAreaElement>(
         '[aria-label="Message review assistant"]',
@@ -827,30 +1163,32 @@ export async function testAppAnnotationNavigationInBrowser(
               ?.shadowRoot?.querySelector(`[data-line="${fixture.line}"][data-selected-line]`),
           "Real FileDiffView did not focus the current annotation row",
         );
-        if (sourceReads.length) throw new Error("Current annotation must not fetch modal source");
+        if (document.querySelector("[data-inline-source]"))
+          throw new Error(
+            "Verified current visible source should focus the actual diff rather than keep an inline fallback",
+          );
       } else {
         await waitFor(
-          () => !!document.querySelector("dialog[open]"),
-          `${fixture.label} must retain legitimate source fallback`,
+          () => !!document.querySelector('[data-inline-source][data-source-ready="true"]'),
+          `${fixture.label} must retain inline source fallback`,
         );
         await waitFor(
           () => sourceReads.some((read) => read.path === fixture.path && read.ref === fixture.ref),
           `${fixture.label} lost originating source revision/session`,
         );
-        document
-          .querySelector<HTMLButtonElement>('dialog[open] button[aria-label="Close dialog"]')!
-          .click();
+        document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')!.click();
       }
       passed++;
     }
     if (writes) throw new Error("Unexpected model submission");
     return {
       passed,
-      chain: "AnnotationBlock → ChatPanel → App → FileDiffView/SourceDialog",
+      chain: "AnnotationBlock → ChatPanel → App → FileDiffView/InlineSourceView",
       sourceReads: sourceReads.length,
       modelCalls: writes,
     };
   } finally {
+    document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')?.click();
     if (mode === "dismissal") {
       const key = queryKeys.local.annotationDismissals(prUrl);
       const records = queryClient.getQueryData<string[]>(key) ?? [];

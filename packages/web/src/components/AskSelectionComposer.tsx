@@ -2,8 +2,9 @@ import { createSignal, For, onMount, Show } from "solid-js";
 
 import type { StoredSession } from "@better-review/shared";
 
-import { Button, MessageForm, Textarea } from "../design-system";
+import { Button, Field, MessageForm, Textarea } from "../design-system";
 import { formatSelectionQuestion, type SourceSelection } from "../lib/ask-ai-selection";
+import { selectionRevisionLabel } from "../lib/selection-question-message";
 
 /** App-owned so portal relocation (e.g. closing historical source) cannot erase a draft. */
 export function createSelectionQuestionState() {
@@ -43,6 +44,12 @@ export function AskSelectionComposer(props: {
   onMount(() => textarea?.focus({ preventScroll: true }));
   const busy = () =>
     (target() === "current" || target() === props.currentSessionId) && props.currentBusy;
+  const unavailable = () => target() === "current" && !props.currentSessionId;
+  // An explicitly chosen session must stay selectable even when it becomes current.
+  const savedSessions = () =>
+    props.sessions.filter(
+      (session) => session.id !== props.currentSessionId || session.id === target(),
+    );
   async function send(event: SubmitEvent) {
     event.preventDefault();
     if (sending() || props.disabled || props.stale || busy()) return;
@@ -66,9 +73,13 @@ export function AskSelectionComposer(props: {
     }
   }
   return (
-    <MessageForm onSubmit={send} aria-label="Ask about selection" class="space-y-2 p-3 text-xs">
+    <MessageForm
+      onSubmit={send}
+      aria-label="Ask about selection"
+      class="min-w-0 space-y-3 p-3 text-xs"
+    >
       <div class="flex items-center justify-between gap-2">
-        <h3 class="font-semibold text-sm">Ask about selection</h3>
+        <h3 class="min-w-0 font-semibold text-sm">Ask about selection</h3>
         <Button
           type="button"
           size="xs"
@@ -79,57 +90,75 @@ export function AskSelectionComposer(props: {
           Dismiss
         </Button>
       </div>
-      <p class="flex min-w-0 gap-2 text-text-muted">
-        <span class="truncate" title={props.selection.file}>
-          {props.selection.file}
+      <p class="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-text-muted">
+        <span class="min-w-0 truncate font-mono" title={props.selection.file}>
+          {props.selection.file.split("/").pop()}
         </span>
         <span class="shrink-0">
-          Lines {props.selection.startLine}–{props.selection.endLine}
+          {props.selection.startLine === props.selection.endLine
+            ? `Line ${props.selection.startLine}`
+            : `Lines ${props.selection.startLine}–${props.selection.endLine}`}
         </span>
       </p>
-      <label class="block">
-        Question
-        <Textarea
-          ref={(element) => {
-            textarea = element;
-          }}
-          rows={2}
-          class="w-full"
-          value={question()}
-          disabled={sending()}
-          onInput={(e) => setQuestion(e.currentTarget.value)}
-          aria-label="Question about selection"
-        />
-      </label>
+      <Field label="Question">
+        {(id) => (
+          <Textarea
+            id={id}
+            ref={(element) => {
+              textarea = element;
+            }}
+            rows={2}
+            class="w-full min-w-0"
+            placeholder="What would you like to understand?"
+            value={question()}
+            disabled={sending()}
+            onInput={(e) => setQuestion(e.currentTarget.value)}
+            aria-label="Question about selection"
+          />
+        )}
+      </Field>
       <details class="text-text-muted">
         <summary class="cursor-pointer">Selected code</summary>
-        <p class="mt-1 break-all">Source: {props.selection.revision}</p>
+        <p class="mt-2 break-all" title={props.selection.revision}>
+          {selectionRevisionLabel(props.selection)}
+        </p>
         <pre class="mt-1 max-h-28 overflow-auto whitespace-pre-wrap rounded border border-border p-2">
           {props.selection.text}
         </pre>
       </details>
-      <label class="block">
-        Conversation
-        <select
-          aria-label="Selection conversation"
-          class="mt-1 w-full rounded border border-border bg-bg p-1 text-text"
-          value={target()}
-          disabled={sending()}
-          onChange={(e) => setTarget(e.currentTarget.value)}
-        >
-          <option value="current">Current conversation{props.currentBusy ? " (busy)" : ""}</option>
-          <option value="new">New conversation</option>
-          <For each={props.sessions}>
-            {(session) => (
-              <option value={session.id}>
-                {session.id === props.currentSessionId ? "Current · " : ""}
-                {new Date(session.createdAt).toLocaleString()} · {session.headSha?.slice(0, 7)} ·{" "}
-                {session.id.slice(0, 8)}
-              </option>
-            )}
-          </For>
-        </select>
-      </label>
+      <Field label="Conversation">
+        {(id) => (
+          <select
+            id={id}
+            aria-label="Selection conversation"
+            class="w-full min-w-0 rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus-visible:outline focus-visible:outline-accent"
+            value={target()}
+            disabled={sending()}
+            onChange={(e) => setTarget(e.currentTarget.value)}
+          >
+            <option value="current" disabled={!props.currentSessionId}>
+              {props.currentSessionId
+                ? `Current conversation${props.currentBusy ? " (busy)" : ""}`
+                : "Current conversation unavailable"}
+            </option>
+            <option value="new">New conversation</option>
+            <For each={savedSessions()}>
+              {(session) => (
+                <option value={session.id}>
+                  {session.id === props.currentSessionId ? "Current · " : ""}
+                  {new Date(session.createdAt).toLocaleString()} · {session.headSha?.slice(0, 7)} ·{" "}
+                  {session.id.slice(0, 8)}
+                </option>
+              )}
+            </For>
+          </select>
+        )}
+      </Field>
+      <Show when={unavailable()}>
+        <p role="status" class="text-text-muted">
+          Choose a saved or new conversation to send.
+        </p>
+      </Show>
       <Show when={props.stale}>
         <p role="alert">PR or revision changed. Dismiss this draft and select source again.</p>
       </Show>
@@ -141,14 +170,24 @@ export function AskSelectionComposer(props: {
           {error()}
         </p>
       </Show>
-      <Button
-        type="submit"
-        variant="primary"
-        size="xs"
-        disabled={sending() || props.disabled || props.stale || busy() || !question().trim()}
-      >
-        {sending() ? "Sending…" : "Send question"}
-      </Button>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <Button
+          type="submit"
+          variant="primary"
+          size="xs"
+          disabled={
+            sending() ||
+            props.disabled ||
+            props.stale ||
+            busy() ||
+            unavailable() ||
+            !question().trim()
+          }
+        >
+          {sending() ? "Sending…" : "Send question"}
+        </Button>
+        <span class="text-[11px] text-text-faint">⌘ / Ctrl + Enter</span>
+      </div>
     </MessageForm>
   );
 }

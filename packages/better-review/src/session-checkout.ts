@@ -133,3 +133,15 @@ export async function ensureSessionCheckout(sessionId: string): Promise<void> {
     await prepareSessionCheckout(sessionId);
   }
 }
+
+/** Source readers need immutable objects, not a second canonical-worktree check after
+ * joining a running preparation. The caller must verify the objects after this returns.
+ */
+export async function ensureSessionSourceCheckout(sessionId: string): Promise<void> {
+  const pending = pendingCheckouts.get(sessionId);
+  if (pending) {
+    await pending;
+    return;
+  }
+  await ensureSessionCheckout(sessionId);
+}

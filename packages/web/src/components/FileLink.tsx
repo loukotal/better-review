@@ -21,11 +21,11 @@ export const FileLink: Component<FileLinkProps> = (props) => {
     <button
       type="button"
       onClick={() => props.onClick(props.file, props.line)}
-      class="inline-flex mb-0.5 items-center gap-1 px-1 py-0.5 font-bold text-text hover:text-white hover:underline font-mono text-sm cursor-pointer bg-transparent border border-text-muted"
+      class="inline-flex max-w-full items-baseline gap-1 rounded px-1 align-bottom text-left font-mono text-[0.9em] text-text-muted underline decoration-border underline-offset-2 hover:text-accent hover:decoration-accent focus-visible:outline focus-visible:outline-accent"
       title={props.line ? `${props.file}:${props.line}` : props.file}
     >
-      <FileIcon size={12} class="opacity-60" />
-      {displayText()}
+      <FileIcon size={12} class="shrink-0 self-center opacity-60" />
+      <span class="truncate">{displayText()}</span>
     </button>
   );
 };
