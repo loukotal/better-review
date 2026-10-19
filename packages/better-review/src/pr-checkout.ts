@@ -382,11 +382,33 @@ async function ensureRefAtCommit(
 async function getWorktreeHead(worktreePath: string): Promise<string | null> {
   if (!(await pathExists(join(worktreePath, ".git")))) return null;
 
-  const result = await runCommand("git", ["-C", worktreePath, "rev-parse", "HEAD"], {
-    timeoutMs: CHECKOUT_TIMEOUT_MS,
-  });
+  const result = await runCommand(
+    "git",
+    ["-C", worktreePath, "rev-parse", "--is-inside-work-tree", "HEAD"],
+    { timeoutMs: CHECKOUT_TIMEOUT_MS },
+  );
   if (result.exitCode !== 0 || result.timedOut) return null;
-  return result.stdout.trim();
+  const [insideWorktree, head] = parseLines(result.stdout);
+  return insideWorktree === "true" && head ? head : null;
+}
+
+export async function ensureWorktreeConfig(worktreePath: string): Promise<void> {
+  if (!(await pathExists(join(worktreePath, ".git")))) return;
+
+  const worktreeConfig = (
+    await runWorktreeGit(worktreePath, [
+      "config",
+      "--bool",
+      "--default=false",
+      "--get",
+      "extensions.worktreeConfig",
+    ])
+  ).trim();
+  if (worktreeConfig !== "true") return;
+
+  // With worktreeConfig enabled, linked worktrees inherit the bare cache's core.bare.
+  // Override it only for this checkout; the shared repository must stay bare.
+  await runWorktreeGit(worktreePath, ["config", "--worktree", "core.bare", "false"]);
 }
 
 async function refMatchesCommit(
@@ -1084,6 +1106,9 @@ const makePrCheckoutService = Effect.succeed({
             ensureOfflineReviewDiff(repoGitDir, input),
           );
 
+          await traceCheckoutPhase(trace, startedAt, "ensureWorktreeConfig", () =>
+            ensureWorktreeConfig(worktreePath),
+          );
           const currentHead = await traceCheckoutPhase(trace, startedAt, "getWorktreeHead", () =>
             getWorktreeHead(worktreePath),
           );
@@ -1130,6 +1155,9 @@ const makePrCheckoutService = Effect.succeed({
           );
           await traceCheckoutPhase(trace, startedAt, "addWorktree", () =>
             runGit(repoGitDir, ["worktree", "add", worktreePath, localBranch]),
+          );
+          await traceCheckoutPhase(trace, startedAt, "ensureWorktreeConfig", () =>
+            ensureWorktreeConfig(worktreePath),
           );
           const repoAccess = await traceCheckoutPhase(
             trace,

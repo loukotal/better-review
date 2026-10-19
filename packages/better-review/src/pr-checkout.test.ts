@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -13,6 +13,7 @@ import {
   ensureFullCommitHistory,
   ensureOfflineReviewDiff,
   ensureReviewHistory,
+  ensureWorktreeConfig,
   fetchPullHeadBranch,
   githubRepoRemoteUrl,
   reviewBaseRef,
@@ -55,12 +56,12 @@ async function createManagedWorktree(root: string) {
   const gitCacheRoot = join(root, "git-cache", "github");
   const worktreesRoot = join(root, "worktrees", "github");
   const repoGitDir = join(gitCacheRoot, "owner", "repo.git");
-  const worktreePath = join(worktreesRoot, "owner", "repo", "pr-1-head");
 
   await git(root, ["init", source]);
   await git(source, ["config", "user.email", "review@example.com"]);
   await git(source, ["config", "user.name", "Review Test"]);
   const headSha = await commitFile(source, "src/app.ts", "base\n", "base");
+  const worktreePath = join(worktreesRoot, "owner", "repo", `pr-1-${headSha.slice(0, 12)}`);
 
   await mkdir(dirname(repoGitDir), { recursive: true });
   await git(root, ["clone", "--bare", source, repoGitDir]);
@@ -585,10 +586,12 @@ test("ensureOfflineReviewDiff hydrates partial-clone blobs before sandboxing", a
     await ensureReviewHistory(cache, input);
     await assert.rejects(
       execFileAsync("git", [
-        "--no-lazy-fetch",
+        "-c",
+        "protocol.allow=never",
         "-C",
         worktree,
         "diff",
+        "--no-renames",
         "--stat",
         `${reviewBaseRef(input)}...HEAD`,
       ]),
@@ -597,14 +600,118 @@ test("ensureOfflineReviewDiff hydrates partial-clone blobs before sandboxing", a
     await ensureOfflineReviewDiff(cache, input);
 
     const offlineDiff = await git(root, [
-      "--no-lazy-fetch",
+      "-c",
+      "protocol.allow=never",
       "-C",
       worktree,
       "diff",
+      "--no-renames",
       "--stat",
       `${reviewBaseRef(input)}...HEAD`,
     ]);
     assert.match(offlineDiff, /src\/app\.ts/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureWorktreeConfig repairs linked worktrees after shared worktree config is enabled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-worktree-config-"));
+
+  try {
+    const source = join(root, "source");
+    const cache = join(root, "cache.git");
+    const firstWorktree = join(root, "first-worktree");
+    const secondWorktree = join(root, "second-worktree");
+    const newWorktree = join(root, "new-worktree");
+
+    await git(root, ["init", source]);
+    await git(source, ["config", "user.email", "review@example.com"]);
+    await git(source, ["config", "user.name", "Review Test"]);
+    await commitFile(source, "src/app.ts", "content\n", "initial");
+    await git(root, ["clone", "--bare", source, cache]);
+    await git(cache, ["worktree", "add", "--detach", firstWorktree, "HEAD"]);
+    await git(cache, ["worktree", "add", "--detach", secondWorktree, "HEAD"]);
+
+    await git(firstWorktree, ["config", "extensions.worktreeConfig", "true"]);
+    await git(cache, ["worktree", "add", "--detach", newWorktree, "HEAD"]);
+    await writeFile(join(secondWorktree, "src/app.ts"), "local changes\n");
+
+    for (const worktree of [secondWorktree, newWorktree]) {
+      await assert.rejects(git(worktree, ["rev-parse", "--show-toplevel"]));
+      await ensureWorktreeConfig(worktree);
+
+      assert.equal(
+        await realpath(await git(worktree, ["rev-parse", "--show-toplevel"])),
+        await realpath(worktree),
+      );
+    }
+    assert.equal(await git(cache, ["rev-parse", "--is-bare-repository"]), "true");
+    assert.equal(await git(secondWorktree, ["diff", "--name-only"]), "src/app.ts");
+    await assert.rejects(git(firstWorktree, ["rev-parse", "--show-toplevel"]));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureWorktreeConfig keeps the cache bare when worktree config is disabled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-worktree-config-disabled-"));
+
+  try {
+    const { repoGitDir, worktreePath } = await createManagedWorktree(root);
+
+    await ensureWorktreeConfig(worktreePath);
+
+    assert.equal(await git(repoGitDir, ["rev-parse", "--is-bare-repository"]), "true");
+    assert.equal(await git(worktreePath, ["rev-parse", "--is-inside-work-tree"]), "true");
+    await assert.rejects(git(repoGitDir, ["config", "--get", "extensions.worktreeConfig"]));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("isPreparedCheckoutUsable rejects a checkout that inherits core.bare until repaired", async () => {
+  const root = await mkdtemp(join(tmpdir(), "better-review-worktree-usability-"));
+
+  try {
+    const storeRoot = join(root, ".local", "share", "better-review");
+    await mkdir(storeRoot, { recursive: true });
+    const { repoGitDir, worktreePath, headSha } = await createManagedWorktree(storeRoot);
+    const input: PreparePrCheckoutInput = {
+      owner: "owner",
+      repo: "repo",
+      number: 1,
+      prUrl: "https://github.com/owner/repo/pull/1",
+      baseSha: headSha,
+      headSha,
+      baseRef: "main",
+      headRef: "feature",
+      reviewMode: "full",
+      commitSha: null,
+      files: ["src/app.ts"],
+    };
+    await ensureBaseRef(repoGitDir, input);
+    await writeCheckoutReadyManifest(worktreePath, headSha, Date.now());
+    await git(repoGitDir, ["config", "extensions.worktreeConfig", "true"]);
+    assert.equal(await git(worktreePath, ["rev-parse", "HEAD"]), headSha);
+
+    // Load the store in a fresh process so readiness checks use this isolated HOME.
+    await execFileAsync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `import assert from "node:assert/strict";
+         import { ensureWorktreeConfig, isPreparedCheckoutUsable } from ${JSON.stringify(new URL("./pr-checkout.ts", import.meta.url).href)};
+         const input = ${JSON.stringify(input)};
+         assert.equal(await isPreparedCheckoutUsable(input), false);
+         await ensureWorktreeConfig(${JSON.stringify(worktreePath)});
+         assert.equal(await isPreparedCheckoutUsable(input), true);`,
+      ],
+      { env: { ...process.env, HOME: root } },
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
