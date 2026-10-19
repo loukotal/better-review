@@ -21,8 +21,19 @@ export const diagnostic = (
 
 function sanitized(error: GithubOutboxError, message: string): GithubOutboxError {
   const retryAt = error.retryAt ? Date.parse(error.retryAt) : NaN;
+  const httpStatus = error.httpStatus;
+  const validStatus =
+    typeof httpStatus === "number" &&
+    Number.isInteger(httpStatus) &&
+    httpStatus >= 400 &&
+    httpStatus <= 599;
   return {
-    ...diagnostic(error.code, message, error.retryable),
+    ...diagnostic(
+      error.code,
+      validStatus ? `${message} (HTTP ${httpStatus})` : message,
+      error.retryable,
+    ),
+    ...(validStatus ? { httpStatus } : {}),
     ...(Number.isFinite(retryAt) ? { retryAt: new Date(retryAt).toISOString() } : {}),
   };
 }
@@ -333,10 +344,18 @@ export class OutboxWorker {
       } else if (outcome.outcome === "rejected") {
         op.status = "retry-failed";
         // Never persist arbitrary adapter messages; only safe, worker-owned diagnostics.
-        op.error = diagnostic(
-          outcome.error.code,
-          "GitHub rejected the operation before applying it.",
-          outcome.error.retryable,
+        const guidance: Partial<Record<GithubOutboxError["code"], string>> = {
+          auth: "Check GitHub authentication, then retry.",
+          permission: "Check GitHub write access and comment ownership, then retry.",
+          "target-changed":
+            "The comment changed. Recover saved content and review the latest version.",
+          "head-changed": "The pull request head changed. Review the latest diff.",
+          invalid: "Check the comment target and request format before retrying.",
+          conflict: "Refresh GitHub and review the latest version before retrying.",
+        };
+        op.error = sanitized(
+          outcome.error,
+          `GitHub rejected the operation before applying it.${guidance[outcome.error.code] ? ` ${guidance[outcome.error.code]}` : ""}`,
         );
         const paused = [
           "auth",

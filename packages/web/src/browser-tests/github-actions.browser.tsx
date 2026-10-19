@@ -75,23 +75,53 @@ export async function testAppGithubDeleteResolveInBrowser() {
   await wait(() => !!card() && !!button("Resolve"), "App resolve button not reachable");
   const latest = async () =>
     (await window.browserGithubActions({ kind: "snapshot" })) as GithubOutboxSnapshot;
-  const sync = async (kind: GithubOutboxCommand["action"]["kind"], expected = "synced") => {
+  const sync = async (
+    kind: GithubOutboxCommand["action"]["kind"],
+    expected = "synced",
+    afterSequence = 0,
+  ) => {
     let snapshot = await latest();
     for (let frame = 0; frame < 180; frame++) {
       snapshot = await latest();
       const item = snapshot.operations.at(-1);
-      if (item?.command.action.kind === kind && item.status === expected) break;
+      if (
+        item?.command.action.kind === kind &&
+        item.status === expected &&
+        item.sequence > afterSequence
+      )
+        break;
       await new Promise(requestAnimationFrame);
     }
     const item = snapshot.operations.at(-1);
     check(
-      item?.command.action.kind === kind && item.status === expected,
+      item?.command.action.kind === kind &&
+        item.status === expected &&
+        item.sequence > afterSequence,
       `${kind} failed: ${JSON.stringify(item)}`,
     );
     await githubWrites.snapshot(scope);
     return item!;
   };
   const beforeToggles = { extrasReads, listRefreshes };
+  const editCard = async (element: HTMLElement, body: string, expected = "synced") => {
+    const previousSequence = (await latest()).operations.at(-1)?.sequence ?? 0;
+    [...element.querySelectorAll<HTMLButtonElement>("button")]
+      .find((item) => item.textContent?.trim() === "Edit")!
+      .click();
+    await wait(() => !!element.querySelector("textarea"), "Edit textarea missing");
+    const textarea = element.querySelector<HTMLTextAreaElement>("textarea")!;
+    await wait(() => !textarea.disabled, "Edit draft not loaded");
+    textarea.value = body;
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await wait(
+      () => !element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled,
+      "Edit draft not ready",
+    );
+    [...element.querySelectorAll<HTMLButtonElement>("button")]
+      .find((item) => item.textContent?.trim() === "Save locally")!
+      .click();
+    return sync("edit-comment", expected, previousSequence);
+  };
   for (const label of ["Resolve", "Unresolve", "Resolve", "Unresolve"]) {
     button(label)!.click();
     const item = await sync(label === "Resolve" ? "resolve-thread" : "unresolve-thread");
@@ -128,6 +158,41 @@ export async function testAppGithubDeleteResolveInBrowser() {
     "Identical real-worker snapshots repeated refreshes",
   );
   const originalConfirm = window.confirm;
+  await window.browserGithubActions({ kind: "fail-edit", input: true });
+  const failedEdit = await editCard(card()!, "review edit one", "retry-failed");
+  check(
+    failedEdit.error?.httpStatus === 422 &&
+      !JSON.stringify(failedEdit.error).includes("private-response"),
+    "Failed edit lost HTTP status or leaked response text",
+  );
+  card()!.querySelector<HTMLButtonElement>("[data-github-sync-status] button")!.click();
+  await wait(
+    () => !!document.querySelector("[popover]:popover-open [data-operation-id]"),
+    "Failed edit detail missing",
+  );
+  const editDetail = document.querySelector<HTMLElement>("[popover]:popover-open")!;
+  check(
+    editDetail.textContent?.includes("HTTP 422") &&
+      editDetail.textContent.includes("request format"),
+    "Edit failure UI hid actionable safe diagnosis",
+  );
+  await window.browserGithubActions({ kind: "fail-edit", input: false });
+  [...editDetail.querySelectorAll<HTMLButtonElement>("button")]
+    .find((item) => item.textContent?.trim() === "Retry")!
+    .click();
+  const retriedEdit = await sync("edit-comment");
+  check(
+    retriedEdit.command.operationId === failedEdit.command.operationId &&
+      retriedEdit.attempts === 2,
+    "Retry replaced durable intent or duplicated the edit",
+  );
+  editDetail.hidePopover();
+  const restoredReview = await editCard(card()!, "action fixture body");
+  check(
+    restoredReview.result?.kind === "review-comment" &&
+      restoredReview.result.body === "action fixture body",
+    "Repeated review PATCH failed through App/IndexedDB/RPC/worker",
+  );
   await window.browserGithubActions({ kind: "fail-delete", input: true });
   window.confirm = () => true;
   try {
@@ -165,6 +230,32 @@ export async function testAppGithubDeleteResolveInBrowser() {
   remoteComments = [];
   queryClient.setQueryData(queryKeys.pr.extras(url), await api.fetchPrExtras(url));
   await wait(() => !card(), "Confirmed deletion survived fresh remote absence");
+  const inlineCreation = await queueGithubWrite(url, {
+    kind: "inline-comment",
+    body: "local review original",
+    expectedHeadSha: "a".repeat(40),
+    anchor: { path: "src/example.ts", side: "RIGHT", line: 9 },
+  });
+  await sync("inline-comment");
+  const inlineCard = () =>
+    document.querySelector<HTMLElement>(
+      `[data-github-comment-key="local:review-comment:${inlineCreation.operationId}"]`,
+    );
+  await wait(() => !!inlineCard(), "Local review creation missing");
+  for (const [index, body] of ["local review edit one", "local review edit two"].entries()) {
+    const edited = await editCard(inlineCard()!, body);
+    check(
+      edited.command.action.kind === "edit-comment" &&
+        edited.command.action.target.source === "local" &&
+        edited.command.action.target.operationId === inlineCreation.operationId &&
+        edited.command.action.expectedBody ===
+          (index === 0 ? "local review original" : "local review edit one") &&
+        edited.result?.kind === "review-comment" &&
+        edited.result.id === 21 &&
+        edited.result.body === body,
+      "Local review edit lost alias, expectedBody or remote identity",
+    );
+  }
   document.querySelector<HTMLButtonElement>('[aria-controls="pr-conversation"]')!.click();
   const creation = await queueGithubWrite(url, {
     kind: "issue-comment",
@@ -176,6 +267,17 @@ export async function testAppGithubDeleteResolveInBrowser() {
       `[data-github-comment-key="local:issue-comment:${creation.operationId}"]`,
     );
   await wait(() => !!localCard(), "Confirmed local creation did not render");
+  for (const body of ["issue edit one", "new comment then delete"]) {
+    const edited = await editCard(localCard()!, body);
+    check(
+      edited.command.action.kind === "edit-comment" &&
+        edited.command.action.target.source === "local" &&
+        edited.command.action.target.operationId === creation.operationId &&
+        edited.result?.kind === "issue-comment" &&
+        edited.result.body === body,
+      "Repeated edit lost local alias or clean result",
+    );
+  }
   window.confirm = () => true;
   try {
     [...localCard()!.querySelectorAll<HTMLButtonElement>("button")]
@@ -201,9 +303,53 @@ export async function testAppGithubDeleteResolveInBrowser() {
   const state = (await window.browserGithubActions({ kind: "state" })) as {
     deleted: boolean;
     resolved: boolean;
-    calls: { method: string; path: string; payload?: { query?: string } }[];
+    calls: {
+      method: string;
+      path: string;
+      payload?: { query?: string; body?: string };
+      headers: { accept: string; contentType: string; apiVersion: string; ifMatch: string | null };
+    }[];
   };
   check(state.deleted && !state.resolved, "Remote fixture state did not change");
+  const patches = state.calls.filter((item) => item.method === "PATCH");
+  check(patches.length === 7, "Edit PATCH was missing or duplicated");
+  check(
+    patches.every(
+      (item) =>
+        item.headers.ifMatch === null &&
+        item.headers.accept === "application/vnd.github+json" &&
+        item.headers.contentType === "application/json" &&
+        item.headers.apiVersion === "2022-11-28" &&
+        Object.keys(item.payload!).join() === "body",
+    ),
+    "PATCH violated GitHub HTTP contract",
+  );
+  check(
+    patches
+      .filter((item) => item.path.includes("/issues/"))
+      .every((item) =>
+        item.payload?.body?.includes(`<!-- better-review:op:${creation.operationId} -->`),
+      ),
+    "Repeated issue edits dropped creation marker",
+  );
+  check(
+    patches
+      .filter((item) => item.path.endsWith("/21"))
+      .every((item) =>
+        item.payload?.body?.includes(`<!-- better-review:op:${inlineCreation.operationId} -->`),
+      ),
+    "Repeated local review edits dropped creation marker",
+  );
+  check(
+    patches
+      .filter((item) => item.path.endsWith("/20"))
+      .every((item) =>
+        item.payload?.body?.includes(
+          "<!-- better-review:op:11111111-1111-4111-8111-111111111111 -->",
+        ),
+      ),
+    "Repeated remote review edits dropped creation marker",
+  );
   check(
     state.calls.filter((item) => item.method === "DELETE").length === 3,
     "Delete was missing or duplicated",

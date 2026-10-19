@@ -191,6 +191,7 @@ export function createGithubOutboxAdapter(
                     : "GitHub rejected the request.",
               limited || response.status >= 500,
             );
+            diagnostic.httpStatus = response.status;
             if (limited) {
               const delay =
                 retryAfter !== null && /^\d+(\.\d+)?$/.test(retryAfter)
@@ -674,10 +675,13 @@ export function createGithubOutboxAdapter(
           throw new Failure(
             error("target-changed", "The comment has changed since it was observed."),
           );
-        const headers: Record<string, string> = original.etag ? { "If-Match": original.etag } : {};
+        // GitHub comment endpoints do not support conditional unsafe requests:
+        // https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests
+        // Keep the fresh expectedBody check above, but do not forward the GET ETag.
+        // This is an optimistic preflight, not an atomic compare-and-swap.
         const path = targetPath(ctx, action.target.kind, action.target.id);
         if (action.kind === "delete-comment") {
-          await request(path, "DELETE", undefined, headers);
+          await request(path, "DELETE");
           mutated = true;
           return { outcome: "accepted", result: { kind: "deleted", target: action.target } };
         }
@@ -685,7 +689,7 @@ export function createGithubOutboxAdapter(
           ? (original.data.body.match(markerPattern) ?? [])
           : [];
         const body = suffix.length ? `${action.body}\n\n${suffix.join("\n")}` : action.body;
-        const { data } = await request(path, "PATCH", { body }, headers);
+        const { data } = await request(path, "PATCH", { body });
         mutated = true;
         if (
           !object(data) ||

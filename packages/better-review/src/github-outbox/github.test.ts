@@ -412,13 +412,13 @@ test("scope validation blocks arbitrary hosts, URLs and path injection", async (
   }
 });
 
-test("edit preserves creation marker and uses observed version precondition", async () => {
+test("edit preserves creation marker without unsupported conditional HTTP headers", async () => {
   const f = fixture([
     user(),
     {
       path: "/repos/acme/repo/issues/comments/21",
       data: issue(wire("old")),
-      headers: { etag: '"v1"' },
+      headers: { etag: 'W/"v1"' },
     },
     {
       path: "/repos/acme/repo/issues/comments/21",
@@ -426,7 +426,7 @@ test("edit preserves creation marker and uses observed version precondition", as
       data: issue(wire("new")),
       check: (init) => {
         assert.deepEqual(JSON.parse(String(init.body)), { body: wire("new") });
-        assert.equal(new Headers(init.headers).get("if-match"), '"v1"');
+        assert.equal(new Headers(init.headers).get("if-match"), null);
       },
     },
   ]);
@@ -435,6 +435,27 @@ test("edit preserves creation marker and uses observed version precondition", as
   );
   assert.equal(result.outcome, "accepted");
   assert.ok("result" in result && "body" in result.result && result.result.body === "new");
+  f.done();
+});
+
+test("failed edit retains numeric HTTP status without the raw GitHub response", async () => {
+  const f = fixture([
+    user(),
+    { path: "/repos/acme/repo/issues/comments/21", data: issue("old") },
+    {
+      path: "/repos/acme/repo/issues/comments/21",
+      method: "PATCH",
+      status: 422,
+      data: { message: "private comment and credentials must not escape" },
+    },
+  ]);
+  const result = await f.adapter.dispatch(
+    operation({ kind: "edit-comment", target: remote, expectedBody: "old", body: "new" }),
+  );
+  assert.equal(result.outcome, "rejected");
+  assert.ok("error" in result);
+  assert.equal(result.error.httpStatus, 422);
+  assert.doesNotMatch(JSON.stringify(result), /private comment|credentials/);
   f.done();
 });
 
@@ -480,7 +501,7 @@ test("edit/delete stale versions and wrong actor/PR cannot mutate", async () => 
   }
 });
 
-test("conditional edit rejects concurrent change", async () => {
+test("edit classifies a remote precondition failure without retrying", async () => {
   const f = fixture([
     user(),
     { path: "/repos/acme/repo/issues/comments/21", data: issue("old"), headers: { etag: '"v1"' } },

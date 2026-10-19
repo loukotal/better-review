@@ -76,6 +76,8 @@ export interface GithubOutboxError {
   message: string;
   retryable: boolean;
   retryAt?: string;
+  /** Numeric HTTP status only; never retain response bodies or headers. */
+  httpStatus?: number;
 }
 
 interface GithubConfirmedComment {

@@ -337,6 +337,52 @@ async function operation(f: Awaited<ReturnType<typeof fixture>>, id: string, pr 
   return op;
 }
 
+test("failed edits retain only safe HTTP status and guidance across restart; explicit retry keeps original intent", async (t) => {
+  const f = await fixture(t);
+  f.adapter.send = async () => ({
+    outcome: "rejected",
+    error: {
+      code: "invalid",
+      message: "private response body and token must not persist",
+      retryable: false,
+      httpStatus: 400,
+    },
+  });
+  const edit = command({
+    action: {
+      kind: "edit-comment",
+      target: {
+        source: "remote",
+        kind: "issue-comment",
+        id: 123,
+      },
+      expectedBody: "old",
+      body: "new",
+    },
+  });
+  await f.box.enqueue(edit);
+  await f.activate();
+  await until(async () => (await operation(f, edit.operationId)).status === "retry-failed");
+  await f.reopen();
+  const failed = await operation(f, edit.operationId);
+  assert.equal(failed.error?.httpStatus, 400);
+  assert.match(failed.error!.message, /HTTP 400/);
+  assert.match(failed.error!.message, /request format/);
+  assert.doesNotMatch(JSON.stringify(failed.error), /private response|token/);
+  assert.equal(f.adapter.posts.length, 1);
+  f.adapter.send = async (op) => ({ outcome: "accepted", result: result(op) });
+  await f.box.control({
+    kind: "retry",
+    requestId: randomUUID(),
+    operationId: edit.operationId,
+    expectedRevision: failed.revision,
+  });
+  await f.activate();
+  await until(async () => (await operation(f, edit.operationId)).status === "synced");
+  assert.deepEqual((await operation(f, edit.operationId)).command, edit);
+  assert.equal(f.adapter.posts.length, 2);
+});
+
 test("content admission aliases different UUIDs durably, preserves original replay and local child identity", async (t) => {
   const f = await fixture(t);
   const a = command();

@@ -28,11 +28,13 @@ export async function createBrowserGithubActions() {
   let resolved = false;
   let deleted = false;
   let failDelete = false;
+  let failEdit = false;
   let createdIssue;
+  let createdReview;
   const comment = {
     id: 20,
     node_id: "comment-node-not-thread",
-    body: "action fixture body",
+    body: "action fixture body\n\n<!-- better-review:op:11111111-1111-4111-8111-111111111111 -->",
     user: actor,
     html_url: `${scope.url}#discussion_r20`,
     pull_request_url: "https://api.github.com/repos/browser-fixture/isolated/pulls/1",
@@ -51,8 +53,43 @@ export async function createBrowserGithubActions() {
       if (url.origin !== "https://api.github.com") throw new Error("Unexpected origin");
       const method = init.method ?? "GET";
       const payload = init.body ? JSON.parse(String(init.body)) : undefined;
-      calls.push({ path: url.pathname, method, payload });
+      const headers = new Headers(init.headers);
+      calls.push({
+        path: url.pathname,
+        method,
+        payload,
+        headers: {
+          accept: headers.get("accept"),
+          contentType: headers.get("content-type"),
+          apiVersion: headers.get("x-github-api-version"),
+          ifMatch: headers.get("if-match"),
+        },
+      });
+      // GitHub does not support conditional requests for unsafe methods.
+      // Real comment GETs return weak ETags; never silently accept this PATCH header.
+      if (method === "PATCH" && headers.has("if-match"))
+        return Response.json({ message: "Conditional request is not supported" }, { status: 400 });
+      if (method === "PATCH" && failEdit)
+        return Response.json({ message: "private-response-must-not-escape" }, { status: 422 });
       if (url.pathname === "/user") return Response.json(actor);
+      if (url.pathname === "/repos/browser-fixture/isolated/pulls/1" && method === "GET")
+        return Response.json({ head: { sha: "a".repeat(40) } });
+      if (
+        url.pathname === "/repos/browser-fixture/isolated/pulls/1/comments" &&
+        method === "POST"
+      ) {
+        createdReview = {
+          ...comment,
+          id: 21,
+          body: payload.body,
+          html_url: `${scope.url}#discussion_r21`,
+        };
+        return Response.json(createdReview, { status: 201 });
+      }
+      if (url.pathname === "/repos/browser-fixture/isolated/pulls/comments/21" && createdReview) {
+        if (method === "PATCH") createdReview.body = payload.body;
+        return Response.json(createdReview, { headers: { etag: 'W/"local-review-version"' } });
+      }
       if (
         url.pathname === "/repos/browser-fixture/isolated/issues/1/comments" &&
         method === "POST"
@@ -67,20 +104,32 @@ export async function createBrowserGithubActions() {
         return Response.json(createdIssue, { status: 201 });
       }
       if (url.pathname === "/repos/browser-fixture/isolated/issues/comments/30") {
+        if (method === "PATCH" && createdIssue) {
+          createdIssue.body = payload.body;
+          return Response.json(createdIssue);
+        }
         if (method === "DELETE") {
           createdIssue = undefined;
           return new Response(null, { status: 204 });
         }
-        return createdIssue ? Response.json(createdIssue) : Response.json({}, { status: 404 });
+        return createdIssue
+          ? Response.json(createdIssue, { headers: { etag: 'W/"issue-version"' } })
+          : Response.json({}, { status: 404 });
       }
       if (url.pathname === "/repos/browser-fixture/isolated/pulls/comments/20") {
+        if (method === "PATCH" && !deleted) {
+          comment.body = payload.body;
+          return Response.json(comment);
+        }
         if (method === "DELETE") {
           if (failDelete)
             return Response.json({ message: "Delete fixture denied" }, { status: 403 });
           deleted = true;
           return new Response(null, { status: 204 });
         }
-        return deleted ? Response.json({}, { status: 404 }) : Response.json(comment);
+        return deleted
+          ? Response.json({}, { status: 404 })
+          : Response.json(comment, { headers: { etag: 'W/"review-version"' } });
       }
       if (url.pathname === "/graphql") {
         const query = payload.query;
@@ -120,6 +169,10 @@ export async function createBrowserGithubActions() {
       if (kind === "state") return { resolved, deleted, calls };
       if (kind === "fail-delete") {
         failDelete = !!input;
+        return;
+      }
+      if (kind === "fail-edit") {
+        failEdit = !!input;
         return;
       }
       throw new Error(`Unknown fixture action ${kind}`);
