@@ -133,14 +133,14 @@ export async function testAppGithubDraftIntentReloadInBrowser(phase = "before") 
 
   await open("Reply");
   fill("kept reply, never an edit");
-  button("Keep draft and close").click();
+  button("Cancel").click();
   await open("Edit");
   check(input().value === "original parent body", "Reply draft contaminated edit prefill");
   fill("kept independent edit");
-  button("Keep draft and close").click();
+  button("Cancel").click();
   await open("Reply");
   check(input().value === "kept reply, never an edit", "Edit draft contaminated reply recovery");
-  button("Keep draft and close").click();
+  button("Cancel").click();
   remote = { ...remote, body: "external parent update", updated_at: "2026-01-02T00:00:00Z" };
   await api.fetchPrExtras(url);
   await open("Edit");

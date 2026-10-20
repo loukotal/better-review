@@ -56,10 +56,16 @@ test("selecting history keeps the saved revision; historical source references a
     diffCache: null,
     prContext: null,
   });
-  assert.equal(
-    (await caller.selectSession({ prUrl: session.prUrl, sessionId: session.id })).sessionHeadSha,
-    fixtureSession.headSha,
-  );
+  const hydrated = await caller.selectSession({ prUrl: session.prUrl, sessionId: session.id });
+  assert.equal(hydrated.sessionHeadSha, fixtureSession.headSha);
+  assert.deepEqual(hydrated.sessionScope, {
+    mode: session.reviewMode,
+    commitSha: session.commitSha,
+  });
+  session.reviewMode = "commit";
+  session.commitSha = session.headSha;
+  const switched = await caller.switch({ prUrl: session.prUrl, sessionId: session.id });
+  assert.deepEqual(switched.sessionScope, { mode: "commit", commitSha: session.headSha });
   assert.equal(
     (await caller.source({ sessionId: session.id, path: "source.ts", ref: "old" })).ref,
     "old",
@@ -181,6 +187,7 @@ test("automatic reviews coalesce busy launches while explicit creation always ma
     busy.running = !compacting;
     busy.compacting = compacting;
     const fresh = await caller.create(createInput);
+    assert.deepEqual(fresh.sessionScope, { mode: "full", commitSha: null });
     assert.notEqual(
       fresh.session.id,
       first.sessionId,
@@ -194,6 +201,21 @@ test("automatic reviews coalesce busy launches while explicit creation always ma
     );
     assert.equal(admissions, 1);
   }
+  const commit = await caller.create({ ...createInput, reviewMode: "commit", commitSha: "A" });
+  assert.deepEqual(commit.sessionScope, { mode: "commit", commitSha: "A" });
+  histories.set(commit.session.id, {
+    sessionId: commit.session.id,
+    running: true,
+    compacting: false,
+    settlements: [],
+    messages: [],
+  });
+  const busyCommitInFullView = await caller.getOrCreateSession({
+    ...createInput,
+    reviewMode: "full",
+  });
+  assert.equal(busyCommitInFullView.session.id, commit.session.id);
+  assert.deepEqual(busyCommitInFullView.sessionScope, { mode: "commit", commitSha: "A" });
   active = first.sessionId!;
   histories.get(active)!.running = true;
   histories.get(active)!.compacting = false;
@@ -212,8 +234,11 @@ test("automatic reviews coalesce busy launches while explicit creation always ma
   assert.equal(history.messages.length, 1);
 });
 
-test("pulling updates the same session and durably admits continuation on the server", async (t) => {
+test("pull converts same-SHA commit scope, refreshes changed heads, and hydrates unchanged scope", async (t) => {
   let session = structuredClone(fixtureSession);
+  session.reviewMode = "commit";
+  session.commitSha = session.headSha;
+  let latestHead = session.headSha;
   let running = false;
   let admissions = 0;
   const store = {
@@ -236,7 +261,7 @@ test("pulling updates the same session and durably admits continuation on the se
     updateSessionHead: () => Effect.void,
   } as unknown as PrContextService;
   const gh = {
-    getHeadSha: () => Effect.succeed("rewritten-B"),
+    getHeadSha: () => Effect.succeed(latestHead),
     getBaseSha: () => Effect.succeed("base"),
     getHeadRef: () => Effect.succeed("feature"),
     getBaseRef: () => Effect.succeed("main"),
@@ -269,7 +294,7 @@ test("pulling updates the same session and durably admits continuation on the se
   t.mock.method(reviewConversations, "admit", async (_id: string, prompt: string) => {
     admissions++;
     assert.ok(prompt.includes(`Previous revision: ${fixtureSession.headSha}`));
-    return { submissionId: "new-request" };
+    return { submissionId: `new-request-${admissions}` };
   });
   const caller = prReviewRouter.createCaller({
     gh: null,
@@ -284,14 +309,34 @@ test("pulling updates the same session and durably admits continuation on the se
   );
   running = false;
   const result = await caller.pullLatest({ sessionId: session.id, prUrl: session.prUrl });
-  assert.equal(result.headSha, "rewritten-B");
+  assert.equal(result.headSha, fixtureSession.headSha);
+  assert.equal(result.changed, true, "Same SHA still converts commit scope to full PR");
+  assert.deepEqual(result.session, { id: session.id });
+  assert.deepEqual(result.sessionScope, {
+    mode: "full",
+    commitSha: null,
+    afterSubmissionId: "new-request-1",
+  });
+  assert.equal(session.reviewMode, "full");
+  assert.equal(session.commitSha, null);
   assert.equal(session.id, fixtureSession.id);
   assert.equal(session.revisionHistory?.[0]?.headSha, fixtureSession.headSha);
-  assert.equal(session.automaticReview?.submissionId, "new-request");
+  assert.equal(session.automaticReview?.submissionId, "new-request-1");
   assert.equal(admissions, 1);
-  assert.equal(
-    (await caller.pullLatest({ sessionId: session.id, prUrl: session.prUrl })).changed,
-    false,
-  );
+  const unchanged = await caller.pullLatest({ sessionId: session.id, prUrl: session.prUrl });
+  assert.equal(unchanged.changed, false);
+  assert.deepEqual(unchanged.sessionScope, result.sessionScope);
   assert.equal(admissions, 1);
+  latestHead = "rewritten-B";
+  const changed = await caller.pullLatest({ sessionId: session.id, prUrl: session.prUrl });
+  assert.equal(changed.changed, true);
+  assert.equal(changed.headSha, latestHead);
+  assert.deepEqual(changed.sessionScope, {
+    mode: "full",
+    commitSha: null,
+    afterSubmissionId: "new-request-2",
+  });
+  assert.equal(admissions, 2);
+  const rehydrated = await caller.selectSession({ sessionId: session.id, prUrl: session.prUrl });
+  assert.deepEqual(rehydrated.sessionScope, changed.sessionScope);
 });

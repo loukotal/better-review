@@ -112,6 +112,7 @@ export function useStreamingChat(
   clientFactory: (id: string) => ReviewClient = createReviewClient,
 ) {
   const [messages, setMessages] = createSignal<StreamingMessage[]>([]);
+  const [snapshot, setSnapshot] = createSignal<ReviewSnapshot | null>(null);
   const [isConnected, setIsConnected] = createSignal(false);
   const [connectionStatus, setConnectionStatus] = createSignal<
     "offline" | "connecting" | "connected" | "degraded" | "reconnecting"
@@ -154,6 +155,7 @@ export function useStreamingChat(
     latest = snapshot;
     const projected = conversationSnapshotState(snapshot);
     batch(() => {
+      setSnapshot(snapshot);
       setMessages(projected.messages);
       setStreamingContent(projected.live?.content ?? "");
       setStreamingReasoning(projected.live?.reasoning ?? "");
@@ -193,6 +195,7 @@ export function useStreamingChat(
     const id = options.getSessionId();
     disconnect();
     resetStreaming();
+    setSnapshot(null);
     setMessages([]);
     setError(null);
     setRetryableMessage(null);
@@ -260,6 +263,7 @@ export function useStreamingChat(
     return result;
   }
   return {
+    snapshot,
     messages,
     isConnected,
     connectionStatus,
@@ -299,6 +303,7 @@ export function useStreamingChat(
       }
     },
     clearMessages() {
+      setSnapshot(null);
       setMessages([]);
       resetStreaming();
     },

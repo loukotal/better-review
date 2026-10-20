@@ -31,6 +31,7 @@ import { PrCommentsPanel } from "./components/PrCommentsPanel";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReadingDiffEmpty, ReadingDiffSummary } from "./components/ReadingDiffState";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
+import { ReviewSettings } from "./components/ReviewSettings";
 import { PrProvider, usePrContext } from "./context/PrContext";
 import { Button, TextInput } from "./design-system";
 import { SettingsPanel } from "./diff/SettingsPanel";
@@ -45,6 +46,12 @@ import {
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
 import { type SelectedSource, type SelectionChatController } from "./lib/ask-ai-selection";
+import {
+  createAutomaticOrderTracker,
+  loadAutomaticReviewOrder,
+  saveAutomaticReviewOrder,
+  type AvailableReviewOrder,
+} from "./lib/automatic-review-order";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
 import {
@@ -55,6 +62,7 @@ import {
   githubThreadForComment,
 } from "./lib/github-comment-views";
 import { githubPrScope, githubWrites, queueGithubWrite } from "./lib/github-writes";
+import { preserveReviewPosition } from "./lib/preserve-review-position";
 import {
   queryKeys,
   api,
@@ -147,6 +155,9 @@ const AppContent: Component = () => {
 
   // Review state
   const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
+  const [automaticOrder, setAutomaticOrder] = createSignal(loadAutomaticReviewOrder());
+  const [availableOrder, setAvailableOrder] = createSignal<AvailableReviewOrder | null>(null);
+  const automaticOrderTracker = createAutomaticOrderTracker();
   const [aiAnnotations, setAiAnnotations] = createSignal<Annotation[]>([]);
   const [reviewCommentsHidden, setReviewCommentsHidden] = createSignal(false);
   const [highlightedLine, setHighlightedLine] = createSignal<{
@@ -411,12 +422,31 @@ const AppContent: Component = () => {
 
   // Apply review order
   const applyReviewOrder = (order: string[]) => {
-    setReviewOrder(order);
+    preserveReviewPosition(diffScrollRef, () => setReviewOrder(order));
     const url = loadedPrUrl();
     if (url) {
       querySetReviewOrder(url, order);
     }
   };
+
+  createEffect(() => {
+    const order = availableOrder();
+    const revision = reviewMode() === "commit" ? currentCommitSha() : diffRevision().headSha;
+    if (
+      !automaticOrder() ||
+      !order ||
+      loading() ||
+      loadingCommits() ||
+      switchingPr() ||
+      loadedPrUrl() !== prUrl() ||
+      order.prUrl !== loadedPrUrl() ||
+      order.mode !== reviewMode() ||
+      order.revision !== revision
+    )
+      return;
+    const next = automaticOrderTracker.take(order, fileNames());
+    if (next) applyReviewOrder(next);
+  });
 
   // Toggle file read status
   const toggleFileRead = (fileName: string) => {
@@ -954,6 +984,13 @@ const AppContent: Component = () => {
               >
                 Focus
               </Button>
+              <ReviewSettings
+                automaticOrder={automaticOrder()}
+                onAutomaticOrderChange={(enabled) => {
+                  saveAutomaticReviewOrder(enabled);
+                  setAutomaticOrder(enabled);
+                }}
+              />
             </>
           }
         >
@@ -1203,6 +1240,7 @@ const AppContent: Component = () => {
           theme={settings().theme}
           aiAnnotations={aiAnnotations()}
           onApplyReviewOrder={applyReviewOrder}
+          onAvailableReviewOrder={setAvailableOrder}
           onAnnotationsReceived={addNewAiAnnotations}
         />
 

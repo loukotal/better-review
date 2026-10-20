@@ -65,11 +65,34 @@ async function open() {
     if (kind === "escape") await page.keyboard.press("Escape");
     else await page.mouse.click(2, 2);
   });
+  await page.exposeFunction("clickAndTypeBrowserControl", async (selector, text) => {
+    await page.locator(selector).click();
+    await page.waitForFunction(
+      () => !document.querySelector('[aria-label="Review settings"]:popover-open'),
+    );
+    await page.keyboard.type(text);
+  });
   await page.exposeFunction("captureBrowserGithubComment", async () => {
     await page.locator('[data-github-comment-key="remote:issue-comment:10"]').screenshot({
       path: `${artifacts}/github-pending-comment.png`,
       animations: "disabled",
     });
+  });
+  await page.exposeFunction("typeBrowserGithubEditor", async (key, text) => {
+    const editor = page.locator(`[data-github-comment-key="${key}"] textarea`);
+    await editor.fill(text);
+    await editor.press("ArrowLeft");
+    await editor.press("Shift+ArrowLeft");
+    await editor.press("Shift+ArrowLeft");
+  });
+  await page.exposeFunction("clickBrowserGithubCommentButton", async (key, label) => {
+    await page
+      .locator(`[data-github-comment-key="${key}"]`)
+      .getByRole("button", { name: label, exact: true })
+      .click();
+  });
+  await page.exposeFunction("typeInFocusedBrowserEditor", async (text) => {
+    await page.keyboard.type(text);
   });
   let githubActions;
   await page.exposeFunction("browserGithubActions", async (request) => {
@@ -148,7 +171,11 @@ try {
   origin = server.resolvedUrls.local[0].replace(/\/$/, "");
   browser = await chromium.launch({ headless: true });
   const discovery = await open();
-  const tests = await discovery.page.evaluate(() => window.browserTests.list());
+  const tests = (await discovery.page.evaluate(() => window.browserTests.list())).filter(
+    (test) =>
+      !process.env.BROWSER_TEST_FILTER ||
+      `${test.file}#${test.name}`.includes(process.env.BROWSER_TEST_FILTER),
+  );
   await discovery.context.close();
   assert.ok(tests.length > 0, "No browser fixtures discovered");
   for (const [index, test] of tests.entries()) {
@@ -160,7 +187,11 @@ try {
       const result = await Promise.race([
         test.kind === "trusted-dismissal"
           ? trustedDismissal(fixture.page)
-          : test.name === "testAppGithubDraftIntentReloadInBrowser"
+          : [
+                "testAppGithubDraftIntentReloadInBrowser",
+                "testAppGithubFailedSaveReloadInBrowser",
+                "testAutomaticReviewOrderReloadInBrowser",
+              ].includes(test.name)
             ? durableDraftReload(fixture.page, test)
             : fixture.page.evaluate((test) => window.browserTests.run(test), test),
         new Promise((_, reject) => {

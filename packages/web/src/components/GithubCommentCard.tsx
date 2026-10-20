@@ -40,6 +40,7 @@ export function GithubCommentCard(props: {
     lazy: true,
   });
   const activeDraft = () => (mode() === "edit" ? editDraft : replyDraft);
+  let editor: HTMLTextAreaElement | undefined;
   const dependencies = () =>
     [...new Set([...props.comment.operationIds, ...(props.thread?.operationIds ?? [])])].filter(
       (id) =>
@@ -63,6 +64,10 @@ export function GithubCommentCard(props: {
   };
   const submit = async (action: GithubWriteAction) => {
     if (saving()) return;
+    const input = mode() ? editor : undefined;
+    const selection =
+      input && ([input.selectionStart, input.selectionEnd, input.selectionDirection] as const);
+    let failed = false;
     setSaving(true);
     setError(undefined);
     try {
@@ -84,13 +89,21 @@ export function GithubCommentCard(props: {
       } else await queueGithubWrite(props.scope.url, action, undefined, dependencies());
       setMode(undefined);
     } catch (cause) {
+      failed = true;
       setError(
         cause instanceof Error
           ? cause.message
-          : "Could not save locally. Keep your draft and check your GitHub sign-in.",
+          : "Could not save changes. Your draft is retained; try saving again.",
       );
     } finally {
       setSaving(false);
+      if (failed && input && selection) {
+        queueMicrotask(() => {
+          if (!input.isConnected) return;
+          input.focus({ preventScroll: true });
+          input.setSelectionRange(...selection);
+        });
+      }
     }
   };
   const reply = (text: string, context = replyDraft.context()): GithubWriteAction => {
@@ -196,6 +209,9 @@ export function GithubCommentCard(props: {
               }
             >
               <Textarea
+                ref={(element) => {
+                  editor = element;
+                }}
                 aria-label="Comment"
                 value={activeDraft().body()}
                 onInput={(event) => activeDraft().setBody(event.currentTarget.value)}
@@ -206,7 +222,7 @@ export function GithubCommentCard(props: {
                 size="sm"
                 disabled={!activeDraft().body().trim() || saving() || !activeDraft().ready()}
               >
-                Save locally
+                Save
               </Button>
               <Button
                 size="sm"
@@ -214,7 +230,7 @@ export function GithubCommentCard(props: {
                 onClick={() => setMode(undefined)}
                 disabled={saving()}
               >
-                Keep draft and close
+                Cancel
               </Button>
             </MessageForm>
           }
@@ -292,9 +308,7 @@ export function GithubCommentCard(props: {
           variant="ghost"
           onClick={() => {
             void refreshGithubActor()
-              .then(() =>
-                setError("Account checked. Your draft is retained; choose Save locally again."),
-              )
+              .then(() => setError("Account checked. Your draft is retained; choose Save again."))
               .catch(() =>
                 setError(
                   "Cannot reach the local backend. Keep your draft and check gh auth login when it reconnects.",

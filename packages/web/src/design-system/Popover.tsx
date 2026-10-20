@@ -46,7 +46,7 @@ export function Popover(props: {
   };
   const close = () => {
     panel.hidePopover();
-    trigger.focus();
+    trigger.focus({ preventScroll: true });
   };
   createEffect(() => {
     if (props.open === undefined) return;
@@ -87,6 +87,12 @@ export function Popover(props: {
         popover="auto"
         role="dialog"
         aria-label={props.label}
+        onKeyDown={(event) => {
+          if (event.defaultPrevented || event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          close();
+        }}
         onToggle={() => {
           const visible = panel.matches(":popover-open");
           setOpen(visible);

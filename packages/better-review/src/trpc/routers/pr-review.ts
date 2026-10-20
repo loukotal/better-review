@@ -55,6 +55,14 @@ function canonical(value: string) {
   if (!pr) throw new Error("Invalid PR URL");
   return `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`;
 }
+const reviewOrderScope = (session: PrReviewSession) => ({
+  mode: session.reviewMode,
+  commitSha: session.commitSha,
+  // A converted session must never relabel its earlier same-SHA commit output as full PR output.
+  ...(session.automaticReview?.prompt
+    ? { afterSubmissionId: session.automaticReview.submissionId ?? null }
+    : {}),
+});
 const payload = (
   session: PrReviewSession,
   sessions: StoredSession[],
@@ -69,6 +77,7 @@ const payload = (
   existing: true,
   headSha,
   sessionHeadSha: session.headSha,
+  sessionScope: reviewOrderScope(session),
 });
 const visibleSessions = (sessions: StoredSession[], store: PrReviewSessionService) =>
   Effect.filter(sessions, (item) => store.get(item.id).pipe(Effect.map(isPrReviewSession)));
@@ -496,7 +505,18 @@ export const prReviewRouter = router({
               }),
             );
           }
-          return { changed: result.changed, headSha: result.session.headSha };
+          const current = await runEffect(
+            Effect.gen(function* () {
+              const store = yield* PrReviewSessionService;
+              return (yield* store.get(input.sessionId))!;
+            }),
+          );
+          return {
+            changed: result.changed,
+            headSha: current.headSha,
+            session: { id: current.id },
+            sessionScope: reviewOrderScope(current),
+          };
         }),
       ),
     ),

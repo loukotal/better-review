@@ -47,6 +47,7 @@ test("app updates compare the running main checkout to the remote without fetchi
     updateAvailable: false,
     currentRevision: initial,
     latestRevision: initial,
+    checkoutRevision: initial,
   });
   const cachedCheck = createAppUpdateChecker(app);
   assert.equal((await cachedCheck()).updateAvailable, false);
@@ -58,10 +59,13 @@ test("app updates compare the running main checkout to the remote without fetchi
     updateAvailable: true,
     currentRevision: initial,
     latestRevision: latest,
+    checkoutRevision: initial,
+    updateAction: "unknown",
   });
   assert.deepEqual(concurrent, first);
   assert.equal(await git(app, "show-ref"), beforeRefs);
   assert.equal(await git(app, "rev-parse", "HEAD"), initial);
+  await assert.rejects(git(app, "cat-file", "-e", `${latest}^{commit}`));
   assert.equal((await cachedCheck()).updateAvailable, false);
 
   // A day passing does not schedule work; the next request refreshes the cached status.
@@ -72,19 +76,78 @@ test("app updates compare the running main checkout to the remote without fetchi
 
   await git(app, "checkout", "-b", "feature");
   assert.equal((await check()).updateAvailable, false);
+  assert.equal((await cachedCheck()).updateAvailable, false);
   const featureCheck = createAppUpdateChecker(app, 0);
   assert.equal((await featureCheck()).updateAvailable, false);
   await git(app, "checkout", "main");
   assert.equal((await featureCheck()).updateAvailable, false);
   await git(app, "checkout", "--detach");
   assert.equal((await check()).updateAvailable, false);
+  assert.equal((await cachedCheck()).updateAvailable, false);
   await git(app, "checkout", "main");
+
+  // Import history in the fixture only. The checker itself never fetches.
+  await git(app, "fetch", "origin", "main");
+  assert.equal((await cachedCheck()).updateAction, "fast-forward");
+  const beforeKnownRefs = await git(app, "show-ref");
+  assert.equal((await check()).updateAction, "fast-forward");
+  assert.equal(await git(app, "show-ref"), beforeKnownRefs);
+  assert.equal(await git(app, "rev-parse", "HEAD"), initial);
 
   // Pulling changes on disk still requires restarting the old process.
   await git(app, "pull", "--ff-only", "origin", "main");
-  assert.equal((await check()).updateAvailable, true);
+  assert.deepEqual(await cachedCheck(), {
+    updateAvailable: true,
+    currentRevision: initial,
+    latestRevision: latest,
+    checkoutRevision: latest,
+    updateAction: "restart",
+  });
+  assert.equal((await check()).updateAction, "restart");
   assert.equal((await createAppUpdateChecker(app, 0)()).updateAvailable, false);
-  await commit(app, "local-only commit");
+  const local = await commit(app, "local-only commit");
+  const restartedCheck = createAppUpdateChecker(app, 0);
+  assert.equal((await restartedCheck()).updateAvailable, false);
+  assert.equal((await cachedCheck()).updateAction, "restart");
+  assert.equal((await cachedCheck()).checkoutRevision, local);
+
+  // Local and upstream commits from the same parent are divergent, not fast-forwardable.
+  const upstream = await commit(publisher, "upstream-only commit");
+  await git(publisher, "push", "origin", "main");
+  assert.equal((await check()).updateAction, "unknown");
+  assert.equal((await restartedCheck()).updateAction, "unknown");
+  await assert.rejects(git(app, "cat-file", "-e", `${upstream}^{commit}`));
+  await git(app, "fetch", "origin", "main");
+  const divergentCachedCheck = createAppUpdateChecker(app);
+  assert.deepEqual(await divergentCachedCheck(), {
+    updateAvailable: true,
+    currentRevision: local,
+    latestRevision: upstream,
+    checkoutRevision: local,
+    updateAction: "diverged",
+  });
+  const beforeDivergentRefs = await git(app, "show-ref");
+  assert.equal((await check()).updateAction, "diverged");
+  assert.equal((await restartedCheck()).updateAction, "diverged");
+  assert.equal(await git(app, "show-ref"), beforeDivergentRefs);
+  assert.equal(await git(app, "rev-parse", "HEAD"), local);
+  assert.equal(await git(app, "status", "--porcelain"), "");
+
+  // Even a cached divergence must stop offering pull advice after a manual reconciliation.
+  await git(
+    app,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "merge",
+    "-s",
+    "ours",
+    "origin/main",
+    "-m",
+    "manual reconciliation",
+  );
+  assert.equal((await divergentCachedCheck()).updateAction, "restart");
   assert.equal((await createAppUpdateChecker(app, 0)()).updateAvailable, false);
 
   await git(app, "remote", "set-url", "origin", join(root, "missing.git"));

@@ -606,7 +606,7 @@ export async function testAppGithubCommentProjectionInBrowser() {
     (await githubJournal.editorDrafts(scope)).some((saved) => saved.body === draft.value),
     "Unknown account draft was not persisted for recovery",
   );
-  button(card(localKey)!, "Keep draft and close").click();
+  button(card(localKey)!, "Cancel").click();
   await fetchRemote();
   button(card(localKey)!, "Edit").click();
   await wait(

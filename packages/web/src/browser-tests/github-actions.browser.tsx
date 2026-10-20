@@ -118,7 +118,7 @@ export async function testAppGithubDeleteResolveInBrowser() {
       "Edit draft not ready",
     );
     [...element.querySelectorAll<HTMLButtonElement>("button")]
-      .find((item) => item.textContent?.trim() === "Save locally")!
+      .find((item) => item.textContent?.trim() === "Save")!
       .click();
     return sync("edit-comment", expected, previousSequence);
   };

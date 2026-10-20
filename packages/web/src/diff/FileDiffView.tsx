@@ -313,6 +313,12 @@ export function FileDiffView(props: FileDiffViewProps) {
 
   const threads = createMemo(() => groupCommentsIntoThreads(props.comments));
   const githubUiStates = new Map<string, ReturnType<typeof createGithubCommentUiState>>();
+  // Pierre compares annotation metadata by reference. Keep identity per comment;
+  // getters still expose current bodies, permissions and thread/sync metadata.
+  const githubAnnotationMetadata = new Map<
+    string,
+    Extract<DiffAnnotationMetadata, { type: "github-comment" }>
+  >();
 
   const lineAnnotations = createMemo(() => {
     const result: DiffLineAnnotation<DiffAnnotationMetadata>[] = [];
@@ -331,15 +337,28 @@ export function FileDiffView(props: FileDiffViewProps) {
         props.commitScope
       )
         continue;
-      const thread = githubThreadForComment(
-        comment,
-        props.githubThreads ?? [],
-        props.githubOperations ?? [],
-      );
+      let metadata = githubAnnotationMetadata.get(comment.key);
+      if (!metadata) {
+        const key = comment.key;
+        metadata = {
+          type: "github-comment",
+          get comment() {
+            return props.githubComments?.find((item) => item.key === key) ?? comment;
+          },
+          get thread() {
+            return githubThreadForComment(
+              this.comment,
+              props.githubThreads ?? [],
+              props.githubOperations ?? [],
+            );
+          },
+        };
+        githubAnnotationMetadata.set(key, metadata);
+      }
       result.push({
         side: location.side === "LEFT" ? "deletions" : "additions",
         lineNumber: location.line,
-        metadata: { type: "github-comment", comment, thread },
+        metadata,
       });
     }
     const threadMap = threads();
@@ -929,10 +948,7 @@ export function FileDiffView(props: FileDiffViewProps) {
               return props.githubOperations ?? [];
             },
             get thread() {
-              return (
-                props.githubThreads?.find((thread) => thread.key === metadata.thread?.key) ??
-                metadata.thread
-              );
+              return metadata.thread;
             },
           });
           disposeList.push(dispose);

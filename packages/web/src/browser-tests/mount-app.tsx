@@ -3,18 +3,29 @@ import { QueryClientProvider } from "@tanstack/solid-query";
 import { render } from "solid-js/web";
 import superjson from "superjson";
 
+import type { ReviewSnapshot } from "@better-review/shared";
+
 import App from "../App";
 import { queryClient, queryKeys, type PrExtrasData } from "../lib/query";
 
-const prUrl = "https://github.com/browser-fixture/isolated/pull/1";
-const headSha = "a".repeat(40);
+const fixturePrUrl = "https://github.com/browser-fixture/isolated/pull/1";
+const fixtureHeadSha = "a".repeat(40);
 const base = "b".repeat(40);
 const diff =
   "diff --git a/src/example.ts b/src/example.ts\n--- a/src/example.ts\n+++ b/src/example.ts\n@@ -8,3 +8,3 @@\n before\n-old\n+new\n after\n";
 
 export async function mountAppFixture(
-  options: { extras?: PrExtrasData; procedures?: Record<string, (input: unknown) => unknown> } = {},
+  options: {
+    extras?: PrExtrasData;
+    procedures?: Record<string, (input: unknown) => unknown>;
+    diff?: string;
+    reviewSnapshot?: (sessionId: string) => ReviewSnapshot;
+    prUrl?: string;
+    headSha?: string;
+  } = {},
 ) {
+  const prUrl = options.prUrl ?? fixturePrUrl;
+  const headSha = options.headSha ?? fixtureHeadSha;
   const originalFetch = window.fetch.bind(window);
   const fixtures: Record<string, unknown> = {
     "user.current": { login: "browser-fixture" },
@@ -41,12 +52,14 @@ export async function mountAppFixture(
       sessions: [],
       headSha,
       sessionHeadSha: headSha,
+      sessionScope: { mode: "full", commitSha: null },
     },
     "prReview.create": {
       session: { id: "bootstrap-commit" },
       sessions: [],
       headSha,
       sessionHeadSha: headSha,
+      sessionScope: { mode: "commit", commitSha: base },
     },
     "models.current": { provider: "fixture", modelId: "offline", name: "Offline fixture" },
     "models.setCurrent": {
@@ -82,7 +95,9 @@ export async function mountAppFixture(
     }
     if (url.pathname === "/api/app/update-status") return Response.json({ updateAvailable: false });
     if (url.pathname.startsWith("/api/review/sessions/bootstrap")) {
-      const snapshot = {
+      const snapshot = options.reviewSnapshot?.(
+        decodeURIComponent(url.pathname.split("/")[4]!),
+      ) ?? {
         sessionId: "bootstrap",
         revision: headSha,
         running: false,
@@ -107,8 +122,8 @@ export async function mountAppFixture(
   queryClient.setQueryData(queryKeys.pr.core(prUrl), {
     headSha,
     comparisonBaseSha: base,
-    diff,
-    info: { owner: "browser-fixture", repo: "isolated", number: "1" },
+    diff: options.diff ?? diff,
+    info: { owner: "browser-fixture", repo: "isolated", number: prUrl.split("/").at(-1)! },
     commits: [
       { sha: base, message: "Fixture base", author: "Fixture", date: "2026-01-01T00:00:00Z" },
     ],
@@ -122,7 +137,7 @@ export async function mountAppFixture(
     },
   );
   history.replaceState(null, "", `/review?prUrl=${encodeURIComponent(prUrl)}`);
-  render(
+  const dispose = render(
     () => (
       <QueryClientProvider client={queryClient}>
         <Router>
@@ -133,7 +148,8 @@ export async function mountAppFixture(
     document.getElementById("root")!,
   );
   for (let i = 0; i < 180; i++) {
-    if (document.querySelector("diffs-container") && document.getElementById("chat-panel")) return;
+    if (document.querySelector("diffs-container") && document.getElementById("chat-panel"))
+      return dispose;
     await new Promise(requestAnimationFrame);
   }
   throw new Error(`Isolated App did not mount: ${document.body.textContent}`);

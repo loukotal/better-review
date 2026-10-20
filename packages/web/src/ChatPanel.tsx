@@ -28,6 +28,11 @@ import type { DiffTheme } from "./diff/types";
 import { useStreamingChat, type ToolCall } from "./hooks/useStreamingChat";
 import { SpinnerIcon } from "./icons/spinner-icon";
 import { type SourceSelection, type SelectionChatController } from "./lib/ask-ai-selection";
+import {
+  availableReviewOrder,
+  type AvailableReviewOrder,
+  type SavedReviewOrderScope,
+} from "./lib/automatic-review-order";
 import { parseChatFileReference } from "./lib/chat-file-reference";
 import {
   groupTranscript,
@@ -81,6 +86,7 @@ interface ChatPanelProps {
     ref?: string,
   ) => void;
   onApplyReviewOrder?: (files: string[]) => void;
+  onAvailableReviewOrder?: (order: AvailableReviewOrder | null) => void;
   onAnnotationsReceived?: (annotations: Annotation[]) => void;
   onCreateFindingComment?: (annotation: Annotation, sessionId: string, ref?: string | null) => void;
   onSelectionSourceNavigate?: (selection: SelectionSourceContext, sessionId: string) => void;
@@ -133,6 +139,19 @@ export function ChatPanel(props: ChatPanelProps) {
   });
   const [assistantSettingsOpen, setAssistantSettingsOpen] = createSignal(false);
   const [sessionId, setSessionId] = createSignal<string | null>(null);
+  const [savedOrderScope, setSavedOrderScope] = createSignal<SavedReviewOrderScope | null>(null);
+  const hydrateOrderScope = (data: {
+    session: { id: string };
+    sessionScope?: {
+      mode: "full" | "commit";
+      commitSha: string | null;
+      afterSubmissionId?: string | null;
+    };
+  }) => {
+    setSavedOrderScope(
+      data.sessionScope ? { sessionId: data.session.id, ...data.sessionScope } : null,
+    );
+  };
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [initializing, setInitializing] = createSignal(false);
   const [scopeSessionKey, setScopeSessionKey] = createSignal<string | null>(null);
@@ -260,6 +279,33 @@ export function ChatPanel(props: ChatPanelProps) {
         ].join("\n")
       : null,
   );
+  const [resolvedSessionTarget, setResolvedSessionTarget] = createSignal<string | null>(null);
+
+  createEffect(() => {
+    const revision = props.reviewMode === "commit" ? props.commitSha : props.displayedHeadSha;
+    const sid = sessionId();
+    props.onAvailableReviewOrder?.(
+      !initializing() &&
+        !pullingLatest() &&
+        resolvedSessionTarget() === sessionTarget() &&
+        !creatingNewSession() &&
+        !switchingCommitSession() &&
+        props.prUrl &&
+        sid &&
+        revision
+        ? availableReviewOrder(
+            chat.snapshot(),
+            {
+              prUrl: props.prUrl,
+              sessionId: sid,
+              revision,
+              mode: props.reviewMode ?? "full",
+            },
+            savedOrderScope(),
+          )
+        : null,
+    );
+  });
 
   // Initialize session when PR changes
   createEffect(
@@ -270,6 +316,7 @@ export function ChatPanel(props: ChatPanelProps) {
       }
 
       sessionInitializationVersion++;
+      setPullingLatest(false);
       setSessionId(null);
       setSessions([]);
       setCurrentHeadSha(null);
@@ -308,6 +355,9 @@ export function ChatPanel(props: ChatPanelProps) {
 
     const requestVersion = ++sessionInitializationVersion;
     const requestPrUrl = props.prUrl;
+    const requestTarget = sessionTarget();
+    setPullingLatest(false);
+    setResolvedSessionTarget(null);
     setInitializing(true);
     setSessionError(null);
 
@@ -342,6 +392,7 @@ export function ChatPanel(props: ChatPanelProps) {
       }
 
       setSessionId(data.session.id);
+      hydrateOrderScope(data);
       setNavigationRevision(
         requestedSessionId
           ? null
@@ -360,6 +411,7 @@ export function ChatPanel(props: ChatPanelProps) {
       if (data.headSha && !requestedSessionId) {
         setCurrentHeadSha(data.headSha);
       }
+      setResolvedSessionTarget(requestTarget);
     } catch (err) {
       if (requestVersion === sessionInitializationVersion)
         setSessionError(err instanceof Error ? err.message : "Failed to initialize chat session");
@@ -429,9 +481,13 @@ export function ChatPanel(props: ChatPanelProps) {
       if (isCurrent()) {
         // Receipt means the durable API accepted the prompt; do not wait for LLM completion.
         setSessionId(id);
+        setSavedOrderScope(null);
         setNavigationRevision(null);
         void trpc.prReview.switch
           .mutate({ prUrl, sessionId: id })
+          .then((data) => {
+            if (isCurrent() && sessionId() === id) hydrateOrderScope(data);
+          })
           .catch((cause) => console.error("Could not persist selected conversation", cause));
       }
       return true;
@@ -484,11 +540,21 @@ export function ChatPanel(props: ChatPanelProps) {
     const sid = sessionId();
     const prUrl = props.prUrl;
     if (!sid || !prUrl || reviewActionsDisabled()) return;
+    const version = sessionInitializationVersion;
+    const target = sessionTarget();
     setPullingLatest(true);
     setPullNotice(null);
     try {
       const result = await trpc.prReview.pullLatest.mutate({ sessionId: sid, prUrl });
-      if (sessionId() !== sid || props.prUrl !== prUrl) return;
+      if (
+        version !== sessionInitializationVersion ||
+        target !== sessionTarget() ||
+        sessionId() !== sid ||
+        props.prUrl !== prUrl ||
+        result.session.id !== sid
+      )
+        return;
+      hydrateOrderScope(result);
       if (!result.changed) {
         setPullNotice(
           `Up to date at ${result.headSha.slice(0, 7)}. Run Review or Adversarial again to recheck this revision.`,
@@ -504,10 +570,16 @@ export function ChatPanel(props: ChatPanelProps) {
         `Updated to ${result.headSha.slice(0, 7)}. Continuing the review in this conversation.`,
       );
     } catch (error) {
-      if (sessionId() === sid && props.prUrl === prUrl)
+      if (
+        version === sessionInitializationVersion &&
+        target === sessionTarget() &&
+        sessionId() === sid &&
+        props.prUrl === prUrl
+      )
         setPullNotice(error instanceof Error ? error.message : "Could not pull latest changes");
     } finally {
-      setPullingLatest(false);
+      if (version === sessionInitializationVersion && target === sessionTarget())
+        setPullingLatest(false);
     }
   }
 
@@ -518,13 +590,14 @@ export function ChatPanel(props: ChatPanelProps) {
     const prUrl = props.prUrl;
 
     try {
-      await trpc.prReview.switch.mutate({
+      const data = await trpc.prReview.switch.mutate({
         prUrl: props.prUrl,
         sessionId: newSessionId,
       });
       if (version !== sessionInitializationVersion || props.prUrl !== prUrl) return;
 
       setSessionId(newSessionId);
+      hydrateOrderScope(data);
       // Session list heads do not identify a saved commit-review scope.
       setNavigationRevision(null);
     } catch (err) {
@@ -555,6 +628,7 @@ export function ChatPanel(props: ChatPanelProps) {
 
       batch(() => {
         setSessionId(data.session.id);
+        hydrateOrderScope(data);
         setNavigationRevision(
           props.reviewMode === "commit" ? (props.commitSha ?? null) : data.sessionHeadSha,
         );

@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on, type Accessor } from "solid-js";
+import { createEffect, createMemo, createSignal, on, type Accessor } from "solid-js";
 
 import { githubEditorService } from "./github-editor-service";
 import type { GithubDraft } from "./github-outbox-journal";
@@ -49,9 +49,12 @@ export function createGithubEditorDraft(options: {
         );
     }
   };
+  // Projection publishes fresh comment objects on every poll. Compare the slot
+  // value, not its reactive dependencies, before resetting an active editor.
+  const identity = createMemo(() => `${options.url() ?? ""}|${options.slot() ?? ""}`);
   createEffect(
     on(
-      () => `${options.url() ?? ""}|${options.slot() ?? ""}`,
+      identity,
       () => {
         generation++;
         draft = undefined;

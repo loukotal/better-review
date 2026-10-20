@@ -9,20 +9,32 @@ const CACHE_MS = 24 * 60 * 60_000;
 
 /** Read remote refs without fetching, modifying the checkout, or prompting for credentials. */
 export function createAppUpdateChecker(repoRoot: string, cacheMs = CACHE_MS) {
-  const git = async (...args: string[]): Promise<string | null> => {
+  const runGit = async (...args: string[]) => {
     try {
       const { stdout } = await exec("git", ["-C", repoRoot, ...args], {
         timeout: 8000,
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: "0",
+          GIT_NO_LAZY_FETCH: "1",
           GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -oBatchMode=yes -oConnectTimeout=5",
         },
       });
-      return stdout.trim();
-    } catch {
+      return { stdout: stdout.trim(), code: 0 };
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === 1) {
+        return { stdout: "", code: 1 };
+      }
       return null;
     }
+  };
+  const git = async (...args: string[]) => {
+    const result = await runGit(...args);
+    return result?.code === 0 ? result.stdout : null;
+  };
+  const isAncestor = async (ancestor: string, descendant: string) => {
+    const result = await runGit("merge-base", "--is-ancestor", ancestor, descendant);
+    return result ? result.code === 0 : null;
   };
   // Pin the running revision: pulling on disk alone does not update an already-running server.
   const running = Promise.all([
@@ -31,7 +43,7 @@ export function createAppUpdateChecker(repoRoot: string, cacheMs = CACHE_MS) {
     git("rev-parse", "--show-toplevel"),
     realpath(repoRoot).catch(() => null),
   ]);
-  let cached: { expiresAt: number; value: AppUpdateStatus } | undefined;
+  let cached: { expiresAt: number; revision: string | undefined } | undefined;
   let inFlight: Promise<AppUpdateStatus> | undefined;
 
   const check = async (): Promise<AppUpdateStatus> => {
@@ -39,34 +51,61 @@ export function createAppUpdateChecker(repoRoot: string, cacheMs = CACHE_MS) {
     if (runningBranch !== "main" || !currentRevision || gitRoot !== expectedRoot || !expectedRoot) {
       return { updateAvailable: false };
     }
-    if ((await git("symbolic-ref", "--quiet", "--short", "HEAD")) !== "main") {
+    const [checkoutBranch, checkoutRevision] = await Promise.all([
+      git("symbolic-ref", "--quiet", "--short", "HEAD"),
+      git("rev-parse", "HEAD"),
+    ]);
+    if (checkoutBranch !== "main" || !checkoutRevision) {
       return { updateAvailable: false };
     }
-    const remote = await git("ls-remote", "--exit-code", "origin", "refs/heads/main");
-    const latestRevision = remote?.split(/\s+/)[0];
-    if (!latestRevision || !/^[a-f0-9]{40,64}$/.test(latestRevision)) {
+    // Cache only the network lookup. Local commits, pulls and branch switches must take
+    // effect on the next check, even while the remote tip remains cached for a day.
+    if (!cached || cached.expiresAt <= Date.now()) {
+      const remote = await git("ls-remote", "--exit-code", "origin", "refs/heads/main");
+      const revision = remote?.split(/\s+/)[0];
+      cached = {
+        revision: revision && /^[a-f0-9]{40,64}$/.test(revision) ? revision : undefined,
+        expiresAt: Date.now() + cacheMs,
+      };
+    }
+    const latestRevision = cached.revision;
+    if (!latestRevision) {
       return { updateAvailable: false };
     }
-    // Local-only commits are not an available upstream update. Unknown remote objects are
-    // intentionally not fetched: a different advertised tip is enough to offer a manual update.
-    const alreadyIncluded =
+    const status = { currentRevision, latestRevision, checkoutRevision };
+    // Local-only commits in the running version are not an upstream update.
+    if (
       latestRevision === currentRevision ||
-      (await git("merge-base", "--is-ancestor", latestRevision, currentRevision)) !== null;
-    return { updateAvailable: !alreadyIncluded, currentRevision, latestRevision };
+      (await isAncestor(latestRevision, currentRevision)) === true
+    ) {
+      return { ...status, updateAvailable: false };
+    }
+    const remoteIncluded =
+      latestRevision === checkoutRevision || (await isAncestor(latestRevision, checkoutRevision));
+    if (remoteIncluded === true) {
+      return { ...status, updateAvailable: true, updateAction: "restart" };
+    }
+    const checkoutIncluded = await isAncestor(checkoutRevision, latestRevision);
+    if (checkoutIncluded === true) {
+      return { ...status, updateAvailable: true, updateAction: "fast-forward" };
+    }
+    const completeHistory = (await git("rev-parse", "--is-shallow-repository")) === "false";
+    return {
+      ...status,
+      updateAvailable: true,
+      updateAction:
+        checkoutIncluded === false && remoteIncluded === false && completeHistory
+          ? "diverged"
+          : "unknown",
+    };
   };
 
   // Startup and incoming UI requests share this cache; there is no scheduled refresh loop.
   return (): Promise<AppUpdateStatus> => {
-    if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value);
     if (inFlight) return inFlight;
-    inFlight = check()
-      .then((value) => {
-        cached = { value, expiresAt: Date.now() + cacheMs };
-        return value;
-      })
-      .finally(() => {
-        inFlight = undefined;
-      });
+    inFlight = check().finally(() => {
+      inFlight = undefined;
+    });
     return inFlight;
   };
 }
