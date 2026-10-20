@@ -40,6 +40,7 @@ function state(
     revision: 1,
     pendingCount: status === "synced" ? 0 : kinds.length,
     busy: false,
+    pendingSaving: 0,
     operations: kinds.map((kind, index) => ({
       status,
       backendOwned: true,

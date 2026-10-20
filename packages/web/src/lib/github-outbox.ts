@@ -45,6 +45,8 @@ export interface BrowserGithubState {
   operations: BrowserGithubOperation[];
   pendingCount: number;
   busy: boolean;
+  /** Browser-only work before durable acknowledgement. Never a backend operation. */
+  pendingSaving: number;
   error?: string;
 }
 
@@ -53,6 +55,7 @@ interface ScopeState {
   revision: number;
   operations: Map<string, GithubOutboxOperation>;
   admissions: GithubAdmission[];
+  pendingSaving: number;
   error?: string;
 }
 
@@ -104,6 +107,7 @@ export function createGithubOutbox(options: {
         revision: -1,
         operations: new Map(),
         admissions: [],
+        pendingSaving: 0,
       };
       states.set(scope.url, value);
     }
@@ -160,7 +164,18 @@ export function createGithubOutbox(options: {
       operations: list,
       pendingCount: list.filter((item) => item.status !== "synced" && item.status !== "cancelled")
         .length,
-      busy: list.some((item) => ["local-pending", "queued", "inflight"].includes(item.status)),
+      busy:
+        value.pendingSaving > 0 ||
+        list.some(
+          (item) =>
+            !item.admissionError &&
+            (["local-pending", "queued", "inflight"].includes(item.status) ||
+              (item.status === "retry-failed" &&
+                item.operation?.retryMode === "automatic" &&
+                item.operation.error?.retryable &&
+                !!item.operation.nextAttemptAt)),
+        ),
+      pendingSaving: value.pendingSaving,
       error: value.error,
     });
   }
@@ -330,9 +345,23 @@ export function createGithubOutbox(options: {
     }
   }
 
+  function beginSaving(scope: GithubPrScope) {
+    const value = state(scope);
+    value.pendingSaving++;
+    emit();
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      value.pendingSaving--;
+      emit();
+    };
+  }
+
   return {
     journal,
     getState,
+    beginSaving,
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => {
@@ -381,37 +410,44 @@ export function createGithubOutbox(options: {
           return { operationId: saved.command.operationId, command: saved.command };
         }
       }
-      const prior = await reuseSubmittedDraft();
-      if (prior) return prior;
-      // Reject on journal failure: caller MUST leave the editor intact until this resolves.
+      const finishSaving = beginSaving(command.scope);
       try {
-        await journal.admit(command, draftKey);
-      } catch (error) {
-        // Another tab may have atomically claimed this draft while we were awaiting IDB.
-        const concurrent = await reuseSubmittedDraft();
-        if (concurrent) return concurrent;
-        throw error;
-      }
-      try {
-        await load(command.scope);
-      } catch {
-        // Admission already committed. A subsequent read failure must NOT invite a
-        // second submission with a fresh UUID while leaving the first write alive.
-        const value = state(command.scope);
-        if (!value.admissions.some((entry) => entry.command.operationId === command.operationId)) {
-          value.admissions.push({
-            command,
-            backendOwned: false,
-            draftKey,
-            localOrder: Math.max(0, ...value.admissions.map((entry) => entry.localOrder)) + 1,
-          });
+        const prior = await reuseSubmittedDraft();
+        if (prior) return prior;
+        // Reject on journal failure: caller MUST leave the editor intact until this resolves.
+        try {
+          await journal.admit(command, draftKey);
+        } catch (error) {
+          // Another tab may have atomically claimed this draft while we were awaiting IDB.
+          const concurrent = await reuseSubmittedDraft();
+          if (concurrent) return concurrent;
+          throw error;
         }
-        value.error =
-          "Your write is saved locally; the outbox view will refresh after storage recovers.";
-        emit();
+        try {
+          await load(command.scope);
+        } catch {
+          // Admission already committed. A subsequent read failure must NOT invite a
+          // second submission with a fresh UUID while leaving the first write alive.
+          const value = state(command.scope);
+          if (
+            !value.admissions.some((entry) => entry.command.operationId === command.operationId)
+          ) {
+            value.admissions.push({
+              command,
+              backendOwned: false,
+              draftKey,
+              localOrder: Math.max(0, ...value.admissions.map((entry) => entry.localOrder)) + 1,
+            });
+          }
+          value.error =
+            "Your write is saved locally; the outbox view will refresh after storage recovers.";
+          emit();
+        }
+        background(admit(command.scope, command.operationId), command.scope);
+        return { operationId: command.operationId, command: structuredClone(command) };
+      } finally {
+        finishSaving();
       }
-      background(admit(command.scope, command.operationId), command.scope);
-      return { operationId: command.operationId, command: structuredClone(command) };
     },
     retryAdmission(scope: GithubPrScope, operationId: string) {
       return admit(normalizeGithubPrScope(scope), operationId, true);

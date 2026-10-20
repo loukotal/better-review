@@ -101,21 +101,27 @@ export function createGithubEditorDraft(options: {
     const captured = draft,
       text = body(),
       metadata = context();
-    await writes;
-    if (writeFailure) {
-      // Retry the latest text explicitly; never submit a stale persisted body.
-      await githubEditorService().journal.saveEditor(captured.key, text);
-      writeFailure = undefined;
-      setError(undefined);
+    const service = githubEditorService();
+    const finishSaving = service.beginSaving?.(captured.scope);
+    try {
+      await writes;
+      if (writeFailure) {
+        // Retry the latest text explicitly; never submit a stale persisted body.
+        await githubEditorService().journal.saveEditor(captured.key, text);
+        writeFailure = undefined;
+        setError(undefined);
+      }
+      const result = await save(text, captured.key, metadata);
+      submitted = true;
+      setBodyValue("");
+      setReady(false);
+      // Admission already rotated the slot atomically. Failure to load its empty successor
+      // must not turn durable success into a submission error or invite a duplicate intent.
+      void open(options.lazy ? undefined : options.initial?.());
+      return result;
+    } finally {
+      finishSaving?.();
     }
-    const result = await save(text, captured.key, metadata);
-    submitted = true;
-    setBodyValue("");
-    setReady(false);
-    // Admission already rotated the slot atomically. Failure to load its empty successor
-    // must not turn durable success into a submission error or invite a duplicate intent.
-    void open(options.lazy ? undefined : options.initial?.());
-    return result;
   };
   return { body, setBody, context, ready, error, open, submit };
 }

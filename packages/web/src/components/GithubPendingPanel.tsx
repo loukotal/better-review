@@ -16,7 +16,7 @@ import {
 import { refreshPrListAfterReview } from "../lib/query";
 import { legacyGithubDraftRecovery } from "../lib/recoverable-drafts";
 import { trpc } from "../lib/trpc";
-import { GithubSyncStatus, githubSyncState } from "./GithubSyncStatus";
+import { GithubSyncStatus, githubSyncState, githubOperationSyncState } from "./GithubSyncStatus";
 
 /** Compact transport/recovery controls. Comment bodies belong to discussion/diff views. */
 export function GithubPendingPanel(props: {
@@ -107,18 +107,34 @@ export function GithubPendingPanel(props: {
     }
   };
   return (
-    <Show when={state()?.operations.length || drafts().length || legacyDrafts().length}>
+    <Show
+      when={
+        state()?.pendingSaving ||
+        state()?.operations.length ||
+        drafts().length ||
+        legacyDrafts().length
+      }
+    >
       <div aria-label="GitHub pending writes" class="fixed bottom-3 left-3 z-20 text-xs">
         <Popover
-          label={pending().length ? "GitHub pending writes" : "GitHub saved content"}
+          label={
+            pending().length || state()?.pendingSaving
+              ? "GitHub pending writes"
+              : "GitHub saved content"
+          }
           width={360}
           triggerSize="icon"
           open={open()}
           onOpenChange={setOpen}
           trigger={
             <span class="inline-flex items-center gap-1">
-              <Show when={githubSyncState(pending())} fallback={<GitHubIcon size={12} />}>
-                {(status) => <GithubSyncStatus status={status()} iconOnly />}
+              <Show
+                when={
+                  state()?.pendingSaving ? ("saving-local" as const) : githubSyncState(pending())
+                }
+                fallback={<GitHubIcon size={12} />}
+              >
+                {(status) => <GithubSyncStatus status={status()} operations={pending()} iconOnly />}
               </Show>
               <Show when={pending().length + drafts().length + legacyDrafts().length}>
                 <span aria-hidden="true">
@@ -174,7 +190,7 @@ export function GithubPendingPanel(props: {
                   class="flex flex-wrap items-center gap-2 py-1"
                 >
                   <span>{item.command.action.kind}</span>
-                  <GithubSyncStatus status={item.admissionError ? "retry-failed" : item.status} />
+                  <GithubSyncStatus status={githubOperationSyncState(item)} />
                   <Show when={item.operation?.error || item.admissionError}>
                     <span role="alert">
                       {item.operation?.error?.message ?? item.admissionError}
@@ -218,7 +234,7 @@ export function GithubPendingPanel(props: {
                   <details data-github-recovery-operation={item.command.operationId}>
                     <summary>
                       {item.command.action.kind} ·{" "}
-                      <GithubSyncStatus status={item.status} showSynced />
+                      <GithubSyncStatus status={githubOperationSyncState(item)} showSynced />
                     </summary>
                     <pre class="whitespace-pre-wrap break-words">
                       {"body" in item.command.action

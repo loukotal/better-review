@@ -87,7 +87,6 @@ async function enqueueGithubCommand(
 }
 
 export const githubJournal = createIndexedDbGithubJournal();
-configureGithubEditorService(githubJournal, githubPrScope);
 export const githubWrites = createGithubOutbox({
   journal: githubJournal,
   transport: {
@@ -99,6 +98,7 @@ export const githubWrites = createGithubOutbox({
     },
   },
 });
+configureGithubEditorService(githubJournal, githubPrScope, githubWrites.beginSaving);
 
 export async function refreshGithubActor() {
   // A failed connection retains the previously known stable identity. A successful

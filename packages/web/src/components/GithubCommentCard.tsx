@@ -57,7 +57,6 @@ export function GithubCommentCard(props: {
     );
   const syncState = () => {
     const state = githubSyncState(commentOperations());
-    if (state === "uncertain" || state === "retry-failed") return state;
     if (saving()) return "saving-local";
     if (!props.comment.pending && !props.thread?.pending) return undefined;
     return state ?? "local-pending";

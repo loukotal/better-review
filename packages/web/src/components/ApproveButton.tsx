@@ -4,14 +4,15 @@ import { usePrContext } from "../context/PrContext";
 import { Alert, Button, Field, MessageForm, Popover, Textarea } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
 import { createGithubEditorDraft } from "../lib/github-editor-draft";
+import type { BrowserGithubOperation } from "../lib/github-outbox";
 import { queueGithubWrite } from "../lib/github-writes";
-import { GithubSyncStatus, type GithubSyncState } from "./GithubSyncStatus";
+import { GithubSyncStatus, githubSyncState } from "./GithubSyncStatus";
 
 export function ApproveButton(props: {
   expectedHeadSha?: string | null;
   canSubmit?: boolean;
   approvalState?: "pending" | "synced";
-  approvalSyncState?: GithubSyncState;
+  approvalOperations?: readonly BrowserGithubOperation[];
 }) {
   const { prUrl } = usePrContext();
   const [open, setOpen] = createSignal(false);
@@ -72,10 +73,11 @@ export function ApproveButton(props: {
               status={
                 submitting()
                   ? "saving-local"
-                  : (props.approvalSyncState ??
+                  : (githubSyncState(props.approvalOperations ?? []) ??
                     (props.approvalState === "synced" ? "synced" : "queued"))
               }
               iconOnly
+              operations={props.approvalOperations}
               showSynced
             />
           </Show>

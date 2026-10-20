@@ -74,6 +74,7 @@ function browserState(...operations: GithubOutboxOperation[]): BrowserGithubStat
       operation: op,
     })),
     busy: operations.some((op) => op.status === "queued"),
+    pendingSaving: 0,
     pendingCount: operations.filter((op) => op.status !== "synced").length,
   };
 }
@@ -243,7 +244,44 @@ test("journal failure rejects before network and unknown identity never creates 
     /identity is unknown/,
   );
   assert.equal(calls, 0);
+  assert.equal(client.getState(scope).pendingSaving, 0);
+  assert.equal(client.getState(scope).busy, false);
   assert.deepEqual(await journal.list(), []);
+  await client.close();
+});
+
+test("browser saving publishes before journal acknowledgement without fabricating durable operations", async () => {
+  const journal = memoryJournal();
+  const admit = journal.admit;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  journal.admit = async (...args) => {
+    await gate;
+    return admit(...args);
+  };
+  const client = createGithubOutbox({ journal, transport: transport() });
+  let notifications = 0;
+  client.subscribe(() => notifications++);
+  const savingEditor = client.beginSaving(scope);
+  const submit = client.submit({ scope, actor, action: command().action });
+  assert.equal(client.getState(scope).pendingSaving, 2);
+  assert.equal(client.getState(scope).busy, true);
+  assert.deepEqual(client.getState(scope).operations, []);
+  assert.equal(client.getState(scope).pendingCount, 0);
+  assert.ok(notifications >= 2);
+  assert.equal(
+    client.getState({ ...scope, number: 2, url: scope.url.replace(/\/1$/, "/2") }).pendingSaving,
+    0,
+  );
+  release();
+  await submit;
+  assert.equal(client.getState(scope).pendingSaving, 1);
+  savingEditor();
+  savingEditor();
+  assert.equal(client.getState(scope).pendingSaving, 0);
+  assert.equal(client.getState(scope).operations.length, 1);
   await client.close();
 });
 

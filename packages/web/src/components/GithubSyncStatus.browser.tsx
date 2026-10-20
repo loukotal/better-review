@@ -21,6 +21,7 @@ export async function testGithubSyncMotionInBrowser() {
     "local-pending",
     "queued",
     "inflight",
+    "retry-pending",
     "retry-failed",
     "uncertain",
     "synced",
@@ -45,11 +46,11 @@ export async function testGithubSyncMotionInBrowser() {
         const expected =
           preference === "reduce"
             ? "none"
-            : state === "inflight"
+            : ["saving-local", "local-pending", "queued", "inflight", "retry-pending"].includes(
+                  state,
+                )
               ? "spin"
-              : ["saving-local", "local-pending", "queued"].includes(state)
-                ? "pulse"
-                : "none";
+              : "none";
         check(
           css.animationName === expected,
           `${preference}/${state}: actual animation=${css.animationName}, expected=${expected}`,
@@ -60,11 +61,15 @@ export async function testGithubSyncMotionInBrowser() {
         );
         if (expected !== "none")
           check(parseFloat(css.animationDuration) > 0, `${state} animation has no duration`);
-        if (state === "inflight")
+        if (expected === "spin") {
+          check(css.animationDelay === "0s", `${state} delayed animation`);
+          check(css.animationTimingFunction === "linear", `${state} non-linear animation`);
+          check(css.animationIterationCount === "infinite", `${state} finite animation`);
           check(
             css.transformOrigin === "6px 6px",
             `Sending icon does not rotate about its center: ${css.transformOrigin}`,
           );
+        }
       }
     }
     return { passed };
@@ -87,6 +92,7 @@ export function testGithubSyncStatusInBrowser() {
     "local-pending",
     "queued",
     "inflight",
+    "retry-pending",
     "retry-failed",
     "uncertain",
     "synced",
@@ -130,7 +136,10 @@ export function testGithubSyncStatusInBrowser() {
         const icon = status.querySelector("svg")!;
         check(icon.closest('[aria-hidden="true"]'), `Decorative SVG announced for ${state}`);
         check(
-          icon.classList.contains("animate-spin") === (state === "inflight"),
+          icon.classList.contains("animate-spin") ===
+            ["saving-local", "local-pending", "queued", "inflight", "retry-pending"].includes(
+              state,
+            ),
           `False activity for ${state}`,
         );
         if (matchMedia("(prefers-reduced-motion: reduce)").matches)
