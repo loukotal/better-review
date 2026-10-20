@@ -74,7 +74,7 @@ export function GithubSyncStatus(props: {
     (warningState() && warningState() !== props.status ? ` · ${labels[warningState()!]}` : "");
   const animation = () =>
     ["saving-local", "local-pending", "queued", "inflight", "retry-pending"].includes(props.status)
-      ? "animate-spin motion-reduce:animate-none"
+      ? "github-sync-spin animate-spin"
       : "";
   const icon = () => (
     <span aria-hidden="true" class="relative inline-flex shrink-0 items-center">

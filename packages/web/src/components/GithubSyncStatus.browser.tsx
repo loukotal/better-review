@@ -29,28 +29,40 @@ export async function testGithubSyncMotionInBrowser() {
   ];
   const host = document.createElement("div");
   document.body.append(host);
+  const otherMotion = document.createElement("span");
+  otherMotion.className = "animate-spin inline-block";
   const dispose = render(
     () => (
       <For each={states}>{(state) => <GithubSyncStatus status={state} iconOnly showSynced />}</For>
     ),
     host,
   );
+  host.append(otherMotion);
   try {
     for (const preference of ["no-preference", "reduce"] as const) {
       await window.setBrowserMotionPreference(preference);
       await new Promise(requestAnimationFrame);
+      const otherCss = getComputedStyle(otherMotion);
+      check(
+        preference === "reduce"
+          ? parseFloat(otherCss.animationDuration) <= 0.001 &&
+              otherCss.animationIterationCount === "1"
+          : otherCss.animationIterationCount === "infinite",
+        "Sync exception changed unrelated app motion",
+      );
       for (const state of states) {
         const status = host.querySelector<HTMLElement>(`[data-github-sync-status="${state}"]`)!;
         const icon = status.querySelector("svg")!;
         const css = getComputedStyle(icon);
-        const expected =
-          preference === "reduce"
-            ? "none"
-            : ["saving-local", "local-pending", "queued", "inflight", "retry-pending"].includes(
-                  state,
-                )
-              ? "spin"
-              : "none";
+        const expected = [
+          "saving-local",
+          "local-pending",
+          "queued",
+          "inflight",
+          "retry-pending",
+        ].includes(state)
+          ? "spin"
+          : "none";
         check(
           css.animationName === expected,
           `${preference}/${state}: actual animation=${css.animationName}, expected=${expected}`,
@@ -70,6 +82,37 @@ export async function testGithubSyncMotionInBrowser() {
             `Sending icon does not rotate about its center: ${css.transformOrigin}`,
           );
         }
+      }
+      const samples = states.map((state) => {
+        const icon = host.querySelector<SVGSVGElement>(`[data-github-sync-status="${state}"] svg`)!;
+        const animation = icon.getAnimations()[0];
+        return {
+          state,
+          icon,
+          animation,
+          time: Number(animation?.currentTime),
+          transform: getComputedStyle(icon).transform,
+        };
+      });
+      await new Promise((resolve) => setTimeout(resolve, 240));
+      await new Promise(requestAnimationFrame);
+      for (const sample of samples) {
+        const moving = [
+          "saving-local",
+          "local-pending",
+          "queued",
+          "inflight",
+          "retry-pending",
+        ].includes(sample.state);
+        check(
+          moving
+            ? sample.animation?.playState === "running" &&
+                Number(sample.animation.currentTime) - sample.time >= 200 &&
+                getComputedStyle(sample.icon).transform !== sample.transform
+            : sample.icon.getAnimations().length === 0 &&
+                getComputedStyle(sample.icon).transform === sample.transform,
+          `${preference}/${sample.state}: expected ${moving ? "visible rotation" : "static icon"}`,
+        );
       }
     }
     return { passed };
@@ -142,11 +185,11 @@ export function testGithubSyncStatusInBrowser() {
             ),
           `False activity for ${state}`,
         );
-        if (matchMedia("(prefers-reduced-motion: reduce)").matches)
-          check(
-            getComputedStyle(icon).animationName === "none",
-            `Reduced motion ignored for ${state}`,
-          );
+        check(
+          getComputedStyle(icon).animationName ===
+            (icon.classList.contains("animate-spin") ? "spin" : "none"),
+          `Incorrect sync motion for ${state}`,
+        );
       }
     }
     check(

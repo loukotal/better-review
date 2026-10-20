@@ -301,6 +301,12 @@ select {
     scroll-behavior: auto !important;
     transition-duration: 1ms !important;
   }
+
+  /* Keep the small GitHub sync progress indicator moving in either motion mode. */
+  .github-sync-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 /* Disable transitions for elements that shouldn't animate */
