@@ -39,20 +39,30 @@ function memory() {
     },
   };
 }
-test("preference defaults off, strict versioned parsing, survives reload", () => {
+test("preference defaults on, preserves explicit versioned choices, survives reload", () => {
   const store = memory();
-  assert.equal(loadAutomaticReviewOrder(store), false);
+  assert.equal(loadAutomaticReviewOrder(store), true);
   saveAutomaticReviewOrder(true, store);
   assert.equal(loadAutomaticReviewOrder(store), true);
   saveAutomaticReviewOrder(false, store);
   assert.equal(loadAutomaticReviewOrder(store), false);
   for (const value of [
+    "null",
     "true",
+    "false",
     "{",
+    "[]",
+    "{}",
     '{"version":2,"enabled":true}',
+    '{"version":2,"enabled":false}',
+    '{"enabled":false}',
+    '{"version":1}',
     '{"version":1,"enabled":"true"}',
+    '{"version":1,"enabled":"false"}',
+    '{"version":1,"enabled":0}',
+    '{"version":1,"enabled":null}',
   ]) {
-    assert.equal(loadAutomaticReviewOrder({ ...store, getItem: () => value }), false);
+    assert.equal(loadAutomaticReviewOrder({ ...store, getItem: () => value }), true, value);
   }
 });
 test("storage errors are nonfatal and in-memory consumption still works", () => {
@@ -64,7 +74,7 @@ test("storage errors are nonfatal and in-memory consumption still works", () => 
       throw Error("quota");
     },
   };
-  assert.equal(loadAutomaticReviewOrder(store), false);
+  assert.equal(loadAutomaticReviewOrder(store), true);
   assert.doesNotThrow(() => saveAutomaticReviewOrder(true, store));
   const tracker = createAutomaticOrderTracker(store),
     order = availableReviewOrder(snapshot(), scope, savedScope)!;

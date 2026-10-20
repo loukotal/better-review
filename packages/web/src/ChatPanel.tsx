@@ -12,6 +12,7 @@ import {
   onCleanup,
   batch,
   on,
+  untrack,
 } from "solid-js";
 
 import { type StoredSession } from "@better-review/shared";
@@ -31,6 +32,7 @@ import { type SourceSelection, type SelectionChatController } from "./lib/ask-ai
 import {
   availableReviewOrder,
   type AvailableReviewOrder,
+  type InitialReviewOrder,
   type SavedReviewOrderScope,
 } from "./lib/automatic-review-order";
 import { parseChatFileReference } from "./lib/chat-file-reference";
@@ -87,6 +89,9 @@ interface ChatPanelProps {
   ) => void;
   onApplyReviewOrder?: (files: string[]) => void;
   onAvailableReviewOrder?: (order: AvailableReviewOrder | null) => void;
+  onInitialReviewOrder?: (result: InitialReviewOrder) => void;
+  /** Wait for App to verify the displayed PR revision, including cached opens. */
+  initialReviewOrderReady?: boolean;
   onAnnotationsReceived?: (annotations: Annotation[]) => void;
   onCreateFindingComment?: (annotation: Annotation, sessionId: string, ref?: string | null) => void;
   onSelectionSourceNavigate?: (selection: SelectionSourceContext, sessionId: string) => void;
@@ -267,7 +272,11 @@ export function ChatPanel(props: ChatPanelProps) {
   // Parent props are recreated when cached PR data is refreshed; compare the values so an
   // unchanged PR does not initialize its session again.
   const sessionTarget = createMemo(() =>
-    props.prUrl && props.prNumber && props.repoOwner && props.repoName
+    props.initialReviewOrderReady !== false &&
+    props.prUrl &&
+    props.prNumber &&
+    props.repoOwner &&
+    props.repoName
       ? [
           props.prUrl,
           props.prNumber,
@@ -284,15 +293,15 @@ export function ChatPanel(props: ChatPanelProps) {
   createEffect(() => {
     const revision = props.reviewMode === "commit" ? props.commitSha : props.displayedHeadSha;
     const sid = sessionId();
-    props.onAvailableReviewOrder?.(
+    const order =
       !initializing() &&
-        !pullingLatest() &&
-        resolvedSessionTarget() === sessionTarget() &&
-        !creatingNewSession() &&
-        !switchingCommitSession() &&
-        props.prUrl &&
-        sid &&
-        revision
+      !pullingLatest() &&
+      resolvedSessionTarget() === sessionTarget() &&
+      !creatingNewSession() &&
+      !switchingCommitSession() &&
+      props.prUrl &&
+      sid &&
+      revision
         ? availableReviewOrder(
             chat.snapshot(),
             {
@@ -303,8 +312,26 @@ export function ChatPanel(props: ChatPanelProps) {
             },
             savedOrderScope(),
           )
-        : null,
-    );
+        : null;
+    const snapshotLoaded = !!sid && chat.snapshot()?.sessionId === sid;
+    if (
+      !initializing() &&
+      props.initialReviewOrderReady !== false &&
+      props.prUrl &&
+      (sessionError() ||
+        (resolvedSessionTarget() === sessionTarget() && (snapshotLoaded || chat.error())))
+    ) {
+      // Publish initial hydration before the live-order callback can reorder mounted files.
+      const result: InitialReviewOrder = {
+        prUrl: props.prUrl,
+        mode: props.reviewMode ?? "full",
+        revision: revision ?? null,
+        order,
+        snapshotLoaded,
+      };
+      untrack(() => props.onInitialReviewOrder?.(result));
+    }
+    props.onAvailableReviewOrder?.(order);
   });
 
   // Initialize session when PR changes

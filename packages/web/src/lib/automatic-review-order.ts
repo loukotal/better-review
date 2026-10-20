@@ -11,9 +11,9 @@ export function loadAutomaticReviewOrder(storage?: StorageAccess): boolean {
     const value = JSON.parse(
       (storage ?? localStorage).getItem(AUTO_ORDER_PREFERENCE_KEY) ?? "null",
     );
-    return value?.version === 1 && value.enabled === true;
+    return !(value?.version === 1 && value.enabled === false);
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -33,6 +33,15 @@ export interface AvailableReviewOrder {
   mode: "full" | "commit";
   messageId: string;
   files: string[];
+}
+
+export interface InitialReviewOrder {
+  prUrl: string;
+  mode: "full" | "commit";
+  revision: string | null;
+  order: AvailableReviewOrder | null;
+  /** Errors release the page too; a later first snapshot must not replay saved history. */
+  snapshotLoaded: boolean;
 }
 
 export interface SavedReviewOrderScope {

@@ -19,9 +19,13 @@ export async function mountAppFixture(
     extras?: PrExtrasData;
     procedures?: Record<string, (input: unknown) => unknown>;
     diff?: string;
-    reviewSnapshot?: (sessionId: string) => ReviewSnapshot;
+    reviewSnapshot?: (sessionId: string) => ReviewSnapshot | Promise<ReviewSnapshot>;
     prUrl?: string;
     headSha?: string;
+    cachedDiff?: string;
+    mountTimeoutMs?: number;
+    waitForFiles?: boolean;
+    searchParams?: Record<string, string>;
   } = {},
 ) {
   const prUrl = options.prUrl ?? fixturePrUrl;
@@ -95,9 +99,9 @@ export async function mountAppFixture(
     }
     if (url.pathname === "/api/app/update-status") return Response.json({ updateAvailable: false });
     if (url.pathname.startsWith("/api/review/sessions/bootstrap")) {
-      const snapshot = options.reviewSnapshot?.(
+      const snapshot = (await options.reviewSnapshot?.(
         decodeURIComponent(url.pathname.split("/")[4]!),
-      ) ?? {
+      )) ?? {
         sessionId: "bootstrap",
         revision: headSha,
         running: false,
@@ -119,7 +123,15 @@ export async function mountAppFixture(
     return originalFetch(input, init);
   };
   queryClient.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
-  queryClient.setQueryData(queryKeys.pr.core(prUrl), {
+  if (options.cachedDiff) {
+    queryClient.setQueryData(queryKeys.pr.diff(prUrl), options.cachedDiff);
+    queryClient.setQueryData(queryKeys.pr.info(prUrl), {
+      owner: "browser-fixture",
+      repo: "isolated",
+      number: prUrl.split("/").at(-1)!,
+    });
+  }
+  const core = {
     headSha,
     comparisonBaseSha: base,
     diff: options.diff ?? diff,
@@ -127,7 +139,12 @@ export async function mountAppFixture(
     commits: [
       { sha: base, message: "Fixture base", author: "Fixture", date: "2026-01-01T00:00:00Z" },
     ],
-  });
+  };
+  if (options.procedures?.["pr.core"])
+    queryClient.removeQueries({ queryKey: queryKeys.pr.core(prUrl), exact: true });
+  else queryClient.setQueryData(queryKeys.pr.core(prUrl), core);
+  if (options.searchParams?.mode === "commit")
+    queryClient.setQueryData(queryKeys.pr.commitDiff(prUrl, base), options.diff ?? diff);
   queryClient.setQueryData(
     queryKeys.pr.extras(prUrl),
     options.extras ?? {
@@ -136,7 +153,11 @@ export async function mountAppFixture(
       status: null,
     },
   );
-  history.replaceState(null, "", `/review?prUrl=${encodeURIComponent(prUrl)}`);
+  history.replaceState(
+    null,
+    "",
+    `/review?${new URLSearchParams({ prUrl, ...options.searchParams })}`,
+  );
   const dispose = render(
     () => (
       <QueryClientProvider client={queryClient}>
@@ -147,7 +168,9 @@ export async function mountAppFixture(
     ),
     document.getElementById("root")!,
   );
-  for (let i = 0; i < 180; i++) {
+  if (options.waitForFiles === false) return dispose;
+  const deadline = performance.now() + (options.mountTimeoutMs ?? 3000);
+  while (performance.now() < deadline) {
     if (document.querySelector("diffs-container") && document.getElementById("chat-panel"))
       return dispose;
     await new Promise(requestAnimationFrame);

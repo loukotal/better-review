@@ -45,6 +45,7 @@ interface Props {
   selectionClearToken?: number;
   commitScope?: boolean;
   rawDiff: string;
+  parsedFiles?: FileDiffMetadata[];
   comments: PRComment[];
   aiAnnotations?: Annotation[];
   loadingComments?: boolean;
@@ -125,9 +126,7 @@ export function DiffViewer(props: Props) {
 
   // Parse files from diff
   const parsedFiles = createMemo(() => {
-    const patches = parsePatchFiles(props.rawDiff);
-    // Flatten all files from all patches
-    const allFiles = patches.flatMap((p) => p.files);
+    const allFiles = props.parsedFiles ?? parsePatchFiles(props.rawDiff).flatMap((p) => p.files);
     // Notify parent about files when they change
     props.onFilesLoaded?.(allFiles);
     return allFiles;

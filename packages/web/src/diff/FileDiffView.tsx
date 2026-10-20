@@ -1066,6 +1066,8 @@ export function FileDiffView(props: FileDiffViewProps) {
   onCleanup(() => {
     cancelFocus?.();
     instance?.cleanUp();
+    // Queued comment/annotation rerenders may still fire after this view unmounts.
+    instance = undefined;
     for (const dispose of disposeList.splice(0)) dispose();
   });
 

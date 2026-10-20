@@ -27,6 +27,267 @@ const rawDiff = paths
   )
   .join("");
 
+export async function testInitialSavedOrderNoFlickerInBrowser() {
+  return initialOrderFixture("completed");
+}
+export async function testInitialRunningOrderInBrowser() {
+  return initialOrderFixture("running");
+}
+export async function testInitialCachedOrderNoFlickerInBrowser() {
+  return initialOrderFixture("cached");
+}
+export async function testInitialCachedSlowCoreNoFlickerInBrowser() {
+  return initialOrderFixture("cached-core");
+}
+export async function testInitialSelectedSessionOrderInBrowser() {
+  return initialOrderFixture("selected");
+}
+export async function testInitialCommitOrderNoFlickerInBrowser() {
+  return initialOrderFixture("commit");
+}
+export async function testInitialOrderTimeoutInBrowser() {
+  return initialOrderFixture("timeout");
+}
+export async function testInitialAbsentOrderInBrowser() {
+  return initialOrderFixture("empty");
+}
+export async function testInitialWrongHeadOrderInBrowser() {
+  return initialOrderFixture("wrong-head");
+}
+export async function testInitialOrderOffInBrowser() {
+  return initialOrderFixture("off");
+}
+export async function testInitialOrderFailureInBrowser() {
+  return initialOrderFixture("failure");
+}
+export async function testInitialSessionFailureInBrowser() {
+  return initialOrderFixture("session-failure");
+}
+
+export async function testInitialOrderFastNavigationInBrowser() {
+  let passed = 0;
+  const check = (value: unknown, message: string) => {
+    if (!value) throw Error(message);
+    passed++;
+  };
+  const wait = async (predicate: () => boolean, message: string) => {
+    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
+    check(predicate(), message);
+  };
+  localStorage.setItem(AUTO_ORDER_PREFERENCE_KEY, JSON.stringify({ version: 1, enabled: true }));
+  localStorage.removeItem("better-review:applied-review-orders");
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let requested = false;
+  const oldApp = await mountAppFixture({
+    diff: rawDiff,
+    waitForFiles: false,
+    reviewSnapshot: async () => {
+      requested = true;
+      await delayed;
+      return {
+        sessionId: "bootstrap",
+        revision: head,
+        running: false,
+        compacting: false,
+        settlements: [],
+        messages: [
+          {
+            id: "late-old-pr",
+            role: "assistant",
+            metadata: { timestamp: "2026-01-01", revision: head },
+            parts: [
+              {
+                type: "text",
+                text: `<<REVIEW_ORDER>>${JSON.stringify([...paths].reverse())}<</REVIEW_ORDER>>`,
+              },
+            ],
+          },
+        ],
+      };
+    },
+  });
+  await wait(() => requested, "Old PR snapshot request did not start");
+  check(!document.querySelector('[id^="file-src"]'), "Old PR flashed before navigation");
+  oldApp();
+  const secondUrl = url.replace("/1", "/2");
+  await mountAppFixture({ prUrl: secondUrl, diff: rawDiff });
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const order = [...document.querySelectorAll<HTMLElement>('[id^="file-src"]')].map((element) =>
+    decodeURIComponent(element.id.slice(5)),
+  );
+  check(order.join(",") === paths.join(","), "Late old PR response crossed navigation");
+  check(getReviewOrder(secondUrl) === null, "Late old PR order persisted on new PR");
+  return { passed };
+}
+
+async function initialOrderFixture(mode: string) {
+  let passed = 0;
+  const check = (value: unknown, message: string) => {
+    if (!value) throw Error(message);
+    passed++;
+  };
+  const wait = async (predicate: () => boolean, message: string) => {
+    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
+    check(predicate(), message);
+  };
+  const ai = [...paths].reverse();
+  const revision = mode === "commit" ? "b".repeat(40) : head;
+  let snapshot: ReviewSnapshot = {
+    sessionId: "bootstrap",
+    revision: mode === "wrong-head" ? "old" : revision,
+    running: mode === "running",
+    compacting: false,
+    settlements: [],
+    messages:
+      mode === "empty"
+        ? []
+        : [
+            {
+              id: "initial-saved-order",
+              role: "assistant",
+              metadata: { timestamp: "2026-01-01", revision },
+              parts: [
+                { type: "text", text: `<<REVIEW_ORDER>>${JSON.stringify(ai)}<</REVIEW_ORDER>>` },
+              ],
+            },
+          ],
+  };
+  if (mode === "completed") localStorage.removeItem(AUTO_ORDER_PREFERENCE_KEY);
+  else
+    localStorage.setItem(
+      AUTO_ORDER_PREFERENCE_KEY,
+      JSON.stringify({ version: 1, enabled: mode !== "off" }),
+    );
+  localStorage.removeItem("better-review:applied-review-orders");
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const order = () =>
+    [...document.querySelectorAll<HTMLElement>('[id^="file-src"]')]
+      .map((element) => decodeURIComponent(element.id.slice(5)))
+      .join(",");
+  const visible: string[] = [];
+  const observer = new MutationObserver(() => {
+    const current = order();
+    if (current) visible.push(current);
+  });
+  observer.observe(document.getElementById("root")!, { childList: true, subtree: true });
+  let sessionCalls = 0;
+  const mounted = mountAppFixture({
+    diff: rawDiff,
+    cachedDiff: mode.startsWith("cached") ? rawDiff : undefined,
+    mountTimeoutMs: mode === "timeout" ? 15000 : undefined,
+    searchParams:
+      mode === "selected"
+        ? { sessionId: "bootstrap-selected" }
+        : mode === "commit"
+          ? { mode: "commit", commit: revision.slice(0, 7) }
+          : undefined,
+    procedures: {
+      ...(mode === "cached-core"
+        ? {
+            "pr.core": async () => {
+              await delayed;
+              return {
+                diff: rawDiff,
+                headSha: head,
+                comparisonBaseSha: "b".repeat(40),
+                info: { owner: "browser-fixture", repo: "isolated", number: "1" },
+                commits: [],
+              };
+            },
+          }
+        : {}),
+      "prReview.selectSession": () => {
+        check(mode === "selected", "Selected a session without an explicit link");
+        sessionCalls++;
+        return {
+          session: { id: "bootstrap-selected" },
+          sessions: [],
+          headSha: head,
+          sessionHeadSha: head,
+          sessionScope: { mode: "full", commitSha: null },
+        };
+      },
+      "prReview.getOrCreateSession": async (input) => {
+        check(mode !== "selected", "Explicit link created a different session");
+        if (mode === "commit")
+          check(
+            !!input &&
+              typeof input === "object" &&
+              "reviewMode" in input &&
+              input.reviewMode === "commit",
+            "Commit open initialized a full-PR session",
+          );
+        sessionCalls++;
+        if (mode === "session-failure") throw Error("Saved session unavailable");
+        return {
+          session: { id: "bootstrap" },
+          sessions: [],
+          headSha: head,
+          sessionHeadSha: head,
+          sessionScope:
+            mode === "commit"
+              ? { mode: "commit", commitSha: revision }
+              : { mode: "full", commitSha: null },
+        };
+      },
+    },
+    reviewSnapshot: async (sessionId) => {
+      if (mode !== "cached-core") await delayed;
+      if (mode === "failure") throw Error("Saved history unavailable");
+      return { ...snapshot, sessionId };
+    },
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (mode === "off") check(order() === paths.join(","), "Off waited for saved history");
+    else if (mode !== "session-failure") {
+      check(order() === "", "Default file order rendered before saved history resolved");
+      check(document.body.textContent?.includes("Loading PR..."), "Existing loading state missing");
+    }
+    if (mode !== "timeout") release();
+    await mounted;
+    const expected =
+      mode === "completed" || mode.startsWith("cached") || mode === "selected" || mode === "commit"
+        ? ai
+        : paths;
+    check(visible[0] === expected.join(","), `Wrong first visible order: ${visible[0]}`);
+    check(order() === expected.join(","), "Initial order did not settle");
+    check(sessionCalls === 1, "Initial preload duplicated session creation");
+    if (mode === "completed") {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Review settings"]')!.click();
+      check(
+        document.querySelector<HTMLInputElement>('[aria-label="Review settings"] input')?.checked,
+        "Preference did not default on",
+      );
+    }
+    if (mode === "timeout") {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+      check(order() === paths.join(","), "Late initial history reordered after timeout fallback");
+    }
+    if (mode === "running") {
+      const nodes = [...document.querySelectorAll('[id^="file-src"]')];
+      snapshot = { ...snapshot, running: false };
+      await wait(() => order() === ai.join(","), "Running review did not apply once complete");
+      check(
+        nodes.every((node) => node.isConnected),
+        "Late order remounted files",
+      );
+    }
+  } finally {
+    release();
+    observer.disconnect();
+  }
+  return { passed };
+}
+
 export async function testDelayedAutomaticReviewOrderInBrowser() {
   return testAutomaticReviewOrderInBrowser("delayed");
 }
@@ -70,7 +331,7 @@ export async function testAutomaticReviewOrderInBrowser(mode = "existing") {
   });
   let snapshot: ReviewSnapshot =
     mode === "delayed" ? { ...complete, running: true, settlements: [] } : complete;
-  localStorage.removeItem(AUTO_ORDER_PREFERENCE_KEY);
+  localStorage.setItem(AUTO_ORDER_PREFERENCE_KEY, JSON.stringify({ version: 1, enabled: false }));
   localStorage.removeItem("better-review:applied-review-orders");
   await mountAppFixture({
     diff: rawDiff,
@@ -102,7 +363,7 @@ export async function testAutomaticReviewOrderInBrowser(mode = "existing") {
       .map((element) => decodeURIComponent(element.id.slice(5)))
       .join(",");
   await wait(() => fileElements().length === 3, "Three files not mounted");
-  check(order() === paths.join(","), "Default off reordered files");
+  check(order() === paths.join(","), "Explicit off reordered files");
   const originalNodes = fileElements();
   const anchor = originalNodes[1];
   const scroll = anchor.closest(".overflow-y-auto.pb-3") as HTMLElement;
@@ -121,7 +382,7 @@ export async function testAutomaticReviewOrderInBrowser(mode = "existing") {
   const toggle = document.querySelector<HTMLInputElement>(
     '[role="dialog"][aria-label="Review settings"] input',
   )!;
-  check(!toggle.checked, "Preference did not default off");
+  check(!toggle.checked, "Explicit off preference was not preserved");
   toggle.click();
   let editor: HTMLTextAreaElement | undefined;
   if (mode === "delayed") {
@@ -263,7 +524,20 @@ export async function testAutomaticReviewOrderReloadInBrowser(phase = "before") 
     localStorage.setItem(AUTO_ORDER_PREFERENCE_KEY, JSON.stringify({ version: 1, enabled: true }));
     localStorage.removeItem("better-review:applied-review-orders");
   }
+  const initialOrders: string[] = [];
+  const observer = new MutationObserver(() => {
+    const names = [...document.querySelectorAll<HTMLElement>('[id^="file-src"]')]
+      .map((element) => decodeURIComponent(element.id.slice(5)))
+      .join(",");
+    if (names) initialOrders.push(names);
+  });
+  observer.observe(document.getElementById("root")!, { childList: true, subtree: true });
   await mountAppFixture({ diff: rawDiff, reviewSnapshot: () => snapshot });
+  observer.disconnect();
+  check(
+    initialOrders[0] === (phase === "before" ? ai : manual).join(","),
+    "Reload flashed a different initial order",
+  );
   const order = () =>
     [...document.querySelectorAll<HTMLElement>('[id^="file-src"]')]
       .map((element) => decodeURIComponent(element.id.slice(5)))

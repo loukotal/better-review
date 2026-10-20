@@ -1,4 +1,4 @@
-import type { FileDiffMetadata } from "@pierre/diffs";
+import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
 import { useSearchParams, A } from "@solidjs/router";
 import {
   type Component,
@@ -10,6 +10,7 @@ import {
   onMount,
   onCleanup,
   on,
+  batch,
 } from "solid-js";
 
 import type { PrStatus, PrInfo } from "@better-review/shared";
@@ -51,6 +52,7 @@ import {
   loadAutomaticReviewOrder,
   saveAutomaticReviewOrder,
   type AvailableReviewOrder,
+  type InitialReviewOrder,
 } from "./lib/automatic-review-order";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
@@ -158,6 +160,17 @@ const AppContent: Component = () => {
   const [automaticOrder, setAutomaticOrder] = createSignal(loadAutomaticReviewOrder());
   const [availableOrder, setAvailableOrder] = createSignal<AvailableReviewOrder | null>(null);
   const automaticOrderTracker = createAutomaticOrderTracker();
+  const [initialOrderPending, setInitialOrderPending] = createSignal(false);
+  let initialOrderLoad: { url: string; fallback: boolean } | null = null;
+  let initialOrderTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(initialOrderTimer));
+  createEffect(() => {
+    if (!automaticOrder()) {
+      clearTimeout(initialOrderTimer);
+      initialOrderLoad = null;
+      setInitialOrderPending(false);
+    }
+  });
   const [aiAnnotations, setAiAnnotations] = createSignal<Annotation[]>([]);
   const [reviewCommentsHidden, setReviewCommentsHidden] = createSignal(false);
   const [highlightedLine, setHighlightedLine] = createSignal<{
@@ -252,6 +265,17 @@ const AppContent: Component = () => {
   const currentCommitSha = createMemo(() =>
     reviewMode() === "commit" ? (commits()[currentCommitIndex()]?.sha ?? null) : null,
   );
+  // Session hydration needs paths before DiffViewer mounts. Reuse the same parsed files there.
+  const parsedDiffFiles = createMemo(() => {
+    const raw = activeDiff();
+    return raw ? parsePatchFiles(raw).flatMap((patch) => patch.files) : [];
+  });
+  createEffect(() => {
+    const parsed = parsedDiffFiles();
+    setFiles(parsed);
+    const url = loadedPrUrl();
+    setReadFiles(url ? getReviewedFiles(url, parsed) : new Set<string>());
+  });
   let selectionScopeVersion = 0;
   const selectionScope = createMemo(() => {
     const values = [
@@ -429,11 +453,37 @@ const AppContent: Component = () => {
     }
   };
 
+  const hydrateInitialOrder = (result: InitialReviewOrder) => {
+    const initial = initialOrderLoad;
+    if (
+      !initial ||
+      initial.url !== result.prUrl ||
+      result.prUrl !== loadedPrUrl() ||
+      result.prUrl !== prUrl() ||
+      result.mode !== reviewMode() ||
+      result.revision !==
+        (reviewMode() === "commit" ? currentCommitSha() : (diffRevision().headSha ?? null))
+    )
+      return;
+    batch(() => {
+      if (result.order && automaticOrder()) {
+        const next = automaticOrderTracker.take(result.order, fileNames());
+        if (next && !initial.fallback) applyReviewOrder(next);
+      }
+      // On failure/timeout, discard only the first late saved snapshot, not future live orders.
+      if (result.snapshotLoaded) initialOrderLoad = null;
+      else initial.fallback = true;
+      clearTimeout(initialOrderTimer);
+      setInitialOrderPending(false);
+    });
+  };
+
   createEffect(() => {
     const order = availableOrder();
     const revision = reviewMode() === "commit" ? currentCommitSha() : diffRevision().headSha;
     if (
       !automaticOrder() ||
+      initialOrderPending() ||
       !order ||
       loading() ||
       loadingCommits() ||
@@ -455,12 +505,6 @@ const AppContent: Component = () => {
     if (!url || !file) return;
     toggleReviewedFile(url, file);
     setReadFiles(getReviewedFiles(url, files()));
-  };
-
-  const handleFilesLoaded = (loadedFiles: FileDiffMetadata[]) => {
-    setFiles(loadedFiles);
-    const url = loadedPrUrl();
-    if (url) setReadFiles(getReviewedFiles(url, loadedFiles));
   };
 
   // Dismiss an AI annotation
@@ -664,12 +708,9 @@ const AppContent: Component = () => {
       // Legacy PR-wide caches have no trustworthy active-session provenance.
       // ChatPanel republishes the active transcript rather than merging these records.
       setAiAnnotations([]);
-
-      setReadFiles(new Set<string>());
     } else {
       setReviewOrder(null);
       setAiAnnotations([]);
-      setReadFiles(new Set<string>());
     }
   });
 
@@ -717,17 +758,43 @@ const AppContent: Component = () => {
     applyDiffAccent(settings().accentColor, uiTheme());
   });
 
+  let prLoadGeneration = 0;
+  onCleanup(() => prLoadGeneration++);
   const loadPr = async (e: Event) => {
     e.preventDefault();
     if (!prUrl() || loading()) return;
 
     const currentPrUrl = prUrl();
+    const generation = ++prLoadGeneration;
+    const isCurrentPr = () => generation === prLoadGeneration && prUrl() === currentPrUrl;
+    clearTimeout(initialOrderTimer);
+    initialOrderLoad = automaticOrder() ? { url: currentPrUrl, fallback: false } : null;
+    setInitialOrderPending(!!initialOrderLoad);
+    if (initialOrderLoad) {
+      setLoading(true);
+      const initial = initialOrderLoad;
+      // Session HTTP/SSE hydration must never hide the diff indefinitely.
+      initialOrderTimer = setTimeout(() => {
+        if (initialOrderLoad !== initial) return;
+        initial.fallback = true;
+        setInitialOrderPending(false);
+      }, 10_000);
+    }
 
     // Cancel any in-flight queries for other PRs. Keep this PR's queries, such as the
     // prefetch started from the PR list, so fetchQuery below joins them instead of refetching.
     await queryClient.cancelQueries({
       predicate: (query) => !query.queryKey.includes(currentPrUrl),
     });
+    if (!isCurrentPr()) {
+      if (generation === prLoadGeneration) {
+        setLoading(false);
+        clearTimeout(initialOrderTimer);
+        initialOrderLoad = null;
+        setInitialOrderPending(false);
+      }
+      return;
+    }
     setError(null);
     setDiffRevision({});
     // Reset commit mode state
@@ -780,8 +847,6 @@ const AppContent: Component = () => {
     setLoadingStatus(!cachedStatus);
     setLoadingComments(!cachedComments);
 
-    const isCurrentPr = () => prUrl() === currentPrUrl;
-
     // Comments and status load alongside the diff but never hold up the page.
     void fetchPrExtras(currentPrUrl)
       .then((data) => {
@@ -825,9 +890,14 @@ const AppContent: Component = () => {
         void loadCommitDiff(data.commits[idx].sha);
       }
     } catch (err) {
-      if (isCurrentPr()) setError(describePrLoadError(err));
+      if (isCurrentPr()) {
+        setError(describePrLoadError(err));
+        clearTimeout(initialOrderTimer);
+        initialOrderLoad = null;
+        setInitialOrderPending(false);
+      }
     } finally {
-      setLoading(false);
+      if (generation === prLoadGeneration) setLoading(false);
     }
   };
 
@@ -1241,16 +1311,18 @@ const AppContent: Component = () => {
           aiAnnotations={aiAnnotations()}
           onApplyReviewOrder={applyReviewOrder}
           onAvailableReviewOrder={setAvailableOrder}
+          onInitialReviewOrder={hydrateInitialOrder}
+          initialReviewOrderReady={!automaticOrder() || (!loading() && !loadingCommits())}
           onAnnotationsReceived={addNewAiAnnotations}
         />
 
         {/* Center content */}
         <Show
-          when={diff()}
+          when={diff() && !initialOrderPending()}
           fallback={
             <div class="flex-1 flex items-center justify-center">
               <Show
-                when={loading()}
+                when={loading() || initialOrderPending()}
                 fallback={
                   <div class="w-full max-w-md px-6 text-center">
                     <h2 class="text-lg font-semibold tracking-tight text-text">
@@ -1405,6 +1477,7 @@ const AppContent: Component = () => {
                   selectionScope={selectionScope()}
                   selectionClearToken={selectionClearToken()}
                   rawDiff={activeDiff()!}
+                  parsedFiles={files()}
                   comments={reviewCommentsHidden() ? [] : comments()}
                   aiAnnotations={reviewCommentsHidden() ? [] : aiAnnotations()}
                   onCreateFindingComment={(annotation) =>
@@ -1422,7 +1495,6 @@ const AppContent: Component = () => {
                   onResolveThread={resolveThread}
                   onDismissAiAnnotation={dismissAiAnnotation}
                   settings={settings()}
-                  onFilesLoaded={handleFilesLoaded}
                   repoOwner={prInfo()?.owner}
                   repoName={prInfo()?.repo}
                   fileOrder={reviewOrder()}
