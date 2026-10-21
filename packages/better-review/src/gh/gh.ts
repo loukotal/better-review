@@ -19,6 +19,7 @@ import type {
 } from "@better-review/shared";
 
 import { runCommand } from "../command";
+import { readAllReviewThreads } from "./review-threads";
 
 export class GhError extends Data.TaggedError("GhError")<{
   readonly command: string;
@@ -75,6 +76,8 @@ const PRCommentSchema = Schema.Struct({
   user: UserSchema,
   created_at: Schema.String,
   updated_at: Schema.optional(Schema.String),
+  commit_id: Schema.optional(Schema.String),
+  original_commit_id: Schema.optional(Schema.String),
   in_reply_to_id: Schema.optional(Schema.Number),
 });
 /** Raw PR comment from GitHub API (without canEdit) */
@@ -145,7 +148,15 @@ const CheckRunSchema = Schema.Struct({
   ),
 });
 
+const ReviewDecisionSchema = Schema.NullOr(
+  Schema.Literals(["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED"]),
+);
+
 const PrStatusSchema = Schema.Struct({
+  reviewDecision: Schema.optional(ReviewDecisionSchema),
+  viewerApproval: Schema.optional(
+    Schema.NullOr(Schema.Struct({ login: Schema.String, commitSha: Schema.String })),
+  ),
   state: PrStateSchema,
   draft: Schema.Boolean,
   mergeable: Schema.NullOr(Schema.Boolean),
@@ -177,6 +188,7 @@ const CiStatusSchema = Schema.Struct({
 });
 
 const SearchedPrSchema = Schema.Struct({
+  reviewDecision: Schema.optional(ReviewDecisionSchema),
   number: Schema.Number,
   headRefOid: Schema.String,
   title: Schema.String,
@@ -242,6 +254,7 @@ const GraphQLReviewSchema = Schema.Struct({
 });
 
 const GraphQLPrSchema = Schema.Struct({
+  reviewDecision: Schema.optional(ReviewDecisionSchema),
   number: Schema.Number,
   headRefOid: Schema.String,
   title: Schema.String,
@@ -271,6 +284,133 @@ const GraphQLSearchResponseSchema = Schema.Struct({
     }),
   }),
 });
+
+export const decodeGithubPrSearchResponse = Schema.decodeUnknownSync(GraphQLSearchResponseSchema);
+
+const GithubReviewStatusSchema = Schema.Struct({
+  data: Schema.Struct({
+    viewer: Schema.optional(Schema.Struct({ login: Schema.String })),
+    repository: Schema.NullOr(
+      Schema.Struct({
+        pullRequest: Schema.NullOr(
+          Schema.Struct({
+            headRefOid: Schema.String,
+            reviewDecision: Schema.optional(ReviewDecisionSchema),
+            reviewRequests: Schema.optional(
+              Schema.NullOr(
+                Schema.Struct({
+                  pageInfo: Schema.optional(
+                    Schema.NullOr(Schema.Struct({ hasNextPage: Schema.Boolean })),
+                  ),
+                  nodes: Schema.optional(
+                    Schema.NullOr(
+                      Schema.Array(
+                        Schema.NullOr(
+                          Schema.Struct({
+                            requestedReviewer: Schema.NullOr(
+                              Schema.Struct({
+                                __typename: Schema.String,
+                                login: Schema.optional(Schema.String),
+                              }),
+                            ),
+                          }),
+                        ),
+                      ),
+                    ),
+                  ),
+                }),
+              ),
+            ),
+            latestReviews: Schema.optional(
+              Schema.Struct({
+                nodes: Schema.Array(
+                  Schema.Struct({
+                    author: Schema.NullOr(Schema.Struct({ login: Schema.String })),
+                    state: Schema.String,
+                    commit: Schema.NullOr(Schema.Struct({ oid: Schema.String })),
+                  }),
+                ),
+              }),
+            ),
+            commits: Schema.Struct({
+              nodes: Schema.Array(
+                Schema.Struct({
+                  commit: Schema.Struct({
+                    statusCheckRollup: Schema.NullOr(
+                      Schema.Struct({
+                        contexts: Schema.Struct({
+                          nodes: Schema.Array(
+                            Schema.Union([
+                              Schema.Struct({
+                                __typename: Schema.Literal("CheckRun"),
+                                name: Schema.String,
+                                status: Schema.String,
+                                conclusion: Schema.NullOr(Schema.String),
+                              }),
+                              Schema.Struct({ __typename: Schema.Literal("StatusContext") }),
+                            ]),
+                          ),
+                        }),
+                      }),
+                    ),
+                  }),
+                }),
+              ),
+            }),
+          }),
+        ),
+      }),
+    ),
+  }),
+});
+
+export function decodeGithubReviewStatus(value: unknown, expectedHeadSha: string) {
+  const { data } = Schema.decodeUnknownSync(GithubReviewStatusSchema)(value);
+  const pr = data.repository?.pullRequest;
+  if (!pr || pr.headRefOid !== expectedHeadSha)
+    return { reviewDecision: null, viewerApproval: null, checks: [] };
+  const ownReview = pr.latestReviews?.nodes.find(
+    (review) => review.author?.login === data.viewer?.login,
+  );
+  // Only a complete set of known user requests can rule out a renewed request.
+  // Team membership is unknown here; never guess that a team request excludes the viewer.
+  const requests = pr.reviewRequests;
+  const viewerCanStillRelyOnApproval =
+    requests?.pageInfo &&
+    !requests.pageInfo.hasNextPage &&
+    requests.nodes?.every(
+      (request) =>
+        request?.requestedReviewer?.__typename === "User" &&
+        !!request.requestedReviewer.login &&
+        request.requestedReviewer.login !== data.viewer?.login,
+    );
+  return {
+    reviewDecision: pr.reviewDecision ?? null,
+    viewerApproval:
+      viewerCanStillRelyOnApproval &&
+      data.viewer &&
+      ownReview?.state === "APPROVED" &&
+      ownReview.commit?.oid === expectedHeadSha
+        ? { login: data.viewer.login, commitSha: expectedHeadSha }
+        : null,
+    checks: Schema.decodeUnknownSync(Schema.Array(CheckRunSchema))(
+      (pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [])
+        .filter((context) => context.__typename === "CheckRun")
+        .map((check) => ({
+          name: check.name,
+          status: ["WAITING", "REQUESTED"].includes(check.status)
+            ? "pending"
+            : check.status.toLowerCase(),
+          conclusion:
+            check.conclusion === "STARTUP_FAILURE"
+              ? "failure"
+              : check.conclusion === "STALE"
+                ? "cancelled"
+                : (check.conclusion?.toLowerCase() ?? null),
+        })),
+    ),
+  };
+}
 
 export interface ResolveThreadParams {
   prUrl: string;
@@ -890,19 +1030,48 @@ const ghCli: GhCli = {
 
   getPrStatus: (urlOrNumber: string) =>
     Effect.gen(function* () {
-      const { owner, repo } = yield* getPrInfo(urlOrNumber);
+      const { owner, repo, number } = yield* getPrInfo(urlOrNumber);
 
       // Status must be current, so always refetch; this also refreshes the shared PR cache.
       const pr = yield* getCachedPullRequest(urlOrNumber, { fresh: true });
 
-      // Get check runs for the PR's head commit
-      const checksResult = yield* runGh(
+      // Fetch the aggregate decision alongside checks, without another per-PR request.
+      // Verify the head in the same response so a racing push cannot approve the viewed head.
+      const reviewStatus = yield* runGh(
         "api",
-        `repos/${owner}/${repo}/commits/${pr.head.sha}/check-runs`,
-        "--jq",
-        ".check_runs | map({ name, status, conclusion })",
-      ).pipe(Effect.catch(() => Effect.succeed("[]")));
-      const checks = yield* parseJsonPreserve(Schema.Array(CheckRunSchema))(checksResult);
+        "graphql",
+        "-f",
+        `query=query($owner: String!, $repo: String!, $number: Int!) {
+          viewer { login }
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              headRefOid reviewDecision
+              latestReviews(first: 100) { nodes { author { login } state commit { oid } } }
+              reviewRequests(first: 100) {
+                pageInfo { hasNextPage }
+                nodes { requestedReviewer { __typename ... on User { login } } }
+              }
+              commits(last: 1) { nodes { commit {
+                statusCheckRollup { contexts(first: 100) { nodes {
+                  __typename ... on CheckRun { name status conclusion }
+                } } }
+              } } }
+            }
+          }
+        }`,
+        "-F",
+        `owner=${owner}`,
+        "-F",
+        `repo=${repo}`,
+        "-F",
+        `number=${number}`,
+      ).pipe(
+        Effect.flatMap(parseJsonUnknown),
+        Effect.flatMap((value) => Effect.try(() => decodeGithubReviewStatus(value, pr.head.sha))),
+        Effect.catch(() =>
+          Effect.succeed({ reviewDecision: null, viewerApproval: null, checks: [] }),
+        ),
+      );
 
       // Determine actual state (open/closed/merged)
       const state = pr.merged ? "merged" : pr.state;
@@ -916,7 +1085,7 @@ const ghCli: GhCli = {
         author: pr.user.login,
         url: pr.html_url,
         headRef: pr.head.ref,
-        checks,
+        ...reviewStatus,
       });
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getPrStatus", cause })),
@@ -1171,65 +1340,19 @@ const ghCli: GhCli = {
     Effect.gen(function* () {
       const { owner, repo, number } = yield* getPrInfo(prUrl);
 
-      // GraphQL query to fetch all review threads with their comment node IDs and resolution state
-      const query = `
-        query($owner: String!, $repo: String!, $number: Int!) {
-          repository(owner: $owner, name: $repo) {
-            pullRequest(number: $number) {
-              reviewThreads(first: 100) {
-                nodes {
-                  id
-                  isResolved
-                  comments(first: 100) {
-                    nodes {
-                      id
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      `;
-
-      const result = yield* runGh(
-        "api",
-        "graphql",
-        "-f",
-        `query=${query}`,
-        "-F",
-        `owner=${owner}`,
-        "-F",
-        `repo=${repo}`,
-        "-F",
-        `number=${number}`,
-      );
-      type ReviewThreadsPayload = {
-        data?: {
-          repository?: {
-            pullRequest?: {
-              reviewThreads?: {
-                nodes?: Array<{
-                  id: string;
-                  isResolved: boolean;
-                  comments: { nodes: Array<{ id: string }> };
-                }>;
-              };
-            };
-          };
-        };
-      };
-      const data = yield* Effect.sync(() => JSON.parse(result) as ReviewThreadsPayload);
-
-      const threads = data?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
-
-      return threads.map(
-        (t: { id: string; isResolved: boolean; comments: { nodes: { id: string }[] } }) => ({
-          threadId: t.id,
-          isResolved: t.isResolved,
-          commentNodeIds: t.comments.nodes.map((c: { id: string }) => c.id),
-        }),
-      );
+      return yield* Effect.tryPromise({
+        try: () =>
+          readAllReviewThreads(
+            async (query, variables) => {
+              const args = ["api", "graphql", "-f", `query=${query}`];
+              for (const [name, value] of Object.entries(variables))
+                args.push(typeof value === "number" ? "-F" : "-f", `${name}=${value}`);
+              return JSON.parse(await Effect.runPromise(runGh(...args)));
+            },
+            { owner, repo, number: Number(number) },
+          ),
+        catch: (cause) => new GhError({ command: "getReviewThreads", cause }),
+      });
     }).pipe(
       Effect.mapError((cause) => new GhError({ command: "getReviewThreads", cause })),
       Effect.withSpan("GhService.getReviewThreads", { attributes: { prUrl } }),
@@ -1362,6 +1485,7 @@ const ghCli: GhCli = {
       const prFields = `
         number
         headRefOid
+        reviewDecision
         title
         url
         isDraft
@@ -1430,6 +1554,7 @@ const ghCli: GhCli = {
         Schema.decodeUnknownSync(SearchedPrSchema)({
           number: pr.number,
           headRefOid: pr.headRefOid,
+          reviewDecision: pr.reviewDecision ?? null,
           title: pr.title,
           url: pr.url,
           isDraft: pr.isDraft,

@@ -12,6 +12,9 @@ export interface PrInfo {
  */
 export type PrState = "open" | "closed" | "merged";
 
+/** GitHub's aggregate decision, distinct from any single reviewer's review. */
+export type ReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+
 /**
  * Review state for a PR
  */
@@ -44,6 +47,9 @@ export interface CheckRun {
  * Full PR status including checks
  */
 export interface PrStatus {
+  reviewDecision?: ReviewDecision;
+  /** Current-head viewer approval, with no renewed or unknown applicable review request. */
+  viewerApproval?: { login: string; commitSha: string } | null;
   state: PrState;
   draft: boolean;
   mergeable: boolean | null;
@@ -68,6 +74,7 @@ export interface CiStatus {
  * PR from search results
  */
 export interface SearchedPr {
+  reviewDecision?: ReviewDecision;
   number: number;
   headRefOid: string;
   title: string;

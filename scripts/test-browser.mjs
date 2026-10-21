@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { tsImport } from "tsx/esm/api";
 
 import { createBrowserGithubActions } from "./browser-github-actions.mjs";
+import { createBrowserNestedReplies } from "./browser-nested-replies.mjs";
 import config from "./browser-vite.config.mjs";
 
 // The browser contract test consumes real resolver output, not a reimplementation
@@ -14,7 +15,7 @@ const { resolveSourceNavigation } = await tsImport(
   "../packages/better-review/src/source-navigation.ts",
   import.meta.url,
 );
-const { decodeGithubReviewComments } = await tsImport(
+const { decodeGithubReviewComments, decodeGithubReviewStatus } = await tsImport(
   "../packages/better-review/src/gh/gh.ts",
   import.meta.url,
 );
@@ -94,15 +95,25 @@ async function open() {
   await page.exposeFunction("typeInFocusedBrowserEditor", async (text) => {
     await page.keyboard.type(text);
   });
+  await page.exposeFunction("activateBrowserLinkWithEnter", async (selector) => {
+    await page.locator(selector).press("Enter");
+  });
   let githubActions;
+  let nestedReplies;
+  await page.exposeFunction("browserNestedReplies", async (request) => {
+    nestedReplies ??= createBrowserNestedReplies();
+    return (await nestedReplies).invoke(request);
+  });
   await page.exposeFunction("browserGithubActions", async (request) => {
     githubActions ??= createBrowserGithubActions();
     return (await githubActions).invoke(request);
   });
   context.on("close", () => {
     void githubActions?.then((actions) => actions.close());
+    void nestedReplies?.then((actions) => actions.close());
   });
   await page.exposeFunction("decodeBrowserGithubReviewComments", decodeGithubReviewComments);
+  await page.exposeFunction("decodeBrowserGithubReviewStatus", decodeGithubReviewStatus);
   await page.exposeFunction("resolveBrowserSourceWindow", (content, range) => {
     const ref = "a".repeat(40),
       path = "src/contract.ts";
@@ -116,6 +127,43 @@ async function open() {
     await page
       .locator("#browser-layout-capture")
       .screenshot({ path: `${artifacts}/${name}.png`, animations: "disabled" });
+  });
+  await page.exposeFunction("captureBrowserQueueLayout", async (name) => {
+    if (name !== undefined && !["stuck-before", "stuck-after", "consent-320"].includes(name))
+      throw new Error("Invalid queue screenshot name");
+    await page.setViewportSize(
+      name === "consent-320" ? { width: 320, height: 400 } : { width: 390, height: 844 },
+    );
+    await page.screenshot({
+      path: `${artifacts}/${name === "consent-320" ? "github-queue-consent-320x400" : name ? `github-queue-${name}-390` : "github-queue-compact-390"}.png`,
+      animations: "disabled",
+    });
+  });
+  await page.exposeFunction("setBrowserQueueViewport", async (width = 390, height = 844) => {
+    if (!((width === 390 && height === 844) || (width === 320 && height === 400)))
+      throw new Error("Invalid queue viewport");
+    await page.setViewportSize({ width, height });
+  });
+  await page.exposeFunction("clickBrowserQueueActionButton", async (operationId, label) => {
+    if (
+      !/^[a-f0-9-]{36}$/.test(operationId) ||
+      ![
+        "Check GitHub",
+        "Retry",
+        "Clear",
+        "Allow manual retry…",
+        "I checked GitHub — allow retry",
+      ].includes(label)
+    )
+      throw new Error("Invalid queue action click");
+    await page
+      .locator(`[popover]:popover-open [data-operation-id="${operationId}"]`)
+      .getByRole("button", { name: label, exact: true })
+      .click();
+  });
+  await page.exposeFunction("clickBrowserQueueBatch", async (kind) => {
+    if (!["retry", "clear"].includes(kind)) throw new Error("Invalid queue batch click");
+    await page.locator(`[popover]:popover-open [data-github-queue-batch="${kind}"]`).click();
   });
   page.setDefaultTimeout(30_000);
   const errors = [];
@@ -191,6 +239,8 @@ try {
                 "testAppGithubDraftIntentReloadInBrowser",
                 "testAppGithubFailedSaveReloadInBrowser",
                 "testAutomaticReviewOrderReloadInBrowser",
+                "testPrDetailMergeReloadInBrowser",
+                "testAppNestedReviewRepliesInBrowser",
               ].includes(test.name)
             ? durableDraftReload(fixture.page, test)
             : fixture.page.evaluate((test) => window.browserTests.run(test), test),

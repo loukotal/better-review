@@ -13,6 +13,7 @@ import {
 
 import type { ProjectBoard, ProjectBoardItem } from "@better-review/shared";
 
+import { ReviewSettings } from "../components/ReviewSettings";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { Badge, Button, Card, Select, TextInput } from "../design-system";
 import { CheckIcon } from "../icons/check-icon";
@@ -551,6 +552,7 @@ const KanbanPage: Component = () => {
                 Review
               </A>
               <ThemeToggle />
+              <ReviewSettings />
             </div>
           </div>
 

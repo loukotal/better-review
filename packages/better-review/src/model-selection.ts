@@ -1,3 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+
 import {
   getSupportedThinkingLevels,
   type Api,
@@ -37,6 +42,9 @@ export type SelectedModel = ModelEntry & {
 const FALLBACK_REVIEW_MODEL = "anthropic/claude-sonnet-4-6";
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = "medium";
 const configuredDefaultModel = process.env.BETTER_REVIEW_MODEL?.trim();
+const selectionPath =
+  process.env.BETTER_REVIEW_MODEL_SELECTION_PATH ??
+  path.join(homedir(), ".local", "share", "better-review", "model-selection.json");
 
 const providerAliases = new Map<string, string>([
   ["vercel", "vercel-ai-gateway"],
@@ -44,6 +52,47 @@ const providerAliases = new Map<string, string>([
 ]);
 
 let currentModel: ModelSelection | undefined;
+let explicitSelection = false;
+
+function readSavedSelection(): ModelSelection | undefined {
+  let text: string;
+  try {
+    text = readFileSync(selectionPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(
+      "Cannot read saved review model. Select a model again or check file permissions.",
+      {
+        cause: error,
+      },
+    );
+  }
+  try {
+    const saved = JSON.parse(text) as ModelSelection;
+    if (
+      !saved ||
+      typeof saved.providerId !== "string" ||
+      typeof saved.modelId !== "string" ||
+      !(saved.variant === null || typeof saved.variant === "string") ||
+      !REASONING_EFFORTS.includes(saved.thinkingLevel)
+    )
+      throw new Error("Invalid selection");
+    return saved;
+  } catch (error) {
+    throw new Error("Saved review model is invalid. Select a model again.", { cause: error });
+  }
+}
+
+function saveSelection(selection: ModelSelection) {
+  mkdirSync(path.dirname(selectionPath), { recursive: true });
+  const temporary = `${selectionPath}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(selection), { mode: 0o600 });
+    renameSync(temporary, selectionPath);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
 
 const modelCatalog = builtinModels();
 const getModelById = (provider: string, modelId: string): Model<Api> | undefined =>
@@ -134,6 +183,11 @@ function resolveDefaultModel(): SelectedModel {
     const model = getModelEntry(configured.providerId, configured.modelId);
     if (model) return toSelectedModel(model, configured.variant, configured.thinkingLevel);
   }
+  if (configuredDefaultModel) {
+    throw new Error(
+      `Configured review model ${configuredDefaultModel} is unavailable. Fix BETTER_REVIEW_MODEL or select a model.`,
+    );
+  }
 
   // Local dev usually has Pi's ChatGPT/Codex OAuth but no Anthropic token. Prefer
   // the UI-visible OpenAI model; getCurrentReviewModel() will route it to
@@ -160,6 +214,10 @@ function resolveDefaultModel(): SelectedModel {
 
 export function getSelectedModel(): SelectedModel {
   if (!currentModel) {
+    currentModel = readSavedSelection();
+    explicitSelection = !!currentModel;
+  }
+  if (!currentModel) {
     const resolved = resolveDefaultModel();
     currentModel = {
       providerId: resolved.providerId,
@@ -172,14 +230,9 @@ export function getSelectedModel(): SelectedModel {
 
   const model = getModelEntry(currentModel.providerId, currentModel.modelId);
   if (!model) {
-    const resolved = resolveDefaultModel();
-    currentModel = {
-      providerId: resolved.providerId,
-      modelId: resolved.modelId,
-      variant: resolved.variant,
-      thinkingLevel: resolved.thinkingLevel,
-    };
-    return resolved;
+    throw new Error(
+      `Selected review model ${currentModel.providerId}/${currentModel.modelId} is unavailable. Select a model again.`,
+    );
   }
 
   const variant = resolveVariant(model, { variant: currentModel.variant });
@@ -190,11 +243,30 @@ export function getSelectedModel(): SelectedModel {
     variant,
     thinkingLevel,
   };
-
   return toSelectedModel(model, variant, thinkingLevel);
 }
 
 export function setSelectedModel(input: {
+  providerId: string;
+  modelId: string;
+  variant?: string | null;
+  thinkingLevel?: ReasoningEffort | null;
+}): SelectedModel {
+  const model = resolveSelectedModel(input);
+  const selection: ModelSelection = {
+    providerId: model.providerId,
+    modelId: model.modelId,
+    variant: model.variant,
+    thinkingLevel: model.thinkingLevel,
+  };
+  saveSelection(selection);
+  currentModel = selection;
+  explicitSelection = true;
+  return model;
+}
+
+/** Validate/reroute the requested ID without changing the server's selected model. */
+export function resolveSelectedModel(input: {
   providerId: string;
   modelId: string;
   variant?: string | null;
@@ -231,14 +303,21 @@ export function setSelectedModel(input: {
 
   const variant = resolveVariant(model, { variant: input.variant });
   const thinkingLevel = resolveThinkingLevel(model, { thinkingLevel: input.thinkingLevel });
-  currentModel = {
-    providerId: model.providerId,
-    modelId: model.modelId,
-    variant,
-    thinkingLevel,
-  };
-
   return toSelectedModel(model, variant, thinkingLevel);
+}
+
+/** Browser storage is a one-time migration source, never a replacement for saved server intent. */
+export function restoreSelectedModel(input: Parameters<typeof setSelectedModel>[0]): SelectedModel {
+  const selected = getSelectedModel();
+  return explicitSelection ? selected : setSelectedModel(input);
+}
+
+export function getModelSelectionState() {
+  const selected = getSelectedModel();
+  return {
+    ...selected,
+    selectionSource: explicitSelection ? ("saved" as const) : ("default" as const),
+  };
 }
 
 export function searchModels(query: string): {

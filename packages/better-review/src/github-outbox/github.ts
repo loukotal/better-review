@@ -447,6 +447,13 @@ export function createGithubOutboxAdapter(
         return belongs(data, "issue-comment", ctx);
       case "approve":
         return data.state === "APPROVED" && data.commit_id === action.expectedHeadSha;
+      case "request-changes":
+      case "review-comment":
+        return (
+          data.state === (action.kind === "request-changes" ? "CHANGES_REQUESTED" : "COMMENTED") &&
+          data.commit_id === action.expectedHeadSha &&
+          data.body === wire(action.body, ctx.command.operationId)
+        );
       case "inline-comment": {
         const a = action.anchor;
         return (
@@ -475,6 +482,28 @@ export function createGithubOutboxAdapter(
     }
   }
   function creationResult(data: Json, ctx: Ctx): GithubRemoteResult {
+    if (
+      ctx.command.action.kind === "request-changes" ||
+      ctx.command.action.kind === "review-comment"
+    ) {
+      const result = {
+        kind: "review",
+        id: data.id,
+        url: data.html_url,
+        state: data.state,
+        commitSha: data.commit_id,
+        body: text(data.body) ? clean(data.body) : undefined,
+        author: object(data.user) ? { id: data.user.id, login: data.user.login } : undefined,
+        submittedAt: data.submitted_at,
+      };
+      if (
+        !isGithubRemoteResult(result) ||
+        !text(data.html_url) ||
+        !data.html_url.startsWith("https://github.com/")
+      )
+        throw invalid();
+      return result;
+    }
     if (ctx.command.action.kind === "approve") {
       if (
         !positive(data.id) ||
@@ -708,9 +737,20 @@ export function createGithubOutboxAdapter(
       const body = wire(action.body, ctx.command.operationId);
       switch (action.kind) {
         case "approve":
+        case "request-changes":
+        case "review-comment":
           await head(ctx, action.expectedHeadSha);
           path = `${ctx.pr}/reviews`;
-          payload = { event: "APPROVE", commit_id: action.expectedHeadSha, body };
+          payload = {
+            event:
+              action.kind === "approve"
+                ? "APPROVE"
+                : action.kind === "request-changes"
+                  ? "REQUEST_CHANGES"
+                  : "COMMENT",
+            commit_id: action.expectedHeadSha,
+            body,
+          };
           break;
         case "issue-comment":
           path = `${ctx.issue}/comments`;
@@ -831,7 +871,9 @@ export function createGithubOutboxAdapter(
         };
       }
       const path =
-        action.kind === "approve"
+        action.kind === "approve" ||
+        action.kind === "request-changes" ||
+        action.kind === "review-comment"
           ? `${ctx.pr}/reviews`
           : action.kind === "issue-comment"
             ? `${ctx.issue}/comments`
@@ -924,12 +966,14 @@ export function createGithubOutboxAdapter(
       const expectedKind =
         action.kind === "approve"
           ? "approval"
-          : action.kind === "issue-comment"
-            ? "issue-comment"
-            : "review-comment";
+          : action.kind === "request-changes" || action.kind === "review-comment"
+            ? "review"
+            : action.kind === "issue-comment"
+              ? "issue-comment"
+              : "review-comment";
       if (candidate.kind !== expectedKind || !("id" in candidate)) throw invalid();
       const path =
-        candidate.kind === "approval"
+        candidate.kind === "approval" || candidate.kind === "review"
           ? `${ctx.pr}/reviews/${candidate.id}`
           : targetPath(
               ctx,

@@ -202,8 +202,11 @@ export const prRouter = router({
           comments: comments.map((c) => ({
             ...c,
             canEdit: c.user.login === currentUser,
-            isResolved: resolvedByNodeId.get(c.node_id) ?? false,
+            isResolved: resolvedByNodeId.get(c.node_id),
             threadId: threadIdByNodeId.get(c.node_id),
+            threadMetadataStatus: threadIdByNodeId.has(c.node_id)
+              ? ("available" as const)
+              : ("unknown" as const),
           })),
         };
       }),
@@ -284,7 +287,7 @@ export const prRouter = router({
             gh.listIssueComments(input.url).pipe(log.optional("listIssueComments", null)),
             gh.getPrStatus(input.url).pipe(log.optional("getPrStatus", null)),
             gh.getCurrentUser().pipe(log.optional("getCurrentUser", null)),
-            gh.getReviewThreads(input.url).pipe(log.optional("getReviewThreads", [])),
+            gh.getReviewThreads(input.url).pipe(log.optional("getReviewThreads", null)),
           ],
           { concurrency: 4 },
         );
@@ -294,7 +297,7 @@ export const prRouter = router({
         // Build maps from comment node_id -> isResolved and threadId
         const resolvedByNodeId = new Map<string, boolean>();
         const threadIdByNodeId = new Map<string, string>();
-        for (const thread of threads) {
+        for (const thread of threads ?? []) {
           for (const nodeId of thread.commentNodeIds) {
             resolvedByNodeId.set(nodeId, thread.isResolved);
             threadIdByNodeId.set(nodeId, thread.threadId);
@@ -306,8 +309,11 @@ export const prRouter = router({
             comments?.map((c) => ({
               ...c,
               canEdit: c.user.login === currentUser,
-              isResolved: resolvedByNodeId.get(c.node_id) ?? false,
+              isResolved: resolvedByNodeId.get(c.node_id),
               threadId: threadIdByNodeId.get(c.node_id),
+              threadMetadataStatus: threadIdByNodeId.has(c.node_id)
+                ? ("available" as const)
+                : ("unknown" as const),
             })) ?? null,
           issueComments:
             issueComments?.map((c) => ({
@@ -315,6 +321,13 @@ export const prRouter = router({
               canEdit: c.user.login === currentUser,
             })) ?? null,
           status,
+          reviewThreads:
+            threads === null
+              ? {
+                  status: "unavailable" as const,
+                  message: "Review thread evidence unavailable. Resolution is unknown.",
+                }
+              : { status: "available" as const, data: threads, complete: true },
         };
       }),
     ),

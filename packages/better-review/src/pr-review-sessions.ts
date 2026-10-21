@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { Context, Effect, Layer } from "effect";
 
+import type { ReviewModelIntent } from "@better-review/shared";
+
 import type { RepoAccessCheck } from "./pr-checkout";
 import { STORE_BASE_DIR, StoreService, StoreServiceLive } from "./store";
 
@@ -11,7 +13,12 @@ const LEGACY_NAMESPACE = "flue-review-sessions";
 
 export interface PrReviewSession {
   runtimeVersion: 2 | 3;
-  automaticReview?: { idempotencyKey: string; prompt?: string; submissionId?: string };
+  automaticReview?: {
+    idempotencyKey: string;
+    prompt?: string;
+    submissionId?: string;
+    model?: ReviewModelIntent;
+  };
   revisionHistory?: Array<{
     headSha: string;
     baseSha: string;

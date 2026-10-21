@@ -1,8 +1,9 @@
-import { A } from "@solidjs/router";
+import { A, useNavigate } from "@solidjs/router";
 import { Show, type JSX } from "solid-js";
 
 import { Button } from "../design-system";
 import { AppUpdateNotice } from "./AppUpdateNotice";
+import { ReviewSettings } from "./ReviewSettings";
 import { ThemeToggle } from "./ThemeToggle";
 
 /** Shared application navigation; page tools live in the actions slot. */
@@ -13,13 +14,45 @@ export function AppHeader(props: {
   hideNavigation?: boolean;
   onOpenPr?: () => void;
   prSwitcherOpen?: boolean;
+  backHref?: string;
+  backSteps?: number;
+  settings?: JSX.Element;
 }) {
+  const navigate = useNavigate();
   return (
     <header class="shrink-0 border-b border-border bg-bg-surface">
       <div
         class={`flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2 ${props.constrained ? "mx-auto max-w-6xl" : ""}`}
       >
         <div class="flex flex-wrap items-center gap-2">
+          <Show when={props.backHref}>
+            {(href) => (
+              <A
+                href={href()}
+                replace
+                onClick={(event) => {
+                  if (
+                    event.defaultPrevented ||
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  const steps = props.backSteps;
+                  if (steps && steps < window.history.length) {
+                    event.preventDefault();
+                    navigate(-steps);
+                  }
+                }}
+                aria-label="Back to pull requests"
+                class="mr-2 inline-flex items-center gap-1 text-xs text-text-muted hover:text-text"
+              >
+                <span aria-hidden="true">←</span> Back to pull requests
+              </A>
+            )}
+          </Show>
           <A
             href="/"
             aria-label="Better Review home"
@@ -86,6 +119,9 @@ export function AppHeader(props: {
             </nav>
           </Show>
           <ThemeToggle />
+          <Show when={props.settings} fallback={<ReviewSettings />}>
+            {props.settings}
+          </Show>
         </div>
       </div>
       {props.children}

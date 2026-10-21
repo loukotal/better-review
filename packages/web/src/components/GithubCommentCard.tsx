@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { render } from "solid-js/web";
 
 import type { GithubPrScope, GithubWriteAction } from "@better-review/shared";
@@ -22,6 +22,7 @@ export function createGithubCommentUiState() {
 export function GithubCommentCard(props: {
   uiState?: ReturnType<typeof createGithubCommentUiState>;
   comment: GithubCommentView;
+  displayBody?: string;
   scope: GithubPrScope;
   operations: BrowserGithubOperation[];
   thread?: GithubThreadView;
@@ -109,7 +110,7 @@ export function GithubCommentCard(props: {
     const target = ref();
     if (target.kind === "review-comment")
       return { kind: "reply", target: { ...target, kind: "review-comment" }, body: text };
-    const quoted = (context.quotedBody ?? props.comment.body)
+    const quoted = (context.quotedBody ?? props.displayBody ?? props.comment.body)
       .split("\n")
       .slice(0, 3)
       .map((line) => `> ${line}`)
@@ -163,9 +164,24 @@ export function GithubCommentCard(props: {
         when={!props.comment.deleted}
         fallback={
           <>
-            <p class="text-sm text-text-muted">
-              {props.comment.pending ? "Deletion pending" : "Comment deleted"}
-            </p>
+            <Show
+              when={props.comment.pending}
+              fallback={<p class="text-sm text-text-muted">Comment deleted</p>}
+            >
+              <div role="img" aria-label="Deletion pending" class="flex items-center gap-1">
+                <span aria-hidden="true" class="inline-flex items-center gap-1">
+                  <For each={[0, 1, 2]}>
+                    {() => (
+                      <GithubSyncStatus
+                        status={syncState() ?? "local-pending"}
+                        iconOnly
+                        operations={commentOperations()}
+                      />
+                    )}
+                  </For>
+                </span>
+              </div>
+            </Show>
             <details>
               <summary>Recover deleted content</summary>
               <pre class="whitespace-pre-wrap">{props.comment.body}</pre>
@@ -183,7 +199,7 @@ export function GithubCommentCard(props: {
           <div
             data-comment-body
             class="typeset text-sm text-text-muted"
-            innerHTML={parseMarkdown(props.comment.body, {
+            innerHTML={parseMarkdown(props.displayBody ?? props.comment.body, {
               owner: props.scope.owner,
               repo: props.scope.repo,
             })}
@@ -241,7 +257,10 @@ export function GithubCommentCard(props: {
               onClick={() => {
                 void replyDraft.open({
                   body: "",
-                  context: { quotedBody: props.comment.body, replyLogin: details().login },
+                  context: {
+                    quotedBody: props.displayBody ?? props.comment.body,
+                    replyLogin: details().login,
+                  },
                 });
                 setMode("reply");
               }}

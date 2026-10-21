@@ -126,6 +126,136 @@ const head = (value = sha): Step => ({
 });
 const listPath = "/repos/acme/repo/issues/3/comments?per_page=100&page=1";
 
+for (const kind of ["request-changes", "review-comment"] as const) {
+  const state = kind === "request-changes" ? "CHANGES_REQUESTED" : "COMMENTED";
+  const review = (extra: Record<string, unknown> = {}) => ({
+    id: 51,
+    html_url: `${scope.url}#pullrequestreview-51`,
+    body: wire(),
+    user: actor,
+    state,
+    commit_id: sha,
+    submitted_at: createdAt,
+    ...extra,
+  });
+  const op = () => operation({ kind, expectedHeadSha: sha, body: "hello" });
+  test(`${kind}: pinned REST event and full confirmed review metadata`, async () => {
+    const f = fixture([
+      user(),
+      head(),
+      {
+        path: "/repos/acme/repo/pulls/3/reviews",
+        method: "POST",
+        data: review(),
+        check: (init) =>
+          assert.deepEqual(JSON.parse(String(init.body)), {
+            event: kind === "request-changes" ? "REQUEST_CHANGES" : "COMMENT",
+            commit_id: sha,
+            body: wire(),
+          }),
+      },
+    ]);
+    assert.deepEqual(await f.adapter.dispatch(op()), {
+      outcome: "accepted",
+      result: {
+        kind: "review",
+        id: 51,
+        url: `${scope.url}#pullrequestreview-51`,
+        state,
+        commitSha: sha,
+        body: "hello",
+        author: actor,
+        submittedAt: createdAt,
+      },
+    });
+    f.done();
+  });
+  test(`${kind}: timeout reconciles through all review pages without reposting`, async () => {
+    const f = fixture(
+      [
+        user(),
+        head(),
+        {
+          path: "/repos/acme/repo/pulls/3/reviews",
+          method: "POST",
+          hang: true,
+        },
+        user(),
+        {
+          path: "/repos/acme/repo/pulls/3/reviews?per_page=100&page=1",
+          data: [],
+          headers: { link: '<https://api.github.com/ignored>; rel="next"' },
+        },
+        { path: "/repos/acme/repo/pulls/3/reviews?per_page=100&page=2", data: [review()] },
+      ],
+      { timeoutMs: 20 },
+    );
+    assert.equal((await f.adapter.dispatch(op())).outcome, "uncertain");
+    assert.equal((await f.adapter.reconcile(op())).outcome, "matched");
+    assert.equal(f.calls.filter((call) => call.init.method === "POST").length, 1);
+    f.done();
+  });
+  test(`${kind}: changed head and blank bodies never post`, async () => {
+    const f = fixture([user(), head(otherSha)]);
+    const changed = await f.adapter.dispatch(op());
+    assert.equal(changed.outcome, "rejected");
+    if (changed.outcome === "rejected") assert.equal(changed.error.code, "head-changed");
+    const blank = op();
+    blank.command.action = { kind, expectedHeadSha: sha, body: " \n\t" };
+    assert.equal((await f.adapter.dispatch(blank)).outcome, "rejected");
+    f.done();
+  });
+  for (const extra of [
+    { state: "APPROVED" },
+    { commit_id: otherSha },
+    { body: wire("different") },
+    { user: { id: 99, login: "other" } },
+    { body: `${marker}\n\nhello` },
+  ]) {
+    test(`${kind}: conflicting review evidence ${JSON.stringify(extra)} stays uncertain`, async () => {
+      const f = fixture([
+        user(),
+        head(),
+        { path: "/repos/acme/repo/pulls/3/reviews", method: "POST", data: review(extra) },
+        user(),
+        {
+          path: "/repos/acme/repo/pulls/3/reviews?per_page=100&page=1",
+          data: [review(extra)],
+        },
+      ]);
+      assert.equal((await f.adapter.dispatch(op())).outcome, "uncertain");
+      assert.equal((await f.adapter.reconcile(op())).outcome, "conflict");
+      f.done();
+    });
+  }
+  test(`${kind}: verifyApplied reads review endpoint and rechecks event`, async () => {
+    const candidate: GithubRemoteResult = {
+      kind: "review",
+      id: 51,
+      url: scope.url,
+      state,
+      commitSha: sha,
+      body: "hello",
+      author: actor,
+      submittedAt: createdAt,
+    };
+    for (const correct of [true, false]) {
+      const f = fixture([
+        user(),
+        {
+          path: "/repos/acme/repo/pulls/3/reviews/51",
+          data: review(correct ? {} : { state: "APPROVED" }),
+        },
+      ]);
+      assert.equal(
+        (await f.adapter.verifyApplied(op(), candidate)).outcome,
+        correct ? "matched" : "conflict",
+      );
+      f.done();
+    }
+  });
+}
+
 test("accepted creation returns the full clean entity without mutating the command", async () => {
   const op = operation();
   const original = structuredClone(op);

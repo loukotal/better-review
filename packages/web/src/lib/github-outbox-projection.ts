@@ -31,6 +31,29 @@ export interface GithubRemoteRead {
   comments: GithubRemoteComment[];
   threads: GithubRemoteThread[];
   approvals: GithubRemoteApproval[];
+  reviews?: GithubRemoteReview[];
+}
+export interface GithubRemoteReview {
+  id: number;
+  commitSha: string;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  body: string;
+  author?: GithubActor;
+  submittedAt?: string;
+  url?: string;
+  raw?: unknown;
+}
+export interface GithubReviewView extends Decoration {
+  id?: number;
+  localOperationId?: string;
+  commitSha: string;
+  state: GithubRemoteReview["state"];
+  body: string;
+  author?: GithubActor;
+  submittedAt?: string;
+  url?: string;
+  raw?: unknown;
+  confirmed?: Extract<GithubRemoteResult, { kind: "review" }>;
 }
 interface Decoration {
   key: string;
@@ -120,6 +143,10 @@ export function createGithubOutboxProjection(
     return true;
   }
   function project(state: BrowserGithubState) {
+    state = {
+      ...state,
+      operations: state.operations.filter((item) => !item.operation?.archivedAt),
+    };
     const read = reads.get(state.scope.url);
     const remote = read?.remote ?? { comments: [], threads: [], approvals: [] };
     let retiredHere = retired.get(state.scope.url);
@@ -196,9 +223,17 @@ export function createGithubOutboxProjection(
             (!!comment.updatedAt && Date.parse(comment.updatedAt) > Date.parse(result.updatedAt)))
         );
       }
-      if (result.kind === "approval")
-        return remote.approvals.some(
-          (item) => item.id === result.id && item.commitSha === result.commitSha,
+      if (result.kind === "approval" || result.kind === "review")
+        // A review's identity survives dismissal and other state changes. The
+        // caller's confirmed revision token still fences pre-confirmation reads.
+        return (
+          (remote.reviews ?? []).some(
+            (item) => item.id === result.id && item.commitSha === result.commitSha,
+          ) ||
+          (result.kind === "approval" &&
+            remote.approvals.some(
+              (item) => item.id === result.id && item.commitSha === result.commitSha,
+            ))
         );
       if (result.kind === "deleted")
         return !remote.comments.some(
@@ -260,6 +295,24 @@ export function createGithubOutboxProjection(
     const comments = new Map<string, GithubCommentView>();
     const threads = new Map<string, GithubThreadView>();
     const approvals = new Map<string, GithubApprovalView>();
+    const reviews = new Map<string, GithubReviewView>();
+    for (const item of remote.reviews ?? []) {
+      const local = ordered.find(
+        (op) =>
+          (op.operation?.result?.kind === "review" || op.operation?.result?.kind === "approval") &&
+          op.operation.result.id === item.id &&
+          op.operation.result.commitSha === item.commitSha,
+      );
+      reviews.set(`remote:review:${item.id}`, {
+        ...item,
+        body: clean(item.body),
+        key: local
+          ? `local:${local.operation?.result?.kind === "approval" ? "approval" : "review"}:${local.command.operationId}`
+          : `remote:review:${item.id}`,
+        operationIds: [],
+        pending: false,
+      });
+    }
     for (const item of remote.comments) {
       const remoteKey = githubEntityKey(item.ref);
       const localRef = aliasesHere.get(remoteKey);
@@ -382,6 +435,23 @@ export function createGithubOutboxProjection(
           operationIds: [...(prior?.operationIds ?? []), id],
           pending: pending || !!prior?.pending,
         });
+      } else if (action.kind === "request-changes" || action.kind === "review-comment") {
+        const confirmed = result?.kind === "review" ? result : undefined;
+        const key = confirmed ? `remote:review:${confirmed.id}` : `local:review:${id}`;
+        reviews.set(key, {
+          ...reviews.get(key),
+          ...confirmed,
+          id: confirmed?.id,
+          key: `local:review:${id}`,
+          localOperationId: id,
+          commitSha: action.expectedHeadSha,
+          state: action.kind === "request-changes" ? "CHANGES_REQUESTED" : "COMMENTED",
+          body: clean(confirmed?.body ?? action.body),
+          author: item.command.expectedActor,
+          operationIds: [id],
+          pending,
+          confirmed,
+        });
       } else if (action.kind === "approve") {
         const remoteId = result?.kind === "approval" ? result.id : undefined;
         const key = remoteId ? `remote:approval:${remoteId}` : `local:approval:${id}`;
@@ -400,6 +470,7 @@ export function createGithubOutboxProjection(
       comments: [...comments.values()],
       threads: [...threads.values()],
       approvals: [...approvals.values()],
+      reviews: [...reviews.values()],
       operations: state.operations,
       pendingCount: state.pendingCount,
       busy: state.busy,

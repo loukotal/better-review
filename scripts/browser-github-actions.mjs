@@ -25,10 +25,15 @@ export async function createBrowserGithubActions() {
     url: "https://github.com/browser-fixture/isolated/pull/1",
   };
   const calls = [];
+  let clock;
   let resolved = false;
   let deleted = false;
   let failDelete = false;
   let failEdit = false;
+  let loseApprovalResponse = false;
+  let rejectApproval = false;
+  let releaseApproval;
+  let approvalGate;
   let createdIssue;
   let createdReview;
   const comment = {
@@ -74,6 +79,32 @@ export async function createBrowserGithubActions() {
       if (url.pathname === "/user") return Response.json(actor);
       if (url.pathname === "/repos/browser-fixture/isolated/pulls/1" && method === "GET")
         return Response.json({ head: { sha: "a".repeat(40) } });
+      if (url.pathname === "/repos/browser-fixture/isolated/pulls/1/reviews" && method === "POST") {
+        if (approvalGate) await approvalGate;
+        if (rejectApproval)
+          return Response.json(
+            { message: "Fixture rejects the captured approval" },
+            { status: 422 },
+          );
+        if (loseApprovalResponse) {
+          loseApprovalResponse = false;
+          throw new TypeError("Fixture lost delivery acknowledgement");
+        }
+        return Response.json(
+          {
+            id: calls.filter((call) => call.method === "POST" && call.path.endsWith("/reviews"))
+              .length,
+            user: actor,
+            body: payload.body,
+            state: "APPROVED",
+            commit_id: payload.commit_id,
+            html_url: `${scope.url}#pullrequestreview-fixture`,
+          },
+          { status: 201 },
+        );
+      }
+      if (url.pathname === "/repos/browser-fixture/isolated/pulls/1/reviews" && method === "GET")
+        return Response.json([]);
       if (
         url.pathname === "/repos/browser-fixture/isolated/pulls/1/comments" &&
         method === "POST"
@@ -159,13 +190,20 @@ export async function createBrowserGithubActions() {
     adapter,
     getCachedActor: () => actor,
     pollMs: 10,
+    now: () => clock ?? Date.now(),
   });
   return {
     async invoke({ kind, input }) {
+      if (kind === "clock") {
+        clock = Number(input);
+        return clock;
+      }
       if (kind === "enqueue") return box.enqueue(input);
       if (kind === "snapshot") return box.snapshot(scope);
+      if (kind === "pending") return box.listPending();
       if (kind === "heartbeat") return box.heartbeat(input);
       if (kind === "control") return box.control(input);
+      if (kind === "batch-control") return box.batchControl(input);
       if (kind === "state") return { resolved, deleted, calls };
       if (kind === "fail-delete") {
         failDelete = !!input;
@@ -175,9 +213,29 @@ export async function createBrowserGithubActions() {
         failEdit = !!input;
         return;
       }
+      if (kind === "lose-approval-response") {
+        loseApprovalResponse = !!input;
+        return;
+      }
+      if (kind === "reject-approval") {
+        rejectApproval = !!input;
+        return;
+      }
+      if (kind === "hold-approval") {
+        approvalGate = new Promise((resolve) => {
+          releaseApproval = resolve;
+        });
+        return;
+      }
+      if (kind === "release-approval") {
+        releaseApproval?.();
+        approvalGate = undefined;
+        return;
+      }
       throw new Error(`Unknown fixture action ${kind}`);
     },
     async close() {
+      releaseApproval?.();
       await box.close();
       await rm(directory, { recursive: true, force: true });
     },

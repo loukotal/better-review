@@ -5,6 +5,61 @@ import { render } from "solid-js/web";
 import { textSelectionAnchor } from "../lib/selection-bubble";
 import { SelectionBubble } from "./SelectionBubble";
 
+export async function testSelectionBubbleInactiveReviewInBrowser() {
+  const shell = document.createElement("div");
+  const source = document.createElement("div");
+  shell.append(source);
+  const shadow = source.attachShadow({ mode: "open" });
+  shadow.innerHTML = "<span>selected</span>";
+  const mount = document.createElement("div");
+  document.body.append(shell, mount);
+  let dismissed = 0;
+  const dispose = render(
+    () => (
+      <SelectionBubble
+        anchor={{ root: shadow, rect: () => ({ left: 20, right: 120, top: 100, bottom: 120 }) }}
+        retained
+        expanded
+        onHide={() => {}}
+        onDismiss={() => dismissed++}
+      >
+        <textarea>Retained question</textarea>
+      </SelectionBubble>
+    ),
+    mount,
+  );
+  const settle = async () => {
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+  };
+  try {
+    await settle();
+    if (!mount.querySelector(":popover-open")) throw new Error("Selection editor did not open");
+    shell.inert = true;
+    await settle();
+    if (mount.querySelector(":popover-open"))
+      throw new Error("Inactive Changes leaked top-layer selection editor");
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+    if (event.defaultPrevented || dismissed)
+      throw new Error("Inactive selection editor intercepted keyboard");
+    shell.inert = false;
+    await settle();
+    if (
+      !mount.querySelector(":popover-open") ||
+      mount.querySelector("textarea")?.value !== "Retained question"
+    )
+      throw new Error(
+        `Reactivated editor lost question draft: open=${!!mount.querySelector(":popover-open")} value=${mount.querySelector("textarea")?.value} inert=${shell.inert}`,
+      );
+    return { passed: 4 };
+  } finally {
+    dispose();
+    shell.remove();
+    mount.remove();
+  }
+}
+
 export async function testSelectionBubbleInBrowser() {
   let passed = 0;
   const check = (condition: boolean, message: string) => {

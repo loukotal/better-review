@@ -27,6 +27,7 @@ import {
   PrSessionLock,
   reviewRevisionLock,
 } from "../../review-launch-coordinator";
+import { reviewModelIntentSchema, resolveReviewModelIntent } from "../../review/model-intent";
 import { reviewConversations } from "../../review/runtime";
 import {
   ensureSessionCheckout,
@@ -526,10 +527,12 @@ export const prReviewRouter = router({
         prUrl: z.string(),
         simplifiedEnglish: z.boolean().default(false),
         rerun: z.boolean().default(false),
+        model: reviewModelIntentSchema.optional(),
       }),
     )
     .mutation(({ input }) => {
       const prUrl = canonical(input.prUrl);
+      if (input.model) resolveReviewModelIntent(input.model);
       return starts.run(prUrl, () =>
         sessionLock.run(prUrl, async (): Promise<AutomaticReviewStatus> => {
           startErrors.delete(prUrl);
@@ -571,12 +574,17 @@ export const prReviewRouter = router({
                   const current = (yield* store.get(session.id))!;
                   yield* store.save({
                     ...current,
-                    automaticReview: { idempotencyKey: key, prompt, submissionId },
+                    automaticReview: {
+                      idempotencyKey: key,
+                      prompt,
+                      submissionId,
+                      ...(input.model ? { model: input.model } : {}),
+                    },
                   });
                 }),
               );
             await save();
-            const receipt = await reviewConversations.send(session.id, prompt, key);
+            const receipt = await reviewConversations.send(session.id, prompt, key, input.model);
             await save(receipt.submissionId);
             return { state: "running", sessionId: session.id, headSha: session.headSha };
           } catch (error) {

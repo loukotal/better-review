@@ -1,18 +1,30 @@
-import { A, useSearchParams } from "@solidjs/router";
+import { A, useSearchParams, useLocation } from "@solidjs/router";
 import { useQuery } from "@tanstack/solid-query";
 import { Component, For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 
 import type { AutomaticReviewStatus } from "@better-review/shared";
 
 import { AppHeader } from "../components/AppHeader";
+import { GithubSyncStatus, githubSyncState } from "../components/GithubSyncStatus";
+import { ReviewDecisionBadge } from "../components/ReviewDecisionBadge";
+import { useGithubQueue } from "../context/GithubQueueContext";
 import { Alert, Badge, Button, EmptyState, LoadingState, Select } from "../design-system";
+import { InfoIcon } from "../icons/info-icon";
 import { SpinnerIcon } from "../icons/spinner-icon";
+import { modelIntent, resolveReviewModelSelection } from "../lib/model-selection";
+import {
+  prPageHref,
+  prListReturnPath,
+  prListLinkState,
+  rememberPrListScroll,
+} from "../lib/pr-navigation";
 import {
   queryKeys,
   api,
   prefetchPr,
   prefetchCiStatuses,
   queryClient,
+  refreshPrList,
   type SearchedPr,
   type CiStatus,
 } from "../lib/query";
@@ -22,21 +34,16 @@ import { trpc } from "../lib/trpc";
 // CI status indicator component (used when status is already loaded)
 const CiStatusBadgeInner: Component<{ status: CiStatus }> = (props) => {
   const statusColor = () => {
-    const { state, passed, total } = props.status;
-    if (state === "SUCCESS" || passed === total) return "text-success";
-    if (
-      state === "FAILURE" ||
-      state === "ERROR" ||
-      (passed < total && state !== "PENDING" && state !== "EXPECTED")
-    )
-      return "text-error";
+    const { state } = props.status;
+    if (state === "SUCCESS") return "text-success";
+    if (state === "FAILURE" || state === "ERROR") return "text-error";
     if (state === "PENDING" || state === "EXPECTED") return "text-warning";
     return "text-text-faint";
   };
 
   const statusIcon = () => {
-    const { state, passed, total } = props.status;
-    if (state === "SUCCESS" || passed === total) return "✓";
+    const { state } = props.status;
+    if (state === "SUCCESS") return "✓";
     if (state === "FAILURE" || state === "ERROR") return "✗";
     if (state === "PENDING" || state === "EXPECTED") return "◷";
     return "○";
@@ -84,6 +91,15 @@ function formatRelativeTime(dateString: string): string {
 }
 
 const PrListPage: Component = () => {
+  const queue = useGithubQueue();
+  const pendingFor = (url: string) =>
+    queue
+      ?.states()
+      .find((state) => state.scope.url === url)
+      ?.operations.filter(
+        (item) =>
+          !item.operation?.archivedAt && item.status !== "synced" && item.status !== "cancelled",
+      ) ?? [];
   // Use TanStack Query for PR list - automatically cached in IndexedDB
   // staleTime: 0 ensures we always fetch fresh data on mount while showing cached immediately
   // refetchInterval: refresh periodically while the tab is active
@@ -137,9 +153,7 @@ const PrListPage: Component = () => {
   const hardRefresh = async () => {
     setHardRefreshing(true);
     try {
-      const fresh = await api.refreshPrList();
-      // Update the query cache with the fresh data so the UI updates immediately
-      queryClient.setQueryData(queryKeys.prs.list, fresh);
+      await refreshPrList();
     } catch (e) {
       console.error("Hard refresh failed:", e);
     } finally {
@@ -161,6 +175,13 @@ const PrListPage: Component = () => {
   const showDrafts = () => searchParams.drafts === "1";
   const showNeedsReview = () => searchParams.needsReview !== "0";
   const repoFilter = () => searchParams.repo ?? "";
+  const location = useLocation();
+  const listReturnTo = () => prListReturnPath(`${location.pathname}${location.search}`);
+  let listScroll: HTMLElement | undefined;
+  let restoredPath: string | undefined;
+  const rememberListPosition = () => {
+    rememberPrListScroll(listReturnTo(), listScroll);
+  };
 
   // Get unique repos from PR list
   const uniqueRepos = () => {
@@ -220,7 +241,8 @@ const PrListPage: Component = () => {
       try {
         simplifiedEnglish = localStorage.getItem("better-review:use-ste100") === "true";
       } catch {}
-      await trpc.prReview.startAutomatic.mutate({ prUrl, simplifiedEnglish, rerun });
+      const model = modelIntent(await resolveReviewModelSelection());
+      await trpc.prReview.startAutomatic.mutate({ prUrl, simplifiedEnglish, rerun, model });
       await reviewStatuses.refetch();
     } catch (error) {
       setLaunchErrors((previous) => ({
@@ -274,13 +296,38 @@ const PrListPage: Component = () => {
     onCleanup(() => clearTimeout(ciStatusTimeout));
   });
 
+  createEffect(() => {
+    const path = listReturnTo();
+    const pending = prsQuery.isPending;
+    const fetching = prsQuery.isFetching;
+    filteredPrs();
+    if (pending || restoredPath === path) return;
+    let offset = 0;
+    try {
+      offset = Number(sessionStorage.getItem(`pr-list-scroll:${path}`) ?? 0);
+    } catch {}
+    if (!Number.isFinite(offset) || offset < 0) offset = 0;
+    const frame = requestAnimationFrame(() => {
+      if (!listScroll?.isConnected || listReturnTo() !== path) return;
+      listScroll.scrollTop = offset;
+      if (listScroll.scrollTop >= offset || !fetching) restoredPath = path;
+    });
+    onCleanup(() => cancelAnimationFrame(frame));
+  });
+
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header */}
       <AppHeader constrained />
 
       {/* Content */}
-      <main class="flex-1 overflow-y-auto">
+      <main
+        data-pr-list-scroll
+        ref={(element) => {
+          listScroll = element;
+        }}
+        class="flex-1 overflow-y-auto"
+      >
         <div class="mx-auto max-w-6xl px-4 py-4">
           <div class="mb-3 flex items-center justify-between gap-4">
             <div class="flex min-w-0 items-baseline gap-2.5">
@@ -371,7 +418,7 @@ const PrListPage: Component = () => {
           </div>
 
           {/* Loading state */}
-          <Show when={prsQuery.isPending || (prsQuery.isFetching && filteredPrs().length === 0)}>
+          <Show when={prsQuery.isPending && !prsQuery.data}>
             <LoadingState label="Loading pull requests…" />
           </Show>
 
@@ -379,7 +426,11 @@ const PrListPage: Component = () => {
           <Show when={prsQuery.isError}>
             <Alert
               intent="danger"
-              title="Could not load pull requests"
+              title={
+                prsQuery.data
+                  ? "Could not refresh pull requests. Showing saved results."
+                  : "Could not load pull requests"
+              }
               actions={
                 <Button
                   type="button"
@@ -414,11 +465,22 @@ const PrListPage: Component = () => {
             <div class="border-t border-border">
               <For each={filteredPrs()}>
                 {(pr) => (
-                  <div class="flex items-center gap-2 border-b border-border pr-2 hover:bg-bg-surface">
+                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pr-2 hover:bg-bg-surface sm:flex-nowrap">
+                    <Show when={githubSyncState(pendingFor(pr.url))}>
+                      {(status) => (
+                        <GithubSyncStatus
+                          status={status()}
+                          operations={pendingFor(pr.url)}
+                          iconOnly
+                        />
+                      )}
+                    </Show>
                     <A
-                      href={`/review?prUrl=${encodeURIComponent(pr.url)}&showChat=1`}
-                      class="group block min-w-0 flex-1 transition-colors"
+                      href={prPageHref(pr.url, { returnTo: listReturnTo() })}
+                      state={prListLinkState(listReturnTo(), location.state)}
+                      class="group block min-w-0 flex-1 basis-full transition-colors sm:basis-auto"
                       onMouseDown={() => handleMouseDown(pr.url)}
+                      onClick={rememberListPosition}
                     >
                       <div class="flex min-w-0 items-center gap-3 px-2 py-2">
                         <span class="hidden w-48 shrink-0 truncate font-mono text-xs text-text-muted sm:block lg:w-56">
@@ -431,9 +493,7 @@ const PrListPage: Component = () => {
                           <Show when={pr.isDraft}>
                             <Badge variant="neutral">Draft</Badge>
                           </Show>
-                          <Show when={pr.myReviewState === "APPROVED"}>
-                            <Badge variant="success">Approved</Badge>
-                          </Show>
+                          <ReviewDecisionBadge decision={pr.reviewDecision} />
                           <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
                             <Badge variant="danger">Changes requested</Badge>
                           </Show>
@@ -452,12 +512,31 @@ const PrListPage: Component = () => {
                         <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint sm:block">
                           {formatRelativeTime(pr.createdAt)}
                         </span>
-                        <span class="w-4 shrink-0 text-center font-mono text-xs">
-                          <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
-                        </span>
                       </div>
                     </A>
-                    <div class="w-32 shrink-0 whitespace-nowrap text-right">
+                    <A
+                      href={prPageHref(pr.url, { tab: "checks", returnTo: listReturnTo() })}
+                      state={prListLinkState(listReturnTo(), location.state)}
+                      aria-label={`View checks for PR ${pr.number}`}
+                      title="View checks"
+                      class="inline-flex size-7 shrink-0 items-center justify-center rounded font-mono text-xs hover:bg-bg-elevated focus-visible:outline focus-visible:outline-accent"
+                      onMouseDown={() => handleMouseDown(pr.url)}
+                      onClick={rememberListPosition}
+                    >
+                      <CiStatusBadge prUrl={pr.url} ciStatuses={ciStatuses()} />
+                    </A>
+                    <A
+                      href={prPageHref(pr.url, { tab: "overview", returnTo: listReturnTo() })}
+                      state={prListLinkState(listReturnTo(), location.state)}
+                      aria-label="PR details"
+                      title="PR details"
+                      class="inline-flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-elevated hover:text-text focus-visible:outline focus-visible:outline-accent"
+                      onMouseDown={() => handleMouseDown(pr.url)}
+                      onClick={rememberListPosition}
+                    >
+                      <InfoIcon size={14} />
+                    </A>
+                    <div class="ml-auto w-32 shrink-0 whitespace-nowrap text-right sm:ml-0">
                       <Show
                         when={reviewStatus(pr.url)}
                         fallback={
@@ -485,7 +564,14 @@ const PrListPage: Component = () => {
                                       ? reviewFreshness(status().headSha, pr.headRefOid).title
                                       : undefined
                                   }
-                                  href={`/review?prUrl=${encodeURIComponent(pr.url)}&showChat=1${status().sessionId ? `&sessionId=${encodeURIComponent(status().sessionId!)}` : ""}`}
+                                  href={prPageHref(pr.url, {
+                                    tab: "changes",
+                                    showChat: true,
+                                    sessionId: status().sessionId,
+                                    returnTo: listReturnTo(),
+                                  })}
+                                  state={prListLinkState(listReturnTo(), location.state)}
+                                  onClick={rememberListPosition}
                                 >
                                   <Show when={status().state !== "completed"}>
                                     <SpinnerIcon size={12} class="animate-spin text-accent" />

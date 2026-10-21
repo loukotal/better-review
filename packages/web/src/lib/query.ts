@@ -7,6 +7,7 @@ import type {
   PrCommit,
   PRComment,
   PrStatus,
+  PrDetail,
   CiStatus,
   SearchedPr,
   IssueComment,
@@ -21,6 +22,7 @@ import { fetchWithApiAuth } from "./apiAuth";
 import { getFileRevision } from "./file-revision";
 import {
   acceptGithubCommentRead,
+  acceptGithubDetailRead,
   beginGithubCommentRead,
   seedGithubCommentRead,
 } from "./github-comment-views";
@@ -79,14 +81,48 @@ export function restoreCache(): void {
 
 /** Refresh the server cache as well as the UI; invalidation alone can return old server data. */
 export async function refreshPrListAfterReview(): Promise<void> {
-  await queryClient.cancelQueries({ queryKey: queryKeys.prs.list });
-  try {
-    const fresh = await api.refreshPrList();
-    queryClient.setQueryData(queryKeys.prs.list, fresh);
-  } catch (error) {
-    await queryClient.invalidateQueries({ queryKey: queryKeys.prs.list, refetchType: "none" });
-    throw error;
+  await refreshPrList({ afterWrite: true });
+}
+
+type PrListRead = Awaited<ReturnType<typeof api.refreshPrList>>;
+let listReadGeneration = 0;
+/** Fence a pre-write hard read immediately, even while its follow-up is batched. */
+export function fencePrListAfterReview(): void {
+  listReadGeneration++;
+  void queryClient.cancelQueries({ queryKey: queryKeys.prs.list }).catch(() => {});
+}
+let listRefreshFlight: { promise: Promise<PrListRead>; followup?: Promise<PrListRead> } | undefined;
+function startPrListRefresh(): Promise<PrListRead> {
+  const generation = ++listReadGeneration;
+  const promise = (async () => {
+    await queryClient.cancelQueries({ queryKey: queryKeys.prs.list });
+    try {
+      const fresh = await api.refreshPrList();
+      return generation === listReadGeneration
+        ? (queryClient.setQueryData<PrListRead>(queryKeys.prs.list, fresh) ?? fresh)
+        : fresh;
+    } catch (cause) {
+      if (generation === listReadGeneration)
+        await queryClient.invalidateQueries({ queryKey: queryKeys.prs.list, refetchType: "none" });
+      throw cause;
+    }
+  })();
+  const flight = { promise, followup: undefined as Promise<PrListRead> | undefined };
+  listRefreshFlight = flight;
+  const settled = () => {
+    if (listRefreshFlight === flight && !flight.followup) listRefreshFlight = undefined;
+  };
+  void promise.then(settled, settled);
+  return promise;
+}
+export function refreshPrList(options: { afterWrite?: boolean } = {}): Promise<PrListRead> {
+  const flight = listRefreshFlight;
+  if (!flight) return startPrListRefresh();
+  if (options.afterWrite && !flight.followup) {
+    listReadGeneration++;
+    flight.followup = flight.promise.then(startPrListRefresh, startPrListRefresh);
   }
+  return flight.followup ?? flight.promise;
 }
 
 // Re-export types from shared
@@ -96,6 +132,7 @@ export type { IssueComment };
 export const queryKeys = {
   pr: {
     all: ["pr"] as const,
+    detail: (url: string) => ["pr", "detail", url] as const,
     core: (url: string) => ["pr", "core", url] as const,
     extras: (url: string) => ["pr", "extras", url] as const,
     diff: (url: string) => ["pr", "diff", url] as const,
@@ -329,6 +366,7 @@ export const api = {
         ? ([...result.issueComments] as IssueComment[]).map(cleanComment)
         : null,
       status: result.status,
+      reviewThreads: result.reviewThreads,
     };
     acceptGithubCommentRead(token, data);
     return data;
@@ -350,6 +388,7 @@ export interface PrExtrasData {
   comments: PRComment[] | null;
   issueComments: IssueComment[] | null;
   status: PrStatus | null;
+  reviewThreads?: Awaited<ReturnType<typeof trpc.pr.extras.query>>["reviewThreads"];
 }
 
 const PR_LOAD_STALE_TIME = 5 * 60 * 1000;
@@ -386,14 +425,138 @@ export async function fetchPrExtras(url: string): Promise<PrExtrasData> {
     queryFn: () => api.fetchPrExtras(url),
     staleTime: PR_LOAD_STALE_TIME,
   });
-  cachePrExtras(url, data);
-  seedGithubCommentRead(url, data);
+  const shared = queryClient.getQueryData<PrExtrasData>(queryKeys.pr.extras(url)) ?? data;
+  cachePrExtras(url, shared);
+  seedGithubCommentRead(url, shared);
+  return shared;
+}
+
+export function getCachedPrExtras(url: string): PrExtrasData | undefined {
+  const data = queryClient.getQueryData<PrExtrasData>(queryKeys.pr.extras(url));
+  if (data) seedGithubCommentRead(url, data);
   return data;
+}
+
+/** A confirmed write supersedes any pre-write read, including its resource caches. */
+export async function refreshPrExtras(url: string): Promise<PrExtrasData> {
+  await Promise.all([
+    queryClient.cancelQueries({ queryKey: queryKeys.pr.extras(url), exact: true }),
+    queryClient.cancelQueries({ queryKey: queryKeys.pr.status(url), exact: true }),
+  ]);
+  const data = await queryClient.fetchQuery({
+    queryKey: queryKeys.pr.extras(url),
+    queryFn: () => api.fetchPrExtras(url),
+    staleTime: 0,
+  });
+  const shared = queryClient.getQueryData<PrExtrasData>(queryKeys.pr.extras(url)) ?? data;
+  cachePrExtras(url, shared);
+  return shared;
+}
+
+export async function fetchPrDetail(url: string) {
+  const data = await queryClient.fetchQuery({
+    queryKey: queryKeys.pr.detail(url),
+    queryFn: async ({ signal }) => {
+      const token = beginGithubCommentRead(url);
+      const data = await trpc.prDetail.get.query({ url }, { signal });
+      if (!signal.aborted) acceptGithubDetailRead(token, data);
+      return data;
+    },
+    staleTime: PR_LOAD_STALE_TIME,
+  });
+  return queryClient.getQueryData<PrDetail>(queryKeys.pr.detail(url)) ?? data;
+}
+
+/** Read-only presentation fallback. Never pass this merged view to mutation controls. */
+export function retainPrDetailForDisplay(
+  previous: PrDetail | undefined,
+  next: PrDetail,
+): { data: PrDetail; stale: string[] } {
+  if (!previous || previous.url !== next.url || previous.metadata.status !== "available")
+    return { data: next, stale: [] };
+  if (next.metadata.status === "unavailable")
+    return {
+      data: { ...previous, actor: next.actor, mergeCapabilities: next.mergeCapabilities },
+      stale: [next.metadata.message],
+    };
+  if (
+    previous.metadata.data.head.sha !== next.metadata.data.head.sha ||
+    previous.metadata.data.base.sha !== next.metadata.data.base.sha
+  )
+    return { data: next, stale: [] };
+  const data = { ...next },
+    stale: string[] = [];
+  if (next.checks.status === "unavailable" && previous.checks.status === "available") {
+    data.checks = previous.checks;
+    stale.push(next.checks.message);
+  }
+  if (next.labels.status === "unavailable" && previous.labels.status === "available") {
+    data.labels = previous.labels;
+    stale.push(next.labels.message);
+  }
+  if (next.reviews.status === "unavailable" && previous.reviews.status === "available") {
+    data.reviews = previous.reviews;
+    stale.push(next.reviews.message);
+  }
+  if (
+    next.reviewRequests.status === "unavailable" &&
+    previous.reviewRequests.status === "available"
+  ) {
+    data.reviewRequests = previous.reviewRequests;
+    stale.push(next.reviewRequests.message);
+  }
+  return { data: stale.length ? data : next, stale };
+}
+
+const detailRefreshGenerations = new Map<string, number>();
+type PrDetailData = Awaited<ReturnType<typeof trpc.prDetail.refresh.mutate>>;
+interface DetailRefreshFlight {
+  promise: Promise<PrDetailData>;
+  followup?: Promise<PrDetailData>;
+}
+const detailRefreshFlights = new Map<string, DetailRefreshFlight>();
+
+function startDetailRefresh(url: string): Promise<PrDetailData> {
+  const generation = (detailRefreshGenerations.get(url) ?? 0) + 1;
+  detailRefreshGenerations.set(url, generation);
+  const promise = (async () => {
+    await queryClient.cancelQueries({ queryKey: queryKeys.pr.detail(url), exact: true });
+    const token = beginGithubCommentRead(url);
+    const data = await trpc.prDetail.refresh.mutate({ url });
+    if (detailRefreshGenerations.get(url) === generation) {
+      acceptGithubDetailRead(token, data);
+      return queryClient.setQueryData<PrDetailData>(queryKeys.pr.detail(url), data) ?? data;
+    }
+    return data;
+  })();
+  const flight: DetailRefreshFlight = { promise };
+  detailRefreshFlights.set(url, flight);
+  const settled = () => {
+    if (detailRefreshFlights.get(url) === flight && !flight.followup)
+      detailRefreshFlights.delete(url);
+  };
+  void promise.then(settled, settled);
+  return promise;
+}
+
+/** Share ordinary reads. A confirmed write fences an older read and queues one fresh successor. */
+export function refreshPrDetail(
+  url: string,
+  options: { afterWrite?: boolean } = {},
+): Promise<PrDetailData> {
+  const flight = detailRefreshFlights.get(url);
+  if (!flight) return startDetailRefresh(url);
+  if (options.afterWrite && !flight.followup) {
+    detailRefreshGenerations.set(url, (detailRefreshGenerations.get(url) ?? 0) + 1);
+    const next = () => startDetailRefresh(url);
+    flight.followup = flight.promise.then(next, next);
+  }
+  return flight.followup ?? flight.promise;
 }
 
 // Prefetch a full PR (user intent to open it)
 export async function prefetchPr(url: string): Promise<void> {
-  const results = await Promise.allSettled([fetchPrCore(url), fetchPrExtras(url)]);
+  const results = await Promise.allSettled([fetchPrDetail(url), fetchPrExtras(url)]);
   for (const result of results) {
     if (result.status === "rejected") console.error("Failed to prefetch PR:", result.reason);
   }

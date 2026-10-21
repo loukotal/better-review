@@ -1,4 +1,10 @@
 import {
+  DEFAULT_GITHUB_QUEUE_TIMEOUT_MS,
+  MAX_GITHUB_QUEUE_TIMEOUT_MS,
+  isGithubOutboxBatchControl,
+  isGithubOutboxAdmissionCycle,
+  type GithubOutboxAdmissionCycle,
+  type GithubOutboxBatchControl,
   isGithubOutboxCommand,
   isGithubOutboxControl,
   isGithubOutboxHeartbeat,
@@ -9,12 +15,16 @@ import {
   type GithubOutboxControl,
   type GithubOutboxControlReceipt,
   type GithubOutboxHeartbeat,
+  type GithubOutboxError,
   type GithubOutboxOperation,
   type GithubOutboxReceipt,
+  type GithubOutboxPendingScope,
   type GithubPrScope,
 } from "@better-review/shared";
 
+import { applyBatchControl } from "./batch";
 import { canonical, OutboxDatabase } from "./database.js";
+import { expireOperation } from "./lifecycle";
 import type { GithubOutbox, GithubOutboxAdapter } from "./types.js";
 import { matches, resolved } from "./validation.js";
 import { diagnostic, OutboxWorker } from "./worker.js";
@@ -23,7 +33,10 @@ export interface GithubOutboxOptions {
   databasePath: string;
   adapter: GithubOutboxAdapter;
   getCachedActor: () => GithubActor | undefined;
+  /** Cached failure only; admission must never start an identity/network lookup. */
+  getCachedIdentityError?: () => GithubOutboxError | undefined;
   now?: () => number;
+  /** UI-presence telemetry only. Admitted work never waits for a browser lease. */
   leaseMs?: number;
   pollMs?: number;
   attemptTimeoutMs?: number;
@@ -68,35 +81,96 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
     store.save(op);
   }
   return {
-    async enqueue(command: GithubOutboxCommand): Promise<GithubOutboxReceipt> {
+    async enqueue(
+      command: GithubOutboxCommand,
+      cycle?: GithubOutboxAdmissionCycle,
+    ): Promise<GithubOutboxReceipt> {
       assertOpen();
       const reject = (
         code: Parameters<typeof diagnostic>[0],
         message: string,
+        retryable = false,
       ): GithubOutboxReceipt => ({
         outcome: "rejected",
         operationId: command?.operationId,
-        error: diagnostic(code, message),
+        error: diagnostic(code, message, retryable),
       });
       if (!isGithubOutboxCommand(command))
         return reject("invalid", "Invalid GitHub outbox command.");
+      if (cycle !== undefined && !isGithubOutboxAdmissionCycle(cycle))
+        return reject("invalid", "Invalid explicit queue retry cycle.");
       const receipt = store.transaction((): GithubOutboxReceipt => {
         const fingerprint = canonical(command);
+        const cycleFingerprint = cycle
+          ? canonical({ commandId: command.operationId, ...cycle })
+          : undefined;
+        const priorCycle = cycle
+          ? store.db
+              .prepare("SELECT fingerprint FROM admission_cycles WHERE id=?")
+              .get(cycle.requestId)
+          : undefined;
+        if (priorCycle && priorCycle.fingerprint !== cycleFingerprint)
+          return reject("conflict", "Queue retry cycle ID was reused with different content.");
+        const cycleDeadline = cycle
+          ? Math.min(Date.parse(cycle.queueDeadlineAt), now() + cycle.queueTimeoutMs)
+          : undefined;
+        const applyCycle = (op: GithubOutboxOperation) => {
+          if (!cycle || priorCycle) return;
+          if (op.status === "retry-failed") {
+            const manual = store.db
+              .prepare(
+                "SELECT 1 FROM audit WHERE operation_id=? AND json_valid(event) AND json_extract(event,'$.resolution.kind')='confirm-not-applied' LIMIT 1",
+              )
+              .get(op.command.operationId);
+            op.status = "queued";
+            op.retryMode = op.retryMode === "manual" || manual ? "manual" : "automatic";
+            op.queueDeadlineAt = new Date(cycleDeadline!).toISOString();
+            delete op.timedOutAt;
+            delete op.archivedAt;
+            delete op.error;
+            delete op.nextAttemptAt;
+            store.db
+              .prepare("UPDATE schedules SET identity_failures=0 WHERE operation_id=?")
+              .run(op.command.operationId);
+            expireOperation(op, now());
+            change(op);
+          } else if (op.status === "queued" && cycleDeadline! < Date.parse(op.queueDeadlineAt!)) {
+            op.queueDeadlineAt = new Date(cycleDeadline!).toISOString();
+            expireOperation(op, now());
+            change(op);
+          }
+          store.db
+            .prepare("INSERT INTO admission_cycles(id,fingerprint) VALUES (?,?)")
+            .run(cycle.requestId, cycleFingerprint!);
+        };
         const prior = store.db
           .prepare(
             "SELECT fingerprint FROM operations WHERE id=? UNION ALL SELECT fingerprint FROM aliases WHERE id=?",
           )
           .get(command.operationId, command.operationId);
-        if (prior)
-          return prior.fingerprint === fingerprint
-            ? { outcome: "duplicate", operation: store.get(command.operationId)! }
-            : reject("conflict", "Operation ID was already used for different content.");
+        if (prior) {
+          if (prior.fingerprint !== fingerprint)
+            return reject("conflict", "Operation ID was already used for different content.");
+          const op = store.get(command.operationId)!;
+          if (expireOperation(op, now())) change(op);
+          applyCycle(op);
+          return { outcome: "duplicate", operation: op };
+        }
         const actor = options.getCachedActor();
-        if (!actor)
+        if (!actor) {
+          const error = options.getCachedIdentityError?.();
+          if (error)
+            return {
+              outcome: "rejected",
+              operationId: command.operationId,
+              error: structuredClone(error),
+            };
           return reject(
             "identity-unknown",
             "A known GitHub identity is required before admission.",
+            true,
           );
+        }
         if (actor.id !== command.expectedActor.id)
           return reject("identity-mismatch", "The operation belongs to another GitHub account.");
         const admittedId = command.operationId;
@@ -106,6 +180,7 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
           // Requiring already-admitted parents makes cycles and forward edges impossible.
           if (
             !dependency ||
+            dependency.archivedAt ||
             dependency.command.scope.url !== command.scope.url ||
             dependency.command.expectedActor.id !== command.expectedActor.id
           )
@@ -130,11 +205,41 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
               "The local reference does not name a creation of the required kind.",
             );
         }
-        const duplicate = store.contentDuplicate(command, now());
-        if (duplicate) {
+        const match = store.contentDuplicate(command, now());
+        if (match) {
+          const duplicate = match.operation;
+          if (duplicate.archivedAt)
+            return reject(
+              "conflict",
+              "An earlier cleared action still has unknown delivery. Check GitHub before submitting it again.",
+            );
+          // A fresh approval intent must not become a permanent alias of an older review.
+          // Keep the content safety window, but let this UUID be admitted after it expires.
+          if (
+            (action.kind === "approve" ||
+              action.kind === "request-changes" ||
+              action.kind === "review-comment") &&
+            duplicate.status === "synced" &&
+            match.retryAt
+          ) {
+            return {
+              outcome: "rejected",
+              operationId: admittedId,
+              error: {
+                code: action.kind === "approve" ? "approval-cooldown" : "review-cooldown",
+                message:
+                  action.kind === "approve"
+                    ? "This approval is saved locally. Retry after the approval cooldown."
+                    : "This review is saved locally. Retry after the review cooldown.",
+                retryable: true,
+                retryAt: match.retryAt,
+              },
+            };
+          }
           store.db
             .prepare("INSERT INTO aliases(id,operation_id,fingerprint) VALUES (?,?,?)")
             .run(admittedId, duplicate.command.operationId, fingerprint);
+          applyCycle(duplicate);
           return { outcome: "duplicate", operation: duplicate };
         }
         store.db
@@ -158,7 +263,26 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
           attempts: 0,
           createdAt: stamp,
           updatedAt: stamp,
+          queueDeadlineAt: new Date(
+            Math.min(
+              cycleDeadline ??
+                (command.queueDeadlineAt
+                  ? Date.parse(command.queueDeadlineAt)
+                  : now() + (command.queueTimeoutMs ?? DEFAULT_GITHUB_QUEUE_TIMEOUT_MS)),
+              now() +
+                (cycle?.queueTimeoutMs ?? command.queueTimeoutMs ?? MAX_GITHUB_QUEUE_TIMEOUT_MS),
+            ),
+          ).toISOString(),
         };
+        if (Date.parse(operation.queueDeadlineAt!) <= now()) {
+          operation.status = "retry-failed";
+          operation.retryMode = "blocked";
+          operation.timedOutAt = stamp;
+          operation.error = diagnostic(
+            "timeout",
+            "Queue time limit reached before delivery. Retry explicitly to start a new timed cycle.",
+          );
+        }
         store.db
           .prepare(
             "INSERT INTO operations(id,scope,sequence,fingerprint,data,content_key) VALUES (?,?,?,?,?,?)",
@@ -173,11 +297,45 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
           );
         for (const id of command.dependencies)
           store.db.prepare("INSERT INTO dependencies VALUES (?,?)").run(command.operationId, id);
+        if (cycle && !priorCycle)
+          store.db
+            .prepare("INSERT INTO admission_cycles(id,fingerprint) VALUES (?,?)")
+            .run(cycle.requestId, cycleFingerprint!);
         return { outcome: "accepted", operation };
       });
       // Admission itself never invokes adapter/network, even if a PR is active.
       setImmediate(() => worker.wake());
       return receipt;
+    },
+    async listPending() {
+      assertOpen();
+      const summaries = new Map<string, GithubOutboxPendingScope>();
+      for (const op of store.list()) {
+        if (op.status === "synced" || op.status === "cancelled" || op.archivedAt) continue;
+        const scope = op.command.scope;
+        let summary = summaries.get(scope.url);
+        if (!summary) {
+          const row = store.db.prepare("SELECT revision FROM scopes WHERE scope=?").get(scope.url);
+          summary = {
+            scope: structuredClone(scope),
+            revision: (row?.revision as number) ?? 0,
+            pendingCount: 0,
+            counts: { queued: 0, inflight: 0, "retry-failed": 0, uncertain: 0 },
+            updatedAt: op.updatedAt,
+          };
+          if (
+            op.status === "uncertain" ||
+            (op.status === "retry-failed" &&
+              !(op.retryMode === "automatic" && op.error?.retryable && op.nextAttemptAt))
+          )
+            summary.blockedByOperationId = op.command.operationId;
+          summaries.set(scope.url, summary);
+        }
+        summary.pendingCount++;
+        summary.counts[op.status]++;
+        if (op.updatedAt > summary.updatedAt) summary.updatedAt = op.updatedAt;
+      }
+      return [...summaries.values()];
     },
     async snapshot(scope: GithubPrScope) {
       assertOpen();
@@ -188,6 +346,19 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
         revision: (row?.revision as number | undefined) ?? 0,
         operations: store.list(scope.url),
       };
+    },
+    async batchControl(control: GithubOutboxBatchControl) {
+      assertOpen();
+      if (!isGithubOutboxBatchControl(control))
+        return {
+          outcome: "rejected" as const,
+          error: diagnostic("invalid", "Invalid GitHub queue batch."),
+        };
+      const receipt = store.transaction(() =>
+        applyBatchControl(store, structuredClone(control), now()),
+      );
+      setImmediate(() => worker.wake());
+      return receipt;
     },
     async heartbeat(heartbeat: GithubOutboxHeartbeat) {
       assertOpen();
@@ -238,7 +409,10 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
           if (prior.fingerprint !== fingerprint)
             return reject("conflict", "Control request ID was reused with different content.");
           const receipt: GithubOutboxControlReceipt = JSON.parse(prior.receipt as string);
-          return receipt.outcome === "rejected" ? receipt : { ...receipt, outcome: "duplicate" };
+          if (receipt.outcome === "rejected") return receipt;
+          const operation = store.get(receipt.operation.command.operationId) ?? receipt.operation;
+          if (expireOperation(operation, now())) change(operation);
+          return { ...receipt, outcome: "duplicate", operation };
         }
         const apply = (): GithubOutboxControlReceipt => {
           const op = store.get(control.operationId);
@@ -251,6 +425,8 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
                 return reject("conflict", "This operation cannot safely be cancelled.");
               op.status = "cancelled";
               op.retryMode = "blocked";
+              delete op.timedOutAt;
+              if (op.error?.code === "timeout") delete op.error;
               delete op.nextAttemptAt;
               break;
             case "revise": {
@@ -273,8 +449,20 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
                 )
                 .get(op.command.operationId);
               op.retryMode = op.retryMode === "manual" || overridden ? "manual" : "automatic";
+              op.queueDeadlineAt = new Date(
+                Math.min(
+                  control.queueDeadlineAt ? Date.parse(control.queueDeadlineAt) : Infinity,
+                  now() + (control.queueTimeoutMs ?? DEFAULT_GITHUB_QUEUE_TIMEOUT_MS),
+                ),
+              ).toISOString();
+              delete op.timedOutAt;
+              delete op.archivedAt;
+              store.db
+                .prepare("UPDATE schedules SET identity_failures=0 WHERE operation_id=?")
+                .run(op.command.operationId);
               delete op.error;
               delete op.nextAttemptAt;
+              expireOperation(op, now());
               break;
             }
             case "reconcile":
@@ -301,6 +489,7 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
                 op.retryMode = "blocked";
                 op.result = structuredClone(verified.result);
                 delete op.error;
+                delete op.timedOutAt;
               } else {
                 op.status = "retry-failed";
                 op.retryMode = "manual";

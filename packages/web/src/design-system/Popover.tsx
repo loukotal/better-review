@@ -17,6 +17,7 @@ export function Popover(props: {
   trigger?: JSX.Element;
   children: JSX.Element | ((close: () => void) => JSX.Element);
   width?: number;
+  maxHeight?: string;
   disabled?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -109,7 +110,9 @@ export function Popover(props: {
           ...position(),
           width: `${props.width ?? 300}px`,
           "max-width": "calc(100vw - 24px)",
-          "max-height": `${availableHeight()}px`,
+          "max-height": props.maxHeight
+            ? `min(${availableHeight()}px, ${props.maxHeight})`
+            : `${availableHeight()}px`,
           "overflow-y": "auto",
         }}
       >

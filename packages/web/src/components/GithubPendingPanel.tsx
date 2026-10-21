@@ -1,255 +1,443 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { A, useLocation, useSearchParams } from "@solidjs/router";
+import { createEffect, createMemo, createSignal, For, Show, onCleanup } from "solid-js";
 
-import type { GithubOutboxControl } from "@better-review/shared";
-
-import { Button, Popover } from "../design-system";
+import { useGithubQueue } from "../context/GithubQueueContext";
+import { Popover, Button } from "../design-system";
 import { GitHubIcon } from "../icons/github-icon";
+import { WarningIcon } from "../icons/warning-icon";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
 import type { GithubDraft } from "../lib/github-outbox-journal";
-import { createGithubSyncRefreshCoordinator } from "../lib/github-sync-refresh";
+import { revealGithubQueueContent } from "../lib/github-queue-layout";
+import { githubJournal } from "../lib/github-writes";
 import {
-  githubPrScope,
-  githubWrites,
-  githubJournal,
-  refreshGithubActor,
-} from "../lib/github-writes";
-import { refreshPrListAfterReview } from "../lib/query";
+  prPageHref,
+  prListReturnPath,
+  prListLinkState,
+  advancePrLinkState,
+  rememberPrListScroll,
+} from "../lib/pr-navigation";
 import { legacyGithubDraftRecovery } from "../lib/recoverable-drafts";
-import { trpc } from "../lib/trpc";
+import { GithubOperationDetails } from "./GithubOperationDetails";
 import { GithubSyncStatus, githubSyncState, githubOperationSyncState } from "./GithubSyncStatus";
 
-/** Compact transport/recovery controls. Comment bodies belong to discussion/diff views. */
-export function GithubPendingPanel(props: {
-  prUrl: string | null;
-  onRemoteSync: (url: string) => Promise<void>;
-}) {
-  const [version, setVersion] = createSignal(0);
+const actionLabels: Record<BrowserGithubOperation["command"]["action"]["kind"], string> = {
+  approve: "Approve",
+  "request-changes": "Request changes",
+  "review-comment": "Review comment",
+  "issue-comment": "Comment",
+  "inline-comment": "Inline comment",
+  reply: "Reply",
+  "edit-comment": "Edit comment",
+  "delete-comment": "Delete comment",
+  "resolve-thread": "Resolve thread",
+  "unresolve-thread": "Reopen thread",
+};
+function shortStatus(item: BrowserGithubOperation) {
+  switch (githubOperationSyncState(item)) {
+    case "timed-out":
+      return "Timed out";
+    case "uncertain":
+      return "Delivery unknown";
+    case "blocked":
+      return "Blocked";
+    case "retry-failed":
+      return "Needs attention";
+    case "inflight":
+      return "Sending";
+    case "local-pending":
+      return "Saved locally";
+    case "verifying-account":
+      return "Verify account";
+    case "retry-pending":
+      return "Retry scheduled";
+    default:
+      return "Queued";
+  }
+}
+
+/** Compact global presentation. Recovery and completion reads belong to AppShell. */
+export function GithubPendingPanel() {
+  const queue = useGithubQueue();
+  if (!queue) return null;
+  const location = useLocation();
+  const [params] = useSearchParams();
   const [open, setOpen] = createSignal(false);
-  const [error, setError] = createSignal<string>();
-  const [drafts, setDrafts] = createSignal<GithubDraft[]>([]);
-  const scope = createMemo(() => (props.prUrl ? githubPrScope(props.prUrl) : undefined));
-  createEffect(() => {
-    scope();
-    setOpen(false);
-  });
-  const legacyDrafts = createMemo(() => {
-    version();
-    const current = scope();
-    return current ? legacyGithubDraftRecovery(current.url) : [];
-  });
-  const state = createMemo(() => {
-    version();
-    const current = scope();
-    return current ? githubWrites.getState(current) : undefined;
-  });
-  const pending = createMemo(
-    () =>
-      state()?.operations.filter(
-        (item) => item.status !== "synced" && item.status !== "cancelled",
-      ) ?? [],
+  const [history, setHistory] = createSignal(false);
+  const rows = new Map<string, HTMLDetailsElement>();
+  const revealBlocker = (operationId: string) => {
+    const row = rows.get(operationId);
+    if (!row) return false;
+    row.open = true;
+    row.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
+    return true;
+  };
+  const [drafts, setDrafts] = createSignal<Record<string, GithubDraft[]>>({});
+  const [draftError, setDraftError] = createSignal<string>();
+  const [discovering, setDiscovering] = createSignal(false);
+  const [discoveryError, setDiscoveryError] = createSignal<string>();
+  const pending = createMemo(() =>
+    queue
+      .states()
+      .flatMap((state) =>
+        state.operations.filter(
+          (item) =>
+            !item.operation?.archivedAt && item.status !== "synced" && item.status !== "cancelled",
+        ),
+      ),
   );
-  const refresh = createGithubSyncRefreshCoordinator({
-    refreshPr: (url) => props.onRemoteSync(url),
-    refreshList: refreshPrListAfterReview,
-  });
-  onCleanup(() => refresh.dispose());
-  let draftRead = 0;
+  const saving = () => queue.states().reduce((total, state) => total + state.pendingSaving, 0);
+  const count = () => pending().length + saving();
+  const status = () => (saving() ? ("saving-local" as const) : githubSyncState(pending()));
+  let read = 0;
   createEffect(() => {
-    version();
-    const current = scope(),
-      serial = ++draftRead;
-    if (!current) {
-      setDrafts([]);
-      return;
-    }
-    void githubJournal
-      .editorDrafts(current)
-      .then((items) => {
-        if (serial === draftRead) setDrafts(items.filter((item) => item.body.trim()));
+    if (!open() || !history()) return;
+    const states = queue.states(),
+      token = ++read;
+    void (async () => {
+      const entries: [string, GithubDraft[]][] = [];
+      let index = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(2, states.length) }, async () => {
+          while (index < states.length && token === read) {
+            const state = states[index++]!;
+            entries.push([
+              state.scope.url,
+              (await githubJournal.editorDrafts(state.scope)).filter((draft) => draft.body.trim()),
+            ]);
+          }
+        }),
+      );
+      return entries;
+    })()
+      .then((entries) => {
+        if (token === read) {
+          setDrafts(Object.fromEntries(entries));
+          setDraftError(undefined);
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (token === read)
+          setDraftError("Some drafts could not be read. Saved content is retained.");
+      });
   });
-  const unsubscribe = githubWrites.subscribe(() => setVersion((value) => value + 1));
-  onCleanup(() => {
-    unsubscribe();
-    githubWrites.activate();
-  });
-  createEffect(() => {
-    const current = scope();
-    githubWrites.activate(current);
-    if (current) {
-      void trpc.githubOutbox.capability.query().catch(() => {});
-      void refreshGithubActor().catch(() => {});
-      const timer = setInterval(() => {
-        if (document.visibilityState === "visible") void refreshGithubActor().catch(() => {});
-      }, 15_000);
-      onCleanup(() => clearInterval(timer));
-    }
-  });
-  createEffect(() => {
-    refresh.observe(state());
-  });
-  const control = async (item: BrowserGithubOperation, kind: "retry" | "reconcile" | "cancel") => {
-    const current = scope();
-    if (!current || !item.operation) return;
-    setError(undefined);
+  const toggleHistory = async () => {
+    const show = !history();
+    setHistory(show);
+    if (!show || !queue.loadHistory) return;
+    setDiscovering(true);
+    setDiscoveryError(undefined);
     try {
-      const request: GithubOutboxControl = {
-        kind,
-        requestId: crypto.randomUUID(),
-        operationId: item.command.operationId,
-        expectedRevision: item.operation.revision,
-      };
-      const receipt = await githubWrites.control(current, request);
-      if (receipt?.outcome === "rejected") setError(receipt.error.message);
+      await queue.loadHistory();
     } catch {
-      setError("Control not acknowledged. Saved work is retained; reconnect to check again.");
+      setDiscoveryError(
+        "Saved history could not be loaded. Content is retained; reopen to try again.",
+      );
+    } finally {
+      setDiscovering(false);
     }
   };
-  return (
-    <Show
-      when={
-        state()?.pendingSaving ||
-        state()?.operations.length ||
-        drafts().length ||
-        legacyDrafts().length
+  const returnTo = () =>
+    location.pathname === "/"
+      ? `${location.pathname}${location.search}`
+      : prListReturnPath(params.returnTo);
+  const scopeLink = (url: string, label: string) => (
+    <A
+      class="min-w-0 truncate font-medium text-accent hover:underline"
+      href={prPageHref(url, { tab: "overview", returnTo: returnTo() })}
+      onClick={() => {
+        if (location.pathname === "/")
+          rememberPrListScroll(`${location.pathname}${location.search}`);
+      }}
+      state={
+        location.pathname === "/"
+          ? prListLinkState(returnTo(), location.state)
+          : advancePrLinkState(location.state)
       }
     >
-      <div aria-label="GitHub pending writes" class="fixed bottom-3 left-3 z-20 text-xs">
-        <Popover
-          label={
-            pending().length || state()?.pendingSaving
-              ? "GitHub pending writes"
-              : "GitHub saved content"
-          }
-          width={360}
-          triggerSize="icon"
-          open={open()}
-          onOpenChange={setOpen}
-          trigger={
-            <span class="inline-flex items-center gap-1">
-              <Show
-                when={
-                  state()?.pendingSaving ? ("saving-local" as const) : githubSyncState(pending())
-                }
-                fallback={<GitHubIcon size={12} />}
+      {label}
+    </A>
+  );
+  const visible = createMemo(() =>
+    queue
+      .states()
+      .filter((state) =>
+        history()
+          ? state.operations.some(
+              (item) =>
+                item.operation?.archivedAt ||
+                item.status === "synced" ||
+                item.status === "cancelled",
+            ) ||
+            drafts()[state.scope.url]?.length ||
+            legacyGithubDraftRecovery(state.scope.url).length
+          : state.operations.some(
+              (item) =>
+                !item.operation?.archivedAt &&
+                item.status !== "synced" &&
+                item.status !== "cancelled",
+            ) || state.pendingSaving,
+      )
+      .map((state) => state.scope.url),
+  );
+  return (
+    <div
+      aria-label="GitHub pending writes"
+      class="fixed bottom-3 left-3 z-20 text-xs"
+      data-global-github-queue
+    >
+      <Popover
+        label="GitHub queue"
+        width={320}
+        maxHeight="min(60dvh, 420px)"
+        triggerSize="icon"
+        open={open()}
+        onOpenChange={(value) => {
+          setOpen(value);
+          if (!value) setHistory(false);
+        }}
+        trigger={
+          <span class="inline-flex items-center gap-1">
+            <Show when={status()} fallback={<GitHubIcon size={12} />}>
+              {(value) => <GithubSyncStatus status={value()} operations={pending()} iconOnly />}
+            </Show>
+            <Show when={queue.error()}>
+              <span class="text-warning" aria-label="Queue needs attention">
+                <WarningIcon size={8} />
+              </span>
+            </Show>
+            <Show when={count()}>
+              <span aria-hidden="true">{count()}</span>
+            </Show>
+          </span>
+        }
+      >
+        <Show when={open()}>
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <Button
+              size="xs"
+              variant="ghost"
+              aria-pressed={history()}
+              onClick={() => void toggleHistory()}
+            >
+              {history() ? "Pending actions" : "Drafts & history"}
+            </Button>
+            <div class="flex items-center gap-1">
+              <Button
+                data-github-queue-batch="retry"
+                size="xs"
+                variant="ghost"
+                disabled={!!queue.batchBusy?.() || !count() || !queue.retryAll}
+                onClick={() => void queue.retryAll?.()}
               >
-                {(status) => <GithubSyncStatus status={status()} operations={pending()} iconOnly />}
-              </Show>
-              <Show when={pending().length + drafts().length + legacyDrafts().length}>
-                <span aria-hidden="true">
-                  {pending().length + drafts().length + legacyDrafts().length}
-                </span>
-              </Show>
-            </span>
-          }
-        >
-          <Show when={open()}>
-            <Show when={legacyDrafts().length}>
-              <details>
-                <summary>Recover legacy editor text</summary>
-                <p>
-                  This older localStorage text may already have been submitted. Compare the
-                  outbox/GitHub before manually reusing it; it is never restored as a new intent
-                  automatically.
-                </p>
-                <For each={legacyDrafts()}>
-                  {(draft) => (
-                    <details>
-                      <summary>{draft.key}</summary>
-                      <pre class="whitespace-pre-wrap break-words">{draft.body}</pre>
-                    </details>
-                  )}
-                </For>
-              </details>
+                {queue.batchBusy?.() === "retry" ? "Retrying…" : "Retry"}
+              </Button>
+              <Button
+                data-github-queue-batch="clear"
+                size="xs"
+                variant="ghost"
+                disabled={!!queue.batchBusy?.() || !!saving() || !count() || !queue.clearAll}
+                title={
+                  saving()
+                    ? "Wait for the current local save to finish"
+                    : "Cancel unsent actions; archive unknown delivery without resending"
+                }
+                onClick={() => void queue.clearAll?.()}
+              >
+                {queue.batchBusy?.() === "clear" ? "Clearing…" : "Clear"}
+              </Button>
+            </div>
+          </div>
+          <div
+            data-github-queue-scroll
+            class="overflow-y-auto overscroll-contain"
+            style={{ "max-height": "max(80px, calc(min(60dvh, 420px) - 110px))" }}
+            tabindex="0"
+            aria-label={history() ? "Saved drafts and history" : "Pending GitHub actions"}
+          >
+            <Show when={queue.batchFeedback?.()}>
+              <p role="status" class="mb-2 text-text-muted">
+                {queue.batchFeedback?.()}
+              </p>
             </Show>
-            <Show when={drafts().length}>
-              <details>
-                <summary>{drafts().length} unsubmitted drafts saved on this device</summary>
-                <For each={drafts()}>
-                  {(draft) => (
-                    <details>
-                      <summary>{draft.editorSlot}</summary>
-                      <p>
-                        Unsubmitted editor content. Reopen the matching editor to continue; this is
-                        not a queued write.
-                      </p>
-                      <pre class="whitespace-pre-wrap break-words">{draft.body}</pre>
-                    </details>
-                  )}
-                </For>
-              </details>
+            <Show when={queue.error() || (history() && (draftError() || discoveryError()))}>
+              <p role="alert" class="mb-2 text-warning">
+                {queue.error() ?? discoveryError() ?? draftError()}
+              </p>
             </Show>
-            <Show when={state()?.error || error()}>
-              <p role="alert">{error() ?? state()?.error}</p>
+            <Show when={!history() && !count()}>
+              <p class="py-2 text-text-muted">No pending actions</p>
             </Show>
-            <For each={pending()}>
-              {(item) => (
-                <div
-                  data-operation-id={item.command.operationId}
-                  class="flex flex-wrap items-center gap-2 py-1"
-                >
-                  <span>{item.command.action.kind}</span>
-                  <GithubSyncStatus status={githubOperationSyncState(item)} />
-                  <Show when={item.operation?.error || item.admissionError}>
-                    <span role="alert">
-                      {item.operation?.error?.message ?? item.admissionError}
-                    </span>
-                  </Show>
-                  <Show when={!item.backendOwned}>
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        const current = scope();
-                        if (current)
-                          void githubWrites.retryAdmission(current, item.command.operationId);
-                      }}
-                    >
-                      Check admission again
-                    </Button>
-                  </Show>
-                  <Show when={item.status === "retry-failed"}>
-                    <Button size="sm" onClick={() => void control(item, "retry")}>
-                      Retry
-                    </Button>
-                  </Show>
-                  <Show when={item.status === "uncertain"}>
-                    <Button size="sm" onClick={() => void control(item, "reconcile")}>
-                      Check GitHub again (no resend)
-                    </Button>
-                  </Show>
-                  <Show when={item.status === "queued" || item.status === "retry-failed"}>
-                    <Button size="sm" onClick={() => void control(item, "cancel")}>
-                      Cancel queued write
-                    </Button>
-                  </Show>
-                </div>
-              )}
+            <Show when={history() && discovering()}>
+              <p role="status" class="py-2 text-text-muted">
+                Loading saved content…
+              </p>
+            </Show>
+            <Show when={history() && !discovering() && !visible().length}>
+              <p class="py-2 text-text-muted">No saved drafts or history</p>
+            </Show>
+            <For each={visible()}>
+              {(url) => {
+                const state = () => queue.states().find((entry) => entry.scope.url === url)!;
+                const operations = () =>
+                  state().operations.filter((item) =>
+                    history()
+                      ? item.operation?.archivedAt ||
+                        item.status === "synced" ||
+                        item.status === "cancelled"
+                      : !item.operation?.archivedAt &&
+                        item.status !== "synced" &&
+                        item.status !== "cancelled",
+                  );
+                return (
+                  <section
+                    class="border-t border-border py-2"
+                    aria-label={`GitHub actions for ${state().scope.owner}/${state().scope.repo}#${state().scope.number}`}
+                  >
+                    <div class="mb-1 flex items-center gap-2">
+                      {scopeLink(url, `${state().scope.repo}#${state().scope.number}`)}
+                      <Show when={state().pendingSaving && !history()}>
+                        <span class="text-text-muted">Saving…</span>
+                      </Show>
+                    </div>
+                    <Show when={!history()}>
+                      <For each={operations().map((item) => item.command.operationId)}>
+                        {(id) => {
+                          const item = () =>
+                            state().operations.find((entry) => entry.command.operationId === id)!;
+                          const [expanded, setExpanded] = createSignal(false);
+                          let row!: HTMLDetailsElement;
+                          createEffect(() => {
+                            const visible = expanded() && item().status;
+                            if (!visible) return;
+                            const frame = requestAnimationFrame(() => {
+                              const controls = row.querySelector<HTMLElement>(
+                                "[data-github-primary-controls]",
+                              );
+                              if (controls) revealGithubQueueContent(controls);
+                            });
+                            onCleanup(() => cancelAnimationFrame(frame));
+                          });
+                          onCleanup(() => rows.delete(id));
+                          return (
+                            <details
+                              ref={(element) => {
+                                row = element;
+                                rows.set(id, element);
+                              }}
+                              data-github-queue-action={id}
+                              class="rounded py-1"
+                              onToggle={(event) => setExpanded(event.currentTarget.open)}
+                            >
+                              <summary class="cursor-pointer text-xs">
+                                <span class="inline-flex max-w-full items-center gap-2 align-middle">
+                                  <GithubSyncStatus
+                                    status={githubOperationSyncState(item())}
+                                    iconOnly
+                                  />
+                                  <span>{actionLabels[item().command.action.kind]}</span>
+                                  <span class="text-text-muted">
+                                    {githubOperationSyncState(item()) === "timed-out"
+                                      ? "Timed out"
+                                      : (queue.operationFeedback?.()[id] ?? shortStatus(item()))}
+                                  </span>
+                                </span>
+                              </summary>
+                              <Show when={expanded()}>
+                                <div class="mt-2 border-l border-border pl-2">
+                                  <GithubOperationDetails
+                                    compact
+                                    onRevealBlocker={revealBlocker}
+                                    scope={state().scope}
+                                    operations={[item()]}
+                                  />
+                                </div>
+                              </Show>
+                            </details>
+                          );
+                        }}
+                      </For>
+                    </Show>
+                    <Show when={history()}>
+                      <Show when={drafts()[url]?.length}>
+                        <details>
+                          <summary class="cursor-pointer">
+                            Unsubmitted drafts ({drafts()[url]!.length})
+                          </summary>
+                          <For each={drafts()[url]}>
+                            {(draft) => (
+                              <details>
+                                <summary>{draft.editorSlot}</summary>
+                                <pre class="whitespace-pre-wrap break-words">{draft.body}</pre>
+                              </details>
+                            )}
+                          </For>
+                        </details>
+                      </Show>
+                      <Show when={legacyGithubDraftRecovery(url).length}>
+                        <details>
+                          <summary>Legacy editor text</summary>
+                          <p>May already be submitted. Compare GitHub before reusing.</p>
+                          <For each={legacyGithubDraftRecovery(url)}>
+                            {(draft) => (
+                              <details>
+                                <summary>{draft.key}</summary>
+                                <pre class="whitespace-pre-wrap break-words">{draft.body}</pre>
+                              </details>
+                            )}
+                          </For>
+                        </details>
+                      </Show>
+                      <Show when={operations().length}>
+                        <details>
+                          <summary>Recover original saved content ({operations().length})</summary>
+                          <p>Saved text only. Never resends.</p>
+                          <For each={operations().map((item) => item.command.operationId)}>
+                            {(id) => {
+                              const item = () =>
+                                state().operations.find(
+                                  (entry) => entry.command.operationId === id,
+                                )!;
+                              const body = () => {
+                                const action = item().command.action;
+                                return "body" in action
+                                  ? action.body
+                                  : "expectedBody" in action
+                                    ? action.expectedBody
+                                    : "Thread state change";
+                              };
+                              return (
+                                <details data-github-recovery-operation={id}>
+                                  <summary>
+                                    <Show when={item().operation?.archivedAt}>Archived · </Show>
+                                    <Show
+                                      when={
+                                        item().operation?.archivedAt &&
+                                        item().status === "uncertain"
+                                      }
+                                    >
+                                      Delivery unknown ·{" "}
+                                    </Show>
+                                    {actionLabels[item().command.action.kind]} ·{" "}
+                                    <GithubSyncStatus
+                                      status={githubOperationSyncState(item())}
+                                      showSynced
+                                    />
+                                  </summary>
+                                  <pre class="whitespace-pre-wrap break-words">{body()}</pre>
+                                </details>
+                              );
+                            }}
+                          </For>
+                        </details>
+                      </Show>
+                    </Show>
+                  </section>
+                );
+              }}
             </For>
-            <details>
-              <summary>Recover original saved content ({state()?.operations.length})</summary>
-              <p>Saved text only. Opening this history never queues or resends a write.</p>
-              <For each={state()?.operations}>
-                {(item) => (
-                  <details data-github-recovery-operation={item.command.operationId}>
-                    <summary>
-                      {item.command.action.kind} ·{" "}
-                      <GithubSyncStatus status={githubOperationSyncState(item)} showSynced />
-                    </summary>
-                    <pre class="whitespace-pre-wrap break-words">
-                      {"body" in item.command.action
-                        ? item.command.action.body
-                        : "expectedBody" in item.command.action
-                          ? item.command.action.expectedBody
-                          : "Thread state change"}
-                    </pre>
-                  </details>
-                )}
-              </For>
-            </details>
-          </Show>
-        </Popover>
-      </div>
-    </Show>
+          </div>
+        </Show>
+      </Popover>
+    </div>
   );
 }

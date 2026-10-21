@@ -1,7 +1,84 @@
 import { For } from "solid-js";
 import { render } from "solid-js/web";
 
-import { GithubSyncStatus, type GithubSyncState } from "./GithubSyncStatus";
+import type { BrowserGithubOperation } from "../lib/github-outbox";
+import {
+  GithubSyncStatus,
+  githubOperationSyncState,
+  type GithubSyncState,
+} from "./GithubSyncStatus";
+
+export function testGithubAdmissionRetryabilityLabelsInBrowser() {
+  const base: BrowserGithubOperation = {
+    command: {
+      operationId: "11111111-1111-4111-8111-111111111111",
+      scope: {
+        host: "github.com",
+        owner: "fixture",
+        repo: "fixture",
+        number: 1,
+        url: "https://github.com/fixture/fixture/pull/1",
+      },
+      expectedActor: { id: 42, login: "fixture" },
+      action: { kind: "issue-comment", body: "Saved draft" },
+      dependencies: [],
+    },
+    backendOwned: false,
+    status: "local-pending",
+    admissionError: "A known GitHub identity is required before admission.",
+    admissionRetryable: true,
+  };
+  const verifying = githubOperationSyncState(base);
+  const rejected = githubOperationSyncState({
+    ...base,
+    admissionError: "Saved edit no longer matches GitHub",
+    admissionRetryable: false,
+  });
+  const blocked = githubOperationSyncState({
+    ...base,
+    blockedByOperationId: "22222222-2222-4222-8222-222222222222",
+  });
+  if (verifying !== "verifying-account" || rejected !== "retry-failed" || blocked !== "blocked")
+    throw new Error("Admission retryability/blocker hook not reflected in UI states");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const dispose = render(
+    () => (
+      <>
+        <GithubSyncStatus status={verifying} iconOnly />
+        <GithubSyncStatus status={rejected} iconOnly />
+        <GithubSyncStatus status={blocked} iconOnly />
+      </>
+    ),
+    host,
+  );
+  try {
+    if (
+      !host
+        .querySelector('[data-github-sync-status="verifying-account"]')
+        ?.getAttribute("aria-label")
+        ?.includes("account verification")
+    )
+      throw new Error("Verifying account mislabeled as permanent rejection or sending");
+    if (
+      !host
+        .querySelector('[data-github-sync-status="retry-failed"]')
+        ?.getAttribute("aria-label")
+        ?.includes("action needed")
+    )
+      throw new Error("Permanent rejection mislabeled as active sync");
+    if (
+      [...host.querySelectorAll("svg")].some(
+        (icon) => getComputedStyle(icon).animationName === "spin",
+      )
+    )
+      throw new Error("Waiting/rejected/blocked admission falsely spins as active sending");
+    return { passed: 4 };
+  } finally {
+    dispose();
+    host.remove();
+  }
+}
 
 declare global {
   interface Window {
@@ -26,6 +103,8 @@ export async function testGithubSyncMotionInBrowser() {
     "uncertain",
     "synced",
     "cancelled",
+    "blocked",
+    "verifying-account",
   ];
   const host = document.createElement("div");
   document.body.append(host);
@@ -140,6 +219,8 @@ export function testGithubSyncStatusInBrowser() {
     "uncertain",
     "synced",
     "cancelled",
+    "blocked",
+    "verifying-account",
   ];
   const host = document.createElement("section");
   host.setAttribute("aria-label", "GitHub sync visual states");

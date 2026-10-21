@@ -1,9 +1,14 @@
-import { createSignal, createEffect, For, Show, onMount } from "solid-js";
+import { createSignal, createEffect, For, Show, onMount, onCleanup } from "solid-js";
 
 import { Button, TextInput, Select, Popover } from "../design-system";
+import {
+  cacheReviewModel,
+  resolveReviewModelSelection,
+  type ModelEntry,
+  type SelectedModel,
+} from "../lib/model-selection";
 import { trpc } from "../lib/trpc";
 
-const MODEL_STORAGE_KEY = "better-review:selected-model";
 const REASONING_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
@@ -17,76 +22,15 @@ const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
   xhigh: "Extra high",
 };
 
-interface ModelEntry {
-  providerId: string;
-  modelId: string;
-  name: string;
-  reasoning: boolean;
-  thinkingLevels: ReasoningEffort[];
-  variants: string[];
-  releaseDate: string;
-}
-
-interface SelectedModel extends ModelEntry {
-  variant: string | null;
-  thinkingLevel: ReasoningEffort;
-}
-
 interface ModelSelectorProps {
   align?: "left" | "right";
   class?: string;
   disabled?: boolean;
-}
-
-function loadSavedModel(): {
-  providerId: string;
-  modelId: string;
-  variant?: string | null;
-  thinkingLevel?: ReasoningEffort | null;
-} | null {
-  const stored = localStorage.getItem(MODEL_STORAGE_KEY);
-  if (!stored) return null;
-
-  try {
-    const parsed = JSON.parse(stored) as {
-      providerId?: unknown;
-      modelId?: unknown;
-      variant?: unknown;
-      thinkingLevel?: unknown;
-    };
-    if (typeof parsed.providerId === "string" && typeof parsed.modelId === "string") {
-      return {
-        providerId: parsed.providerId,
-        modelId: parsed.modelId,
-        variant:
-          typeof parsed.variant === "string" || parsed.variant === null
-            ? parsed.variant
-            : undefined,
-        thinkingLevel: isReasoningEffort(parsed.thinkingLevel) ? parsed.thinkingLevel : undefined,
-      };
-    }
-  } catch (err) {
-    console.error("Failed to parse saved model:", err);
-  }
-
-  localStorage.removeItem(MODEL_STORAGE_KEY);
-  return null;
-}
-
-function saveModel(model: SelectedModel) {
-  localStorage.setItem(
-    MODEL_STORAGE_KEY,
-    JSON.stringify({
-      providerId: model.providerId,
-      modelId: model.modelId,
-      variant: model.variant,
-      thinkingLevel: model.thinkingLevel,
-    }),
-  );
-}
-
-function isReasoningEffort(value: unknown): value is ReasoningEffort {
-  return typeof value === "string" && REASONING_EFFORTS.includes(value as ReasoningEffort);
+  onStateChange?: (state: {
+    ready: boolean;
+    error: string | null;
+    model?: SelectedModel | null;
+  }) => void;
 }
 
 function reasoningEffortOptions(model: SelectedModel): ReasoningEffort[] {
@@ -100,39 +44,48 @@ export function ModelSelector(props: ModelSelectorProps) {
   const [connectedProvidersCount, setConnectedProvidersCount] = createSignal<number | null>(null);
   const [currentModel, setCurrentModel] = createSignal<SelectedModel | null>(null);
   const [isLoading, setIsLoading] = createSignal(false);
+  const [isResolving, setIsResolving] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+  let disposed = false;
 
-  // Load current model on mount
-  onMount(async () => {
-    const savedModel = loadSavedModel();
-
-    try {
-      if (savedModel) {
-        const result = await trpc.models.setCurrent.mutate(savedModel);
-        setCurrentModel(result.model);
-        saveModel(result.model);
-        return;
-      }
-
-      const data = await trpc.models.current.query();
-      setCurrentModel(data);
-      saveModel(data);
-    } catch (err) {
-      if (savedModel) {
-        localStorage.removeItem(MODEL_STORAGE_KEY);
-        try {
-          const data = await trpc.models.current.query();
-          setCurrentModel(data);
-          saveModel(data);
-          return;
-        } catch (fallbackErr) {
-          console.error("Failed to load current model:", fallbackErr);
-          return;
-        }
-      }
-
-      console.error("Failed to load current model:", err);
-    }
+  createEffect(() =>
+    props.onStateChange?.({
+      ready: !!currentModel() && !isResolving() && !error(),
+      error: error(),
+      model: currentModel(),
+    }),
+  );
+  onCleanup(() => {
+    disposed = true;
+    props.onStateChange?.({ ready: false, error: null });
   });
+
+  function acceptModel(model: SelectedModel, persist = true) {
+    if (disposed) return;
+    if (persist) cacheReviewModel(model);
+    setCurrentModel(model);
+    setError(null);
+  }
+
+  function failed(cause: unknown) {
+    if (disposed) return;
+    setError(
+      `${cause instanceof Error ? cause.message : "Cannot resolve review model"} Retry or choose a model. Reviews are blocked until resolved.`,
+    );
+  }
+
+  async function resolveSelection() {
+    if (isResolving()) return;
+    setIsResolving(true);
+    try {
+      acceptModel(await resolveReviewModelSelection(), false);
+    } catch (err) {
+      failed(err);
+    } finally {
+      setIsResolving(false);
+    }
+  }
+  onMount(() => void resolveSelection());
 
   // Search models when query changes
   createEffect(async () => {
@@ -153,6 +106,8 @@ export function ModelSelector(props: ModelSelectorProps) {
   });
 
   const handleSelect = async (model: ModelEntry) => {
+    if (isResolving()) return;
+    setIsResolving(true);
     try {
       const selected = currentModel();
       const result = await trpc.models.setCurrent.mutate({
@@ -160,17 +115,19 @@ export function ModelSelector(props: ModelSelectorProps) {
         modelId: model.modelId,
         thinkingLevel: selected?.thinkingLevel,
       });
-      setCurrentModel(result.model);
-      saveModel(result.model);
+      acceptModel(result.model);
       setIsOpen(false);
     } catch (err) {
-      console.error("Failed to set model:", err);
+      failed(err);
+    } finally {
+      setIsResolving(false);
     }
   };
 
   const handleVariantChange = async (variant: string) => {
     const model = currentModel();
-    if (!model) return;
+    if (!model || isResolving()) return;
+    setIsResolving(true);
 
     try {
       const result = await trpc.models.setCurrent.mutate({
@@ -179,16 +136,18 @@ export function ModelSelector(props: ModelSelectorProps) {
         variant: variant || null,
         thinkingLevel: model.thinkingLevel,
       });
-      setCurrentModel(result.model);
-      saveModel(result.model);
+      acceptModel(result.model);
     } catch (err) {
-      console.error("Failed to update model variant:", err);
+      failed(err);
+    } finally {
+      setIsResolving(false);
     }
   };
 
   const handleReasoningEffortChange = async (thinkingLevel: ReasoningEffort) => {
     const model = currentModel();
-    if (!model) return;
+    if (!model || isResolving()) return;
+    setIsResolving(true);
 
     try {
       const result = await trpc.models.setCurrent.mutate({
@@ -197,15 +156,17 @@ export function ModelSelector(props: ModelSelectorProps) {
         variant: model.variant,
         thinkingLevel,
       });
-      setCurrentModel(result.model);
-      saveModel(result.model);
+      acceptModel(result.model);
     } catch (err) {
-      console.error("Failed to update reasoning effort:", err);
+      failed(err);
+    } finally {
+      setIsResolving(false);
     }
   };
 
   const displayText = () => {
     const model = currentModel();
+    if (error()) return "Model unavailable";
     if (!model) return "Loading...";
     // Show shortened model name
     const label = model.variant ? `${model.modelId}:${model.variant}` : model.modelId;
@@ -220,7 +181,7 @@ export function ModelSelector(props: ModelSelectorProps) {
         triggerSize="sm"
         width={340}
         align={props.align}
-        disabled={props.disabled}
+        disabled={props.disabled || isResolving()}
         open={isOpen()}
         onOpenChange={(open) => {
           setIsOpen(open);
@@ -336,6 +297,20 @@ export function ModelSelector(props: ModelSelectorProps) {
           </For>
         </div>
       </Popover>
+      <Show when={error()}>
+        <p role="alert" class="text-xs text-error">
+          {error()}
+        </p>
+        <Button
+          type="button"
+          size="xs"
+          variant="secondary"
+          disabled={isResolving() || props.disabled}
+          onClick={() => void resolveSelection()}
+        >
+          Retry model selection
+        </Button>
+      </Show>
     </div>
   );
 }

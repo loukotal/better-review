@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
+  createModels,
   fauxAssistantMessage,
+  fauxProvider,
   fauxToolCall,
   getCurrentSystemPrompt,
   getCurrentTools,
@@ -20,6 +22,57 @@ import type { ReviewSnapshot } from "@better-review/shared";
 import { openReviewEngine } from "./engine";
 import { crashEngine, fixtureModels, fixtureSandbox, fixtureSession } from "./fixtures";
 import { reviewMetrics } from "./metrics";
+
+test("fresh and reopened reviews execute the explicitly requested model, not the old conversation default", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "pi-review-model-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const provider = fauxProvider({
+    provider: "model-fixture",
+    models: [{ id: "gpt-5.5" }, { id: "selected-model" }],
+  });
+  const actual: string[] = [];
+  provider.setResponses(
+    Array.from({ length: 3 }, () => (_input, _options, _state, model) => {
+      actual.push(model.id);
+      return fauxAssistantMessage("done");
+    }),
+  );
+  const models = createModels();
+  models.setProvider(provider.provider);
+  const oldModel = { provider: "model-fixture", modelId: "gpt-5.5" };
+  const selected = { provider: "model-fixture", modelId: "selected-model" };
+  const options = {
+    database: path.join(dir, "review.sqlite"),
+    session: fixtureSession,
+    models,
+    model: oldModel,
+    sandbox: async () => fixtureSandbox("A"),
+  };
+  let engine = await openReviewEngine(options);
+  try {
+    await engine.submit("Fresh", "fresh", selected);
+    await engine.conversation.waitForIdle(context);
+    assert.deepEqual(actual, ["selected-model"]);
+    await engine.submit("Old selection", "old", oldModel);
+    await engine.conversation.waitForIdle(context);
+    await engine.close();
+    engine = await openReviewEngine(options);
+    engine.resume();
+    await engine.conversation.waitForIdle(context);
+    await engine.submit("Continue with explicit selection", "reopened", selected);
+    await engine.conversation.waitForIdle(context);
+    assert.deepEqual(actual, ["selected-model", "gpt-5.5", "selected-model"]);
+    assert.equal((await engine.snapshot()).settlements.at(-1)?.outcome, "completed");
+    await engine.submit("Unavailable", "missing", { ...selected, modelId: "removed" });
+    await engine.conversation.waitForIdle(context);
+    const failed = (await engine.snapshot()).settlements.at(-1);
+    assert.equal(failed?.outcome, "failed");
+    assert.match(failed?.error ?? "", /model|removed/i);
+    assert.equal(provider.state.callCount, 3, "unavailable model must not call the default");
+  } finally {
+    await engine.close();
+  }
+});
 
 test("native Pi tools preserve instructions, stream committed state, deduplicate input and retain revision history", async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), "pi-review-"));

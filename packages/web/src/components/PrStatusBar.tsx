@@ -2,7 +2,7 @@ import { type Component, Show, createMemo } from "solid-js";
 
 import type { PrState, PrStatus, CheckRun } from "@better-review/shared";
 
-import { Badge, Popover, IconButton } from "../design-system";
+import { Badge, Popover, IconButton, Button } from "../design-system";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { CheckIcon } from "../icons/check-icon";
 import { CloseIcon } from "../icons/close-icon";
@@ -10,12 +10,15 @@ import { CopyIcon } from "../icons/copy-icon";
 import { ExternalLinkIcon } from "../icons/external-link-icon";
 import { SpinnerIcon } from "../icons/spinner-icon";
 import { parseMarkdown } from "../lib/markdown";
+import { summarizePrChecks } from "../lib/pr-checks";
+import { ReviewDecisionBadge } from "./ReviewDecisionBadge";
 
 interface PrStatusBarProps {
   status: PrStatus | null;
   loading?: boolean;
   repoOwner?: string | null;
   repoName?: string | null;
+  onOpenChecks?: () => void;
 }
 
 const stateStyles: Record<PrState, { variant: "success" | "neutral" | "merged"; label: string }> = {
@@ -24,57 +27,49 @@ const stateStyles: Record<PrState, { variant: "success" | "neutral" | "merged"; 
   merged: { variant: "merged", label: "Merged" },
 };
 
-function ChecksIndicator(props: { checks: readonly CheckRun[] }) {
-  const summary = createMemo(() => {
-    const checks = props.checks;
-    if (checks.length === 0) return null;
-
-    const completed = checks.filter((c) => c.status === "completed");
-    const inProgress = checks.filter((c) => c.status === "in_progress" || c.status === "queued");
-    const failed = completed.filter(
-      (c) => c.conclusion === "failure" || c.conclusion === "timed_out",
-    );
-    const passed = completed.filter(
-      (c) => c.conclusion === "success" || c.conclusion === "skipped" || c.conclusion === "neutral",
-    );
-
-    return {
-      total: checks.length,
-      completed: completed.length,
-      inProgress: inProgress.length,
-      failed: failed.length,
-      passed: passed.length,
-    };
-  });
+function ChecksIndicator(props: { checks: readonly CheckRun[]; onOpen?: () => void }) {
+  const summary = createMemo(() => summarizePrChecks(props.checks));
 
   const status = createMemo(() => {
     const s = summary();
-    if (!s) return null;
     if (s.failed > 0) return "failed";
-    if (s.inProgress > 0) return "pending";
-    if (s.passed === s.total) return "passed";
-    return "pending";
+    if (s.pending > 0) return "pending";
+    if (s.total > 0 && s.passed === s.total) return "passed";
+    return "neutral";
   });
 
   return (
-    <Show when={summary()}>
-      {(s) => (
-        <div class="flex items-center gap-1.5">
-          <Show when={status() === "passed"}>
-            <CheckIcon size={12} class="text-success" />
-          </Show>
-          <Show when={status() === "failed"}>
-            <CloseIcon size={12} class="text-error" />
-          </Show>
-          <Show when={status() === "pending"}>
-            <SpinnerIcon size={12} class="text-warning animate-spin" />
-          </Show>
-          <span class="text-sm text-text-muted">
-            {s().passed}/{s().total} checks
-          </span>
-        </div>
-      )}
-    </Show>
+    <Button
+      variant="ghost"
+      size="xs"
+      onClick={props.onOpen}
+      disabled={!props.onOpen}
+      aria-label="View pull request checks"
+      title="View all check runs and status contexts"
+      class="flex flex-wrap items-center gap-1.5"
+    >
+      <Show when={status() === "passed"}>
+        <CheckIcon size={12} class="text-success" />
+      </Show>
+      <Show when={status() === "failed"}>
+        <CloseIcon size={12} class="text-error" />
+      </Show>
+      <Show when={status() === "pending"}>
+        <SpinnerIcon size={12} class="text-warning animate-spin" />
+      </Show>
+      <span class="text-sm text-text-muted">
+        {summary().total ? `${summary().passed}/${summary().total} checks` : "Checks"}
+      </span>
+      <Show when={summary().failed}>
+        <span class="text-xs text-error">{summary().failed} failed</span>
+      </Show>
+      <Show when={summary().pending}>
+        <span class="text-xs text-warning">{summary().pending} running</span>
+      </Show>
+      <Show when={summary().unknown}>
+        <span class="text-xs text-text-muted">{summary().unknown} unknown</span>
+      </Show>
+    </Button>
   );
 }
 
@@ -139,6 +134,8 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 {status().draft ? "Draft" : style().label}
               </Badge>
 
+              <ReviewDecisionBadge decision={status().reviewDecision} />
+
               {/* Author */}
               <span class="text-xs text-text-faint">by {status().author}</span>
 
@@ -163,7 +160,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
               </div>
 
               {/* CI Checks */}
-              <ChecksIndicator checks={status().checks} />
+              <ChecksIndicator checks={status().checks} onOpen={props.onOpenChecks} />
 
               {/* Mergeable status */}
               <Show when={status().state === "open" && status().mergeable !== null}>

@@ -1,9 +1,11 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 
 import {
+  DEFAULT_GITHUB_QUEUE_TIMEOUT_MS,
   isGithubPrScope,
   isGithubOutboxCommand,
   type GithubOutboxCommand,
+  type GithubOutboxBatchControl,
   type GithubOutboxControl,
   type GithubOutboxJournal,
   type GithubOutboxOperation,
@@ -18,6 +20,29 @@ export interface GithubAdmission {
   operation?: GithubOutboxOperation;
   draftKey?: string;
   admissionError?: string;
+  /** Earliest retry time. Cooldowns remain manual unless admissionRetryable is true. */
+  admissionRetryAt?: string;
+  /** Admission-only identity initialization can recover without another user decision. */
+  admissionRetryable?: boolean;
+  admittedAt?: string;
+  admissionDeadlineAt?: string;
+  admissionTimedOut?: boolean;
+  admissionRetryRequestId?: string;
+  admissionRetryTimeoutMs?: number;
+}
+
+/** Older clients persisted this exact server-owned startup diagnostic as permanent.
+ * Replay admission only, with its original UUID/account. Never infer retry safety
+ * from arbitrary messages, cooldown deadlines, or a backend operation's error.
+ */
+export function isGithubAdmissionRetryable(
+  entry: Pick<GithubAdmission, "admissionRetryable" | "admissionError">,
+) {
+  return (
+    entry.admissionRetryable === true ||
+    (entry.admissionRetryable === undefined &&
+      entry.admissionError === "A known GitHub identity is required before admission.")
+  );
 }
 
 export interface GithubDraft {
@@ -46,9 +71,32 @@ export interface BrowserGithubJournal extends GithubOutboxJournal {
   admit(command: GithubOutboxCommand, draftKey?: string): Promise<void>;
   entries(scope: GithubPrScope): Promise<GithubAdmission[]>;
   acknowledge(operation: GithubOutboxOperation, submittedOperationId?: string): Promise<void>;
-  admissionFailed(operationId: string, message: string): Promise<void>;
+  admissionFailed(
+    operationId: string,
+    message: string,
+    retryAt?: string,
+    retryable?: boolean,
+    timedOut?: boolean,
+  ): Promise<void>;
+  restartAdmissionCycle?(
+    operationId: string,
+    deadlineAt: string,
+    requestId: string,
+    timeoutMs: number,
+  ): Promise<void>;
+  putBatch?(control: GithubOutboxBatchControl): Promise<void>;
+  batches?(): Promise<GithubOutboxBatchControl[]>;
+  removeBatch?(requestId: string): Promise<void>;
+  /** Atomic cross-tab snapshot, serialized with putBatch/acknowledge. The
+   * callback is synchronous: return a holder, not an awaited network promise. */
+  guardAdmission?<T>(
+    scope: GithubPrScope,
+    start: (entries: GithubAdmission[], batches: GithubOutboxBatchControl[]) => T,
+  ): Promise<T>;
   saveDraft(draft: GithubDraft): Promise<void>;
   draft(key: string): Promise<GithubDraft | undefined>;
+  /** Local-only discovery of unsubmitted editor scopes; never admits their text. */
+  draftScopes?(): Promise<GithubPrScope[]>;
   putControl(control: GithubOutboxControl, scope: GithubPrScope): Promise<void>;
   controls(scope: GithubPrScope): Promise<GithubOutboxControl[]>;
   removeControl(requestId: string): Promise<void>;
@@ -56,6 +104,21 @@ export interface BrowserGithubJournal extends GithubOutboxJournal {
 
 export function githubScopeKey(scope: GithubPrScope): string {
   return normalizeGithubPrScope(scope).url;
+}
+
+function admissionMetadata(entry: GithubAdmission): GithubAdmission {
+  return {
+    ...entry,
+    admissionDeadlineAt:
+      entry.admissionDeadlineAt ??
+      entry.command.queueDeadlineAt ??
+      new Date(
+        entry.admittedAt && Number.isFinite(Date.parse(entry.admittedAt))
+          ? Date.parse(entry.admittedAt) +
+              (entry.command.queueTimeoutMs ?? DEFAULT_GITHUB_QUEUE_TIMEOUT_MS)
+          : 0,
+      ).toISOString(),
+  };
 }
 
 /** Normalize before command creation; never change an already journaled command. */
@@ -79,6 +142,7 @@ export function githubCommandFingerprint(value: unknown): string {
 }
 
 interface JournalSchema extends DBSchema {
+  batches: { key: string; value: GithubOutboxBatchControl };
   editors: { key: string; value: { slot: string; draftKey: string; scope: string } };
   admissions: { key: string; value: GithubAdmission; indexes: { scope: string } };
   drafts: { key: string; value: GithubDraft };
@@ -94,8 +158,9 @@ export function createIndexedDbGithubJournal(
 ): BrowserGithubJournal & GithubEditorJournal {
   let database: Promise<IDBPDatabase<JournalSchema>> | undefined;
   const db = () =>
-    (database ??= openDB<JournalSchema>(name, 2, {
+    (database ??= openDB<JournalSchema>(name, 3, {
       upgrade(database, oldVersion) {
+        if (oldVersion < 3) database.createObjectStore("batches", { keyPath: "requestId" });
         if (oldVersion < 2) database.createObjectStore("editors", { keyPath: "slot" });
         if (oldVersion >= 1) return;
         // Index nested scope.url directly: no denormalized command field on the wire.
@@ -149,7 +214,18 @@ export function createIndexedDbGithubJournal(
     if (!existing) {
       const all = await store.getAll();
       const localOrder = all.reduce((max, entry) => Math.max(max, entry.localOrder), 0) + 1;
-      await store.put({ command, localOrder, backendOwned: false, draftKey });
+      await store.put({
+        command,
+        localOrder,
+        backendOwned: false,
+        draftKey,
+        admittedAt: new Date().toISOString(),
+        admissionDeadlineAt:
+          command.queueDeadlineAt ??
+          new Date(
+            Date.now() + (command.queueTimeoutMs ?? DEFAULT_GITHUB_QUEUE_TIMEOUT_MS),
+          ).toISOString(),
+      });
     } else if (draftKey !== undefined && existing.draftKey === undefined) {
       await store.put({ ...existing, draftKey });
     }
@@ -226,6 +302,24 @@ export function createIndexedDbGithubJournal(
           !draft.submittedOperationId,
       );
     },
+    async draftScopes() {
+      const scopes = new Map<string, GithubPrScope>();
+      const tx = (await db()).transaction("drafts", "readonly");
+      let cursor = await tx.store.openCursor();
+      while (cursor) {
+        const draft = cursor.value;
+        if (
+          draft.editorSlot &&
+          draft.body.trim() &&
+          !draft.submittedOperationId &&
+          isGithubPrScope(draft.scope)
+        )
+          scopes.set(draft.scope.url, structuredClone(draft.scope));
+        cursor = await cursor.continue();
+      }
+      await tx.done;
+      return [...scopes.values()];
+    },
     admit,
     put: (command) => admit(command),
     async list(scope) {
@@ -236,17 +330,53 @@ export function createIndexedDbGithubJournal(
       return entries.map((entry) => entry.command);
     },
     async entries(scope) {
-      return (
-        await (await db()).getAllFromIndex("admissions", "scope", githubScopeKey(scope))
-      ).sort((a, b) => a.localOrder - b.localOrder);
+      return (await (await db()).getAllFromIndex("admissions", "scope", githubScopeKey(scope)))
+        .map(admissionMetadata)
+        .sort((a, b) => a.localOrder - b.localOrder);
+    },
+    async guardAdmission(scope, start) {
+      // A readwrite transaction is the cross-connection/tab fence, not an HTTP
+      // lock. Clear persistence and ownership acknowledgement cannot interleave
+      // between this snapshot and the synchronous transport kickoff.
+      const tx = (await db()).transaction(["admissions", "batches"], "readwrite");
+      try {
+        const [entries, batches] = await Promise.all([
+          tx.objectStore("admissions").index("scope").getAll(githubScopeKey(scope)),
+          tx.objectStore("batches").getAll(),
+        ]);
+        const result = start(
+          entries.map(admissionMetadata).sort((a, b) => a.localOrder - b.localOrder),
+          batches,
+        );
+        await tx.done;
+        return result;
+      } catch (error) {
+        try {
+          tx.abort();
+        } catch {
+          /* Transaction may already have completed. */
+        }
+        await tx.done.catch(() => {});
+        throw error;
+      }
     },
     async acknowledge(operation, submittedOperationId = operation.command.operationId) {
-      const tx = (await db()).transaction(["admissions", "drafts"], "readwrite");
+      const tx = (await db()).transaction(["admissions", "drafts", "controls"], "readwrite");
       const store = tx.objectStore("admissions");
       const entry = await store.get(submittedOperationId);
       if (entry && (!entry.operation || entry.operation.revision <= operation.revision)) {
         // Backend may have revised the command. Preserve original admission fingerprint.
-        await store.put({ ...entry, backendOwned: true, operation, admissionError: undefined });
+        await store.put({
+          ...entry,
+          backendOwned: true,
+          operation,
+          admissionError: undefined,
+          admissionRetryAt: undefined,
+          admissionRetryable: undefined,
+          admissionTimedOut: undefined,
+          admissionRetryRequestId: undefined,
+          admissionRetryTimeoutMs: undefined,
+        });
         if (entry.draftKey) {
           const draft = await tx.objectStore("drafts").get(entry.draftKey);
           if (draft)
@@ -265,11 +395,55 @@ export function createIndexedDbGithubJournal(
       }
       await tx.done;
     },
-    async admissionFailed(operationId, message) {
+    async admissionFailed(operationId, message, retryAt, retryable, timedOut) {
       const tx = (await db()).transaction("admissions", "readwrite");
       const entry = await tx.store.get(operationId);
-      if (entry && !entry.backendOwned) await tx.store.put({ ...entry, admissionError: message });
+      if (entry && !entry.backendOwned)
+        await tx.store.put({
+          ...entry,
+          admissionError: message,
+          admissionRetryAt: retryAt,
+          admissionRetryable: retryable,
+          admissionTimedOut: timedOut,
+        });
       await tx.done;
+    },
+    async restartAdmissionCycle(operationId, deadlineAt, requestId, timeoutMs) {
+      const tx = (await db()).transaction("admissions", "readwrite");
+      const entry = await tx.store.get(operationId);
+      if (!entry || entry.backendOwned) {
+        tx.abort();
+        await tx.done.catch(() => {});
+        throw new Error("Admission no longer belongs to the local queue");
+      }
+      await tx.store.put({
+        ...entry,
+        admissionError: undefined,
+        admissionRetryAt: undefined,
+        admissionRetryable: undefined,
+        admissionTimedOut: undefined,
+        admissionDeadlineAt: deadlineAt,
+        admissionRetryRequestId: requestId,
+        admissionRetryTimeoutMs: timeoutMs,
+      });
+      await tx.done;
+    },
+    async putBatch(control) {
+      const tx = (await db()).transaction("batches", "readwrite");
+      const prior = await tx.store.get(control.requestId);
+      if (prior && githubCommandFingerprint(prior) !== githubCommandFingerprint(control)) {
+        tx.abort();
+        await tx.done.catch(() => {});
+        throw new Error("Batch request ID already used");
+      }
+      await tx.store.put(structuredClone(control));
+      await tx.done;
+    },
+    async batches() {
+      return (await db()).getAll("batches");
+    },
+    async removeBatch(requestId) {
+      await (await db()).delete("batches", requestId);
     },
     async remove(operationId) {
       const tx = (await db()).transaction("admissions", "readwrite");

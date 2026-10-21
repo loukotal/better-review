@@ -1,9 +1,9 @@
+import { createSignal } from "solid-js";
+
 import {
   isGithubActor,
   isGithubPrScope,
   type GithubActor,
-  type GithubOutboxCommand,
-  type GithubOutboxReceipt,
   type GithubPrScope,
   type GithubWriteAction,
 } from "@better-review/shared";
@@ -11,6 +11,7 @@ import {
 import { configureGithubEditorService } from "./github-editor-service";
 import { createGithubOutbox } from "./github-outbox";
 import { createIndexedDbGithubJournal } from "./github-outbox-journal";
+import { getGithubSyncTimeoutMs } from "./github-queue-settings";
 import { trpc } from "./trpc";
 
 const IDENTITY_KEY = "better-review-github-actor-v1";
@@ -21,6 +22,9 @@ try {
 } catch {
   /* Unknown identity blocks submission, never guesses by login. */
 }
+
+const [currentGithubActor, setCurrentGithubActor] = createSignal(actor);
+export { currentGithubActor };
 
 export function githubPrScope(url: string): GithubPrScope {
   const parsed = new URL(url);
@@ -41,63 +45,23 @@ export function githubPrScope(url: string): GithubPrScope {
   return scope;
 }
 
-const admissions = new Map<string, Promise<GithubOutboxReceipt>>();
-/** IndexedDB UUID order is not dependency order. Admit exact journal parents first. */
-async function enqueueGithubCommand(
-  command: GithubOutboxCommand,
-  ancestors = new Set<string>(),
-): Promise<GithubOutboxReceipt> {
-  if (ancestors.has(command.operationId)) throw new Error("Cyclic local GitHub dependency");
-  const previous = admissions.get(command.operationId);
-  if (previous) return previous;
-  const work = (async () => {
-    const entries = await githubWrites.journal.entries(command.scope);
-    const checked = new Set<string>();
-    const verify = (item: GithubOutboxCommand, visiting: Set<string>) => {
-      if (visiting.has(item.operationId)) throw new Error("Cyclic local GitHub dependency");
-      if (checked.has(item.operationId)) return;
-      const next = new Set([...visiting, item.operationId]);
-      for (const id of item.dependencies) {
-        const dependency = entries.find((entry) => entry.command.operationId === id);
-        if (dependency && !dependency.backendOwned) verify(dependency.command, next);
-      }
-      checked.add(item.operationId);
-    };
-    verify(command, new Set());
-    const path = new Set([...ancestors, command.operationId]);
-    for (const id of command.dependencies) {
-      const parent = entries.find((entry) => entry.command.operationId === id);
-      if (!parent || parent.backendOwned) continue;
-      if (parent.admissionError) throw new Error("Parent admission needs explicit attention");
-      const receipt = await enqueueGithubCommand(parent.command, path);
-      if (receipt.outcome === "rejected") {
-        await githubWrites.journal.admissionFailed(id, receipt.error.message);
-        throw new Error("Parent admission was rejected; dependent content remains local");
-      }
-      await githubWrites.journal.acknowledge(receipt.operation);
-    }
-    return trpc.githubOutbox.enqueue.mutate(command);
-  })();
-  admissions.set(command.operationId, work);
-  try {
-    return await work;
-  } finally {
-    if (admissions.get(command.operationId) === work) admissions.delete(command.operationId);
-  }
-}
-
 export const githubJournal = createIndexedDbGithubJournal();
 export const githubWrites = createGithubOutbox({
   journal: githubJournal,
+  now: () => Date.now(),
   transport: {
-    enqueue: (command) => enqueueGithubCommand(command),
+    enqueue: (command, cycle) =>
+      trpc.githubOutbox.enqueue.mutate(cycle ? { command, cycle } : command),
     snapshot: (scope) => trpc.githubOutbox.snapshot.query(scope),
+    listPending: () => trpc.githubOutbox.pending.query(),
     control: (control) => trpc.githubOutbox.control.mutate(control),
+    batchControl: (control) => trpc.githubOutbox.batchControl.mutate(control),
     heartbeat: async (value) => {
       await trpc.githubOutbox.heartbeat.mutate(value);
     },
   },
 });
+githubWrites.setQueueTimeoutMs(getGithubSyncTimeoutMs());
 configureGithubEditorService(githubJournal, githubPrScope, githubWrites.beginSaving);
 
 export async function refreshGithubActor() {
@@ -105,6 +69,7 @@ export async function refreshGithubActor() {
   // unknown result clears it. Admission/dispatch still check backend/live identity.
   const result = await trpc.githubOutbox.identity.query();
   actor = result.actor ?? undefined;
+  setCurrentGithubActor(actor);
   try {
     if (actor) localStorage.setItem(IDENTITY_KEY, JSON.stringify(actor));
     else localStorage.removeItem(IDENTITY_KEY);
@@ -120,6 +85,7 @@ export function queueGithubWrite(
   draftKey?: string,
   dependencies?: string[],
 ) {
+  githubWrites.setQueueTimeoutMs(getGithubSyncTimeoutMs());
   if (!actor)
     return Promise.reject(
       new Error(

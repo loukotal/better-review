@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/solid-query";
 import { render } from "solid-js/web";
 
 import App from "./App";
+import { AppShell } from "./AppShell";
 import { queryClient, restoreCache } from "./lib/query";
 import { initializeUiTheme } from "./lib/theme";
 import AgentReviewIndexPage from "./pages/AgentReviewIndexPage";
@@ -28,7 +29,7 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 render(
   () => (
     <QueryClientProvider client={queryClient}>
-      <Router>
+      <Router root={AppShell}>
         <Route path="/" component={PrListPage} />
         <Route path="/agent-review" component={AgentReviewIndexPage} />
         <Route path="/agent-review/:sessionId" component={AgentReviewPage} />

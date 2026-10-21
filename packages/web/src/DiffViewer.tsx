@@ -231,6 +231,7 @@ export function DiffViewer(props: Props) {
 
   onMount(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (viewerRef?.closest("[inert]")) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
         event.preventDefault();
         searchInputRef?.focus();

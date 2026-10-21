@@ -1,11 +1,15 @@
 import type {
   GithubActor,
   GithubOutboxCommand,
+  GithubOutboxAdmissionCycle,
+  GithubOutboxBatchControl,
+  GithubOutboxBatchReceipt,
   GithubOutboxControl,
   GithubOutboxControlReceipt,
   GithubOutboxError,
   GithubOutboxHeartbeat,
   GithubOutboxOperation,
+  GithubOutboxPendingScope,
   GithubOutboxReceipt,
   GithubOutboxSnapshot,
   GithubPrScope,
@@ -14,10 +18,15 @@ import type {
 
 /** No network on admission. Unknown cached identity rejects, never binds later. */
 export interface GithubOutbox {
-  enqueue(command: GithubOutboxCommand): Promise<GithubOutboxReceipt>;
+  enqueue(
+    command: GithubOutboxCommand,
+    cycle?: GithubOutboxAdmissionCycle,
+  ): Promise<GithubOutboxReceipt>;
   snapshot(scope: GithubPrScope): Promise<GithubOutboxSnapshot>;
+  listPending(): Promise<GithubOutboxPendingScope[]>;
   heartbeat(heartbeat: GithubOutboxHeartbeat): Promise<void>;
   control(control: GithubOutboxControl): Promise<GithubOutboxControlReceipt>;
+  batchControl(control: GithubOutboxBatchControl): Promise<GithubOutboxBatchReceipt>;
   close(): Promise<void>;
 }
 

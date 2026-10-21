@@ -3,11 +3,16 @@ import type { BrowserGithubState } from "./github-outbox";
 /** Refresh read models for new completions, never replay history or retry a write. */
 export function createGithubSyncRefreshCoordinator(options: {
   refreshPr: (url: string) => Promise<void>;
+  /** Fresh review/mergeability read model; caller owns its query invalidation. */
+  refreshDetail?: (url: string) => Promise<void>;
   refreshList: () => Promise<void>;
+  onReviewCompletion?: () => void;
+  global?: boolean;
   schedule?: (work: () => Promise<void>) => () => void;
 }) {
   const statuses = new Map<string, Map<string, string>>();
   const pending = new Set<string>();
+  const reviewDetails = new Set<string>();
   let approval = false;
   let activeUrl: string | undefined;
   let cancel: (() => void) | undefined;
@@ -46,16 +51,19 @@ export function createGithubSyncRefreshCoordinator(options: {
   async function flush() {
     cancel = undefined;
     if (disposed || running) return;
-    const urls = [...pending].filter((url) => url === activeUrl);
+    const urls = [...pending].filter((url) => options.global || url === activeUrl);
+    const details = [...reviewDetails].filter((url) => options.global || url === activeUrl);
     const approved = approval;
     pending.clear();
+    reviewDetails.clear();
     approval = false;
     running = true;
     if (approved) refreshList();
     // Mark transitions consumed before starting I/O. Read failures never resend writes.
-    await Promise.allSettled(
-      urls.map((url) => Promise.resolve().then(() => options.refreshPr(url))),
-    );
+    await Promise.allSettled([
+      ...urls.map((url) => Promise.resolve().then(() => options.refreshPr(url))),
+      ...details.map((url) => Promise.resolve().then(() => options.refreshDetail?.(url))),
+    ]);
     running = false;
     if (!disposed && (pending.size || approval)) arm();
   }
@@ -79,7 +87,13 @@ export function createGithubSyncRefreshCoordinator(options: {
         )
           continue;
         pending.add(state.scope.url);
-        approval ||= item.command.action.kind === "approve";
+        const review =
+          item.command.action.kind === "approve" ||
+          item.command.action.kind === "request-changes" ||
+          item.command.action.kind === "review-comment";
+        approval ||= review;
+        if (review) options.onReviewCompletion?.();
+        if (review) reviewDetails.add(state.scope.url);
         changed = true;
       }
       if (changed) arm();
@@ -88,6 +102,7 @@ export function createGithubSyncRefreshCoordinator(options: {
       disposed = true;
       cancel?.();
       pending.clear();
+      reviewDetails.clear();
     },
   };
 }

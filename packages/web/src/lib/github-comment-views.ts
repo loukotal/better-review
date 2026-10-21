@@ -1,6 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 
-import type { IssueComment, PRComment } from "@better-review/shared";
+import type { IssueComment, PRComment, PrDetail } from "@better-review/shared";
 
 import type { BrowserGithubOperation } from "./github-outbox";
 import {
@@ -8,12 +8,16 @@ import {
   type GithubCommentView,
   type GithubReadToken,
   type GithubRemoteRead,
+  type GithubRemoteReview,
   type GithubThreadView,
 } from "./github-outbox-projection";
 import { githubPrScope, githubWrites } from "./github-writes";
 
 const projection = createGithubOutboxProjection();
 const reads = new Map<string, { comments: PRComment[]; issueComments: IssueComment[] }>();
+const reviewReads = new Map<string, GithubRemoteReview[]>();
+const commentReadSerials = new Map<string, number>();
+const reviewReadSerials = new Map<string, number>();
 const listeners = new Set<() => void>();
 export function subscribeGithubComments(listener: () => void) {
   listeners.add(listener);
@@ -44,11 +48,11 @@ function normalize(data: {
       })),
     ],
     threads: data.comments.flatMap((raw) =>
-      raw.threadId
+      raw.threadId && typeof raw.isResolved === "boolean"
         ? [
             {
               ref: { source: "remote" as const, kind: "thread" as const, nodeId: raw.threadId },
-              resolved: raw.isResolved ?? false,
+              resolved: raw.isResolved,
               raw,
             },
           ]
@@ -57,10 +61,75 @@ function normalize(data: {
     approvals: [],
   };
 }
+
+/** Canonical GitHub review URLs carry the REST identity used by durable write results. */
+export function acceptGithubDetailRead(token: GithubReadToken, detail: PrDetail) {
+  if (detail.reviews.status !== "available") return false;
+  if (token.serial < (reviewReadSerials.get(token.scope.url) ?? 0)) return false;
+  const reviews: GithubRemoteReview[] = detail.reviews.data.flatMap((review) => {
+    if (
+      !review.commitSha ||
+      !["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"].includes(review.state)
+    )
+      return [];
+    let id: number;
+    try {
+      const link = new URL(review.url);
+      const pr = new URL(detail.url);
+      if (link.origin !== pr.origin || link.pathname.toLowerCase() !== pr.pathname.toLowerCase())
+        return [];
+      const match = /^#pullrequestreview-(\d+)$/.exec(link.hash);
+      if (!match) return [];
+      id = Number(match[1]);
+      if (!Number.isSafeInteger(id) || id <= 0) return [];
+    } catch {
+      return [];
+    }
+    const state = review.state;
+    if (
+      state !== "APPROVED" &&
+      state !== "CHANGES_REQUESTED" &&
+      state !== "COMMENTED" &&
+      state !== "DISMISSED"
+    )
+      return [];
+    return [
+      {
+        id,
+        commitSha: review.commitSha,
+        state,
+        body: review.body,
+        submittedAt: review.submittedAt ?? undefined,
+        url: review.url,
+        raw: review,
+      },
+    ];
+  });
+  const previous = reads.get(token.scope.url) ?? { comments: [], issueComments: [] };
+  const current = githubWrites.getState(token.scope);
+  const confirmed = new Map(
+    [...token.confirmed].filter(([id]) => {
+      const result = current.operations.find((item) => item.command.operationId === id)?.operation
+        ?.result;
+      return result?.kind === "review" || result?.kind === "approval";
+    }),
+  );
+  // Extras and detail are independent network resources. Merge each with the latest
+  // accepted sibling without allowing an older read of that same resource to win.
+  // Keep the original confirmation fence: completion after request start is not evidence.
+  const merged = projection.beginRead(current);
+  if (!projection.acceptRemote({ ...merged, confirmed }, { ...normalize(previous), reviews }))
+    return false;
+  reviewReadSerials.set(token.scope.url, token.serial);
+  reviewReads.set(token.scope.url, reviews);
+  for (const listener of listeners) listener();
+  return true;
+}
 export function acceptGithubCommentRead(
   token: GithubReadToken,
   data: { comments: PRComment[] | null; issueComments: IssueComment[] | null },
 ) {
+  if (token.serial < (commentReadSerials.get(token.scope.url) ?? 0)) return false;
   const previous = reads.get(token.scope.url);
   const next = {
     comments: data.comments ?? previous?.comments ?? [],
@@ -83,7 +152,15 @@ export function acceptGithubCommentRead(
       return false;
     }),
   );
-  if (!projection.acceptRemote({ ...token, confirmed }, normalize(next))) return false;
+  const merged = projection.beginRead(current);
+  if (
+    !projection.acceptRemote(
+      { ...merged, confirmed },
+      { ...normalize(next), reviews: reviewReads.get(token.scope.url) },
+    )
+  )
+    return false;
+  commentReadSerials.set(token.scope.url, token.serial);
   reads.set(token.scope.url, next);
   for (const listener of listeners) listener();
   return true;
@@ -108,11 +185,13 @@ const object = (value: unknown): value is Record<string, unknown> =>
 export function remoteCommentDetails(view: GithubCommentView) {
   const raw = object(view.raw) ? view.raw : undefined;
   const user = raw && object(raw.user) ? raw.user : undefined;
+  const knownLogin =
+    view.author?.login ??
+    view.confirmed?.author.login ??
+    (typeof user?.login === "string" ? user.login : undefined);
   return {
-    login:
-      view.author?.login ??
-      view.confirmed?.author.login ??
-      (typeof user?.login === "string" ? user.login : "GitHub user"),
+    login: knownLogin ?? "GitHub user",
+    knownLogin,
     avatar: typeof user?.avatar_url === "string" ? user.avatar_url : undefined,
     canEdit: raw?.canEdit === true || !!view.localRef || !!view.confirmed,
     url: view.confirmed?.url ?? (typeof raw?.html_url === "string" ? raw.html_url : undefined),
@@ -205,8 +284,10 @@ export function githubThreadForComment(
   comment: GithubCommentView,
   threads: GithubThreadView[],
   operations: BrowserGithubOperation[],
+  comments: GithubCommentView[] = [],
 ): GithubThreadView | undefined {
   if (comment.ref.kind !== "review-comment") return;
+  comment = githubReviewThreadRoot(comment, comments, operations);
   const details = remoteCommentDetails(comment);
   const thread = threads.find((item) =>
     item.ref.source === "remote"
@@ -228,4 +309,50 @@ export function githubThreadForComment(
       pending: false,
       operationIds: [id],
     };
+}
+
+/** Keep local reply ancestry for presentation; the HTTP adapter alone normalizes
+ * the write target to GitHub's root. Edit/delete still use the comment's own ref. */
+export function githubReviewThreadRoot(
+  comment: GithubCommentView,
+  comments: GithubCommentView[],
+  operations: BrowserGithubOperation[],
+  seen = new Set<string>(),
+): GithubCommentView {
+  if (seen.has(comment.key)) return comment;
+  seen.add(comment.key);
+  const creation = operations.find(
+    (item) =>
+      item.command.operationId ===
+      (comment.localRef?.operationId ??
+        (comment.ref.source === "local" ? comment.ref.operationId : undefined)),
+  );
+  const action = creation?.command.action;
+  const target = action?.kind === "reply" ? action.target : undefined;
+  const details = remoteCommentDetails(comment);
+  const parent = comments.find(
+    (candidate) =>
+      candidate.key !== comment.key &&
+      (target?.source === "local"
+        ? candidate.localRef?.operationId === target.operationId ||
+          (candidate.ref.source === "local" && candidate.ref.operationId === target.operationId)
+        : candidate.ref.source === "remote" &&
+          candidate.ref.kind === "review-comment" &&
+          candidate.ref.id === (target?.source === "remote" ? target.id : details.inReplyToId)),
+  );
+  return parent ? githubReviewThreadRoot(parent, comments, operations, seen) : comment;
+}
+
+export function groupGithubReviewComments(
+  comments: GithubCommentView[],
+  operations: BrowserGithubOperation[],
+) {
+  const groups = new Map<string, { root: GithubCommentView; comments: GithubCommentView[] }>();
+  for (const comment of comments) {
+    const root = githubReviewThreadRoot(comment, comments, operations);
+    let group = groups.get(root.key);
+    if (!group) groups.set(root.key, (group = { root, comments: [] }));
+    group.comments.push(comment);
+  }
+  return [...groups.values()];
 }

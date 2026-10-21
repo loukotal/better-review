@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import lockfile from "proper-lockfile";
 
 import {
+  DEFAULT_GITHUB_QUEUE_TIMEOUT_MS,
   isGithubOutboxCommand,
   isGithubRemoteResult,
   type GithubOutboxCommand,
@@ -85,6 +86,9 @@ export class OutboxDatabase {
         }
       }
       const owner = randomUUID();
+      db.exec(
+        "CREATE TABLE IF NOT EXISTS admission_cycles (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)",
+      );
       db.prepare(
         "INSERT INTO owner(singleton,token) VALUES (1,?) ON CONFLICT(singleton) DO UPDATE SET token=excluded.token",
       ).run(owner);
@@ -239,7 +243,10 @@ export class OutboxDatabase {
         .run(key, op.command.operationId);
     }
   }
-  contentDuplicate(command: GithubOutboxCommand, now: number): GithubOutboxOperation | undefined {
+  contentDuplicate(
+    command: GithubOutboxCommand,
+    now: number,
+  ): { operation: GithubOutboxOperation; retryAt?: string } | undefined {
     const semantic = this.semantic(command);
     const rows = this.db
       .prepare(
@@ -263,6 +270,20 @@ export class OutboxDatabase {
       // consumes that original effect; repeating its text is a new creation.
       const creationTargets = new Set<string>();
       const kind = op.command.action.kind;
+      if (
+        (kind === "approve" || kind === "request-changes" || kind === "review-comment") &&
+        this.list(command.scope.url).some(
+          (later) =>
+            later.sequence > op.sequence &&
+            later.status !== "cancelled" &&
+            later.command.expectedActor.id === command.expectedActor.id &&
+            (later.command.action.kind === "approve" ||
+              later.command.action.kind === "request-changes" ||
+              later.command.action.kind === "review-comment") &&
+            this.semantic(later.command).key !== semantic.key,
+        )
+      )
+        continue;
       if (kind === "issue-comment" || kind === "inline-comment" || kind === "reply") {
         const commentKind = kind === "issue-comment" ? "issue-comment" : "review-comment";
         creationTargets.add(
@@ -297,11 +318,23 @@ export class OutboxDatabase {
         })
       )
         continue;
-      return op;
+      return {
+        operation: op,
+        retryAt:
+          op.status === "synced"
+            ? new Date(Date.parse(row.synced_at as string) + 60_000).toISOString()
+            : undefined,
+      };
     }
   }
   private decode(data: string): GithubOutboxOperation {
     const operation: GithubOutboxOperation = JSON.parse(data);
+    operation.queueDeadlineAt ??=
+      operation.command.queueDeadlineAt ??
+      new Date(
+        (Number.isFinite(Date.parse(operation.createdAt)) ? Date.parse(operation.createdAt) : 0) +
+          (operation.command.queueTimeoutMs ?? DEFAULT_GITHUB_QUEUE_TIMEOUT_MS),
+      ).toISOString();
     // Pre-contract JSON may lack retryMode. Project a safe default without
     // rewriting history/fingerprints just because the store was migrated.
     if (!operation.retryMode) {

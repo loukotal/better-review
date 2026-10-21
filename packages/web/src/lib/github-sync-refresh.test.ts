@@ -18,6 +18,9 @@ function action(kind: GithubWriteAction["kind"]): GithubWriteAction {
   switch (kind) {
     case "approve":
       return { kind, expectedHeadSha: "a".repeat(40), body: "" };
+    case "request-changes":
+    case "review-comment":
+      return { kind, expectedHeadSha: "a".repeat(40), body: "Review" };
     case "resolve-thread":
     case "unresolve-thread":
       return { kind, target: { source: "remote", kind: "thread", nodeId: "thread" } };
@@ -72,6 +75,54 @@ function clock() {
   };
 }
 
+test("global observer retains pending evidence across navigation, fences review reads once and batches scopes", async () => {
+  const timer = clock();
+  const extras: string[] = [],
+    details: string[] = [];
+  let lists = 0,
+    fences = 0;
+  const refresh = createGithubSyncRefreshCoordinator({
+    global: true,
+    schedule: timer.schedule,
+    refreshPr: async (url) => {
+      extras.push(url);
+    },
+    refreshDetail: async (url) => {
+      details.push(url);
+    },
+    refreshList: async () => {
+      lists++;
+    },
+    onReviewCompletion: () => {
+      fences++;
+    },
+  });
+  const first = state("queued", ["approve"]);
+  const other = {
+    ...state("queued", ["issue-comment"]),
+    scope: { ...scope, number: 2, url: scope.url.replace("/1", "/2") },
+  };
+  refresh.observe(first);
+  refresh.observe(other);
+  refresh.observe(undefined);
+  refresh.observe({
+    ...first,
+    operations: first.operations.map((item) => ({ ...item, status: "synced" })),
+  });
+  const complete = {
+    ...other,
+    operations: other.operations.map((item) => ({ ...item, status: "synced" as const })),
+  };
+  refresh.observe(complete);
+  refresh.observe(complete);
+  assert.equal(fences, 1, "Fence must run at observation, before batched network work");
+  await timer.flush();
+  assert.deepEqual(extras, [scope.url, other.scope.url]);
+  assert.deepEqual(details, [scope.url]);
+  assert.equal(lists, 1);
+  refresh.dispose();
+});
+
 test("batched comment/thread completions refresh extras once, never the PR list; repeated snapshots do nothing", async () => {
   const timer = clock(),
     reads: string[] = [];
@@ -123,6 +174,39 @@ test("synced history is a baseline on mount/remount, not an invalidation replay"
     refresh.dispose();
   }
   assert.equal(calls, 0);
+});
+
+test("review actions coalesce detail/list refreshes and ignore history and repeated snapshots", async () => {
+  const timer = clock();
+  let prs = 0,
+    lists = 0,
+    details = 0;
+  const refresh = createGithubSyncRefreshCoordinator({
+    schedule: timer.schedule,
+    refreshPr: async () => {
+      prs++;
+    },
+    refreshList: async () => {
+      lists++;
+    },
+    refreshDetail: async () => {
+      details++;
+    },
+  });
+  const kinds = ["approve", "request-changes", "review-comment"] as const;
+  refresh.observe(state("synced", [...kinds]));
+  await timer.flush();
+  assert.equal(prs + lists, 0);
+  refresh.observe(state("queued", [...kinds]));
+  refresh.observe(state("synced", [...kinds]));
+  await timer.flush();
+  assert.equal(prs, 1);
+  assert.equal(lists, 1);
+  assert.equal(details, 1);
+  refresh.observe(state("synced", [...kinds]));
+  await timer.flush();
+  assert.equal(prs + lists, 2);
+  refresh.dispose();
 });
 
 test("approval completion batch refreshes list once; read failure cannot replay completion or resend", async () => {

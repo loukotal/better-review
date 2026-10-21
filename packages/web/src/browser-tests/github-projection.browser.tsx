@@ -533,14 +533,24 @@ export async function testAppGithubCommentProjectionInBrowser() {
   const approvalOperation = [...operations.values()].find(
     (item) => item.command.action.kind === "approve",
   )!;
-  const recovery = document.querySelector<HTMLButtonElement>(
-    'button[aria-label="GitHub pending writes"]',
-  )!;
+  const recovery = document.querySelector<HTMLButtonElement>('button[aria-label="GitHub queue"]')!;
   check(
     !document.querySelector('[aria-label="GitHub pending writes"] [data-operation-id]'),
     "Global recovery mounted operation dump without a click",
   );
   recovery.click();
+  await wait(
+    () =>
+      !!document.querySelector(
+        `[data-github-queue-action="${approvalOperation.command.operationId}"] summary`,
+      ),
+    "Approval queue row missing",
+  );
+  document
+    .querySelector<HTMLElement>(
+      `[data-github-queue-action="${approvalOperation.command.operationId}"] summary`,
+    )!
+    .click();
   await wait(
     () =>
       !!document.querySelector(
@@ -569,7 +579,7 @@ export async function testAppGithubCommentProjectionInBrowser() {
   }
   check(
     ![...document.querySelectorAll("button")].some(
-      (button) => button.textContent?.trim() === "Approved",
+      (button) => button.textContent?.trim() === "You approved",
     ),
     "Pending approval falsely appeared approved",
   );
@@ -689,7 +699,14 @@ export async function testAppGithubCommentProjectionInBrowser() {
     target: { source: "remote", kind: "thread", nodeId: "orphan-thread" },
   });
   await wait(() => operations.has(orphan.operationId), "Orphan operation was not admitted");
-  document.querySelector<HTMLButtonElement>('button[aria-label="GitHub pending writes"]')!.click();
+  document.querySelector<HTMLButtonElement>('button[aria-label="GitHub queue"]')!.click();
+  await wait(
+    () => !!document.querySelector(`[data-github-queue-action="${orphan.operationId}"] summary`),
+    "Orphan queue row missing",
+  );
+  document
+    .querySelector<HTMLElement>(`[data-github-queue-action="${orphan.operationId}"] summary`)!
+    .click();
   await wait(
     () =>
       !!document.querySelector(

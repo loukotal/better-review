@@ -1,6 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 
-import type { StoredSession } from "@better-review/shared";
+import type { StoredSession, ReviewModelIntent } from "@better-review/shared";
 
 import type { ReviewClient } from "./review-client";
 
@@ -188,7 +188,15 @@ export function formatSelectionQuestion(selection: SourceSelection, question: st
 /** One in-flight operation; stable receipt key and created session survive ambiguous failures. */
 export function createSelectionSender() {
   let pending = false;
-  let attempt: { identity: string; key: string; sessionId?: string; sent?: boolean } | undefined;
+  let attempt:
+    | {
+        identity: string;
+        key: string;
+        sessionId?: string;
+        sent?: boolean;
+        model?: ReviewModelIntent;
+      }
+    | undefined;
   return {
     async send(options: {
       draftId: string;
@@ -197,13 +205,18 @@ export function createSelectionSender() {
       isCurrent: () => boolean;
       createSession: () => Promise<string>;
       client: (id: string) => Pick<ReviewClient, "history" | "send">;
+      model?: ReviewModelIntent;
     }): Promise<string | null> {
       if (pending) return null;
       pending = true;
       try {
         const identity = JSON.stringify([options.draftId, options.body, options.target]);
         if (!attempt || attempt.identity !== identity)
-          attempt = { identity, key: crypto.randomUUID() };
+          attempt = {
+            identity,
+            key: crypto.randomUUID(),
+            model: options.model ? { ...options.model } : undefined,
+          };
         const current = attempt;
         if (!options.isCurrent())
           throw new Error("The PR or revision changed. Dismiss and select source again.");
@@ -221,7 +234,7 @@ export function createSelectionSender() {
             "That conversation is busy. Wait or choose another conversation; your draft is preserved.",
           );
         current.sent = true;
-        await client.send(options.body, current.key);
+        await client.send(options.body, current.key, current.model);
         return current.sessionId;
       } finally {
         pending = false;

@@ -663,12 +663,20 @@ export async function testAppAnnotationNavigationInBrowser(
         };
         let version = 0;
         const replay = async () => {
-          await waitFor(() => !!snapshotStream, "Snapshot stream not attached");
-          snapshotStream!.enqueue(
-            new TextEncoder().encode(
-              `event: snapshot\ndata: ${JSON.stringify({ version: ++version, snapshot })}\n\n`,
-            ),
-          );
+          await waitFor(() => {
+            const stream = snapshotStream;
+            if (!stream) return false;
+            try {
+              stream.enqueue(
+                new TextEncoder().encode(
+                  `event: snapshot\ndata: ${JSON.stringify({ version: ++version, snapshot })}\n\n`,
+                ),
+              );
+              return true;
+            } catch {
+              return false;
+            }
+          }, "Snapshot stream not attached");
           await settle();
         };
         inlineCard()!
@@ -1153,19 +1161,22 @@ export async function testAppAnnotationNavigationInBrowser(
         post.expectedHeadSha !== core.headSha
       )
         throw new Error("Comment transport lost full path/line/side/body/revision");
-      document
-        .querySelector<HTMLButtonElement>('button[aria-label="GitHub pending writes"]')
-        ?.click();
+      document.querySelector<HTMLButtonElement>('button[aria-label="GitHub queue"]')?.click();
+      await waitFor(
+        () => !!document.querySelector("[data-github-queue-action] > summary"),
+        "Rejected action queue row missing",
+      );
+      document.querySelector<HTMLElement>("[data-github-queue-action] > summary")!.click();
       await waitFor(
         () =>
           !!document
-            .querySelector('[aria-label="GitHub pending writes"]')
+            .querySelector("[popover]:popover-open [data-operation-id]")
             ?.textContent?.includes("fixture comment rejected"),
         "Rejected admission must retain a visible outbox error",
       );
       if (
         !document
-          .querySelector('[aria-label="GitHub pending writes"]')
+          .querySelector("[popover]:popover-open [data-operation-id]")
           ?.textContent?.includes("User-edited finding draft")
       )
         throw new Error("Rejected admission dropped journaled content");

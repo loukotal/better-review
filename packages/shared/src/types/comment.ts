@@ -22,6 +22,10 @@ export interface PRComment {
   created_at: string;
   /** GitHub REST modification time; absent in older cached review-comment records. */
   updated_at?: string;
+  /** Comparison head recorded by GitHub, not an authoritative LEFT-side source SHA. */
+  commit_id?: string;
+  /** Original comparison head for outdated comments; does not record the original base. */
+  original_commit_id?: string;
   in_reply_to_id?: number;
   /** Whether the current user can edit/delete this comment */
   canEdit: boolean;
@@ -29,6 +33,8 @@ export interface PRComment {
   isResolved?: boolean;
   /** GraphQL thread node ID (for resolve/unresolve operations) */
   threadId?: string;
+  /** Missing/unavailable membership or resolution must not be rendered as unresolved. */
+  threadMetadataStatus?: "available" | "unknown";
 }
 
 /**

@@ -5,6 +5,9 @@ import {
   isGithubOutboxCommand,
   isGithubOutboxControl,
   isGithubRemoteResult,
+  isGithubQueueTimeoutMs,
+  isGithubOutboxBatchControl,
+  isGithubOutboxAdmissionInput,
 } from "./github-outbox";
 
 const id = "11111111-1111-4111-8111-111111111111";
@@ -24,6 +27,30 @@ const command = {
   dependencies: [],
 };
 
+test("queue time policy and batch/cycle inputs reject unbounded or malformed scheduling", () => {
+  for (const value of [60_000, 300_000, 900_000, 3_600_000])
+    assert.ok(isGithubQueueTimeoutMs(value));
+  for (const value of [0, NaN, Infinity, 59_999, 3_600_001, 60_000.5, "300000"])
+    assert.equal(isGithubQueueTimeoutMs(value), false);
+  assert.ok(isGithubOutboxCommand({ ...command, queueDeadlineAt: "2026-10-21T12:00:00Z" }));
+  assert.equal(isGithubOutboxCommand({ ...command, queueDeadlineAt: "never" }), false);
+  assert.equal(isGithubOutboxCommand({ ...command, queueTimeoutMs: Infinity }), false);
+  const batch = { kind: "clear", requestId: id, operations: [], commands: [command] };
+  assert.ok(isGithubOutboxBatchControl(batch));
+  assert.equal(isGithubOutboxBatchControl({ ...batch, commands: [command, command] }), false);
+  assert.equal(isGithubOutboxBatchControl({ ...batch, queueTimeoutMs: Infinity }), false);
+  const cycle = {
+    requestId: parent,
+    queueTimeoutMs: 300_000,
+    queueDeadlineAt: "2026-10-21T12:00:00Z",
+  };
+  assert.ok(isGithubOutboxAdmissionInput({ command, cycle }));
+  assert.equal(
+    isGithubOutboxAdmissionInput({ command, cycle: { ...cycle, queueTimeoutMs: -1 } }),
+    false,
+  );
+});
+
 test("outbox admission requires canonical scope and an explicit stable actor", () => {
   assert.ok(isGithubOutboxCommand(command));
   assert.equal(isGithubOutboxCommand({ ...command, expectedActor: { login: "reviewer" } }), false);
@@ -39,6 +66,40 @@ test("outbox admission requires canonical scope and an explicit stable actor", (
     isGithubOutboxCommand({ ...command, scope: { ...scope, host: "example.com" } }),
     false,
   );
+});
+
+test("review actions require nonblank bodies and pinned SHA; persisted approvals stay valid", () => {
+  for (const kind of ["request-changes", "review-comment"]) {
+    const action = { kind, expectedHeadSha: "a".repeat(40), body: "Review" };
+    assert.ok(isGithubOutboxCommand({ ...command, action }));
+    for (const body of ["", " \n\t", null])
+      assert.equal(isGithubOutboxCommand({ ...command, action: { ...action, body } }), false);
+    assert.equal(
+      isGithubOutboxCommand({ ...command, action: { ...action, expectedHeadSha: "main" } }),
+      false,
+    );
+  }
+  assert.ok(
+    isGithubRemoteResult({ kind: "approval", id: 1, url: scope.url, commitSha: "a".repeat(40) }),
+  );
+  const review = {
+    kind: "review",
+    id: 1,
+    url: scope.url,
+    commitSha: "a".repeat(40),
+    state: "CHANGES_REQUESTED",
+    body: "Review",
+    author: command.expectedActor,
+    submittedAt: "2026-01-01T00:00:00Z",
+  };
+  assert.ok(isGithubRemoteResult(review));
+  for (const patch of [
+    { state: "APPROVED" },
+    { submittedAt: undefined },
+    { author: undefined },
+    { body: undefined },
+  ])
+    assert.equal(isGithubRemoteResult({ ...review, ...patch }), false);
 });
 
 test("local reply targets require explicit non-self dependencies", () => {

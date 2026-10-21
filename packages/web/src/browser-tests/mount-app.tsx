@@ -6,11 +6,25 @@ import superjson from "superjson";
 import type { ReviewSnapshot } from "@better-review/shared";
 
 import App from "../App";
+import { AppShell } from "../AppShell";
 import { queryClient, queryKeys, type PrExtrasData } from "../lib/query";
+import PrListPage from "../pages/PrListPage";
+import { prDetailFixture } from "./pr-detail-fixture";
 
 const fixturePrUrl = "https://github.com/browser-fixture/isolated/pull/1";
 const fixtureHeadSha = "a".repeat(40);
 const base = "b".repeat(40);
+export const fixtureModel = {
+  providerId: "fixture",
+  modelId: "offline",
+  name: "Offline fixture",
+  reasoning: false,
+  thinkingLevels: ["off"],
+  variants: [],
+  releaseDate: "",
+  variant: null,
+  thinkingLevel: "off",
+};
 const diff =
   "diff --git a/src/example.ts b/src/example.ts\n--- a/src/example.ts\n+++ b/src/example.ts\n@@ -8,3 +8,3 @@\n before\n-old\n+new\n after\n";
 
@@ -26,6 +40,9 @@ export async function mountAppFixture(
     mountTimeoutMs?: number;
     waitForFiles?: boolean;
     searchParams?: Record<string, string>;
+    /** Existing diff fixtures explicitly enter Changes. Overview tests opt out. */
+    defaultTab?: "changes" | "overview" | "checks" | null;
+    initialPath?: string;
   } = {},
 ) {
   const prUrl = options.prUrl ?? fixturePrUrl;
@@ -36,6 +53,7 @@ export async function mountAppFixture(
     "githubOutbox.capability": { version: 1, durableAdmission: true },
     "githubOutbox.identity": { actor: { id: 42, login: "browser-fixture" } },
     "githubOutbox.heartbeat": { ok: true },
+    "githubOutbox.pending": [],
     "githubOutbox.snapshot": {
       scope: {
         host: "github.com",
@@ -48,6 +66,8 @@ export async function mountAppFixture(
       operations: [],
     },
     "prs.list": { prs: [] },
+    "prDetail.get": prDetailFixture(prUrl, headSha),
+    "prDetail.refresh": prDetailFixture(prUrl, headSha),
     "prReview.getSession": { session: null, sessions: [], headSha },
     "prReview.sessions": { sessions: [] },
     "prReview.listSessions": { sessions: [] },
@@ -65,9 +85,9 @@ export async function mountAppFixture(
       sessionHeadSha: headSha,
       sessionScope: { mode: "commit", commitSha: base },
     },
-    "models.current": { provider: "fixture", modelId: "offline", name: "Offline fixture" },
+    "models.current": { ...fixtureModel, selectionSource: "saved" },
     "models.setCurrent": {
-      model: { provider: "fixture", modelId: "offline", name: "Offline fixture" },
+      model: fixtureModel,
     },
     "pr.fileContent": {
       oldContent: Array.from({ length: 12 }, (_, i) =>
@@ -90,9 +110,16 @@ export async function mountAppFixture(
       const payload = superjson.deserialize(
         JSON.parse(init?.body ? String(init.body) : (url.searchParams.get("input") ?? "{}")),
       );
+      const result = await options.procedures[procedure](payload);
+      // Model callbacks often only count calls or override an ID. Retain the complete
+      // saved-selection fixture contract unless the callback explicitly overrides it.
+      const data =
+        procedure === "models.current" && result && typeof result === "object"
+          ? { ...fixtureModel, selectionSource: "saved", ...result }
+          : result;
       return new Response(
         JSON.stringify({
-          result: { data: superjson.serialize(await options.procedures[procedure](payload)) },
+          result: { data: superjson.serialize(data) },
         }),
         { headers: { "content-type": "application/json" } },
       );
@@ -156,13 +183,15 @@ export async function mountAppFixture(
   history.replaceState(
     null,
     "",
-    `/review?${new URLSearchParams({ prUrl, ...options.searchParams })}`,
+    options.initialPath ??
+      `/review?${new URLSearchParams({ prUrl, ...(options.defaultTab === null ? {} : { tab: options.defaultTab ?? "changes" }), ...options.searchParams })}`,
   );
   const dispose = render(
     () => (
       <QueryClientProvider client={queryClient}>
-        <Router>
+        <Router root={AppShell}>
           <Route path="/review" component={App} />
+          <Route path="/" component={PrListPage} />
         </Router>
       </QueryClientProvider>
     ),

@@ -364,11 +364,19 @@ export async function testAppGithubDeleteResolveInBrowser() {
     githubWrites.getState(scope).pendingCount === 0,
     "History regression requires zero pending writes",
   );
-  const recovery = document.querySelector<HTMLButtonElement>(
-    'button[aria-label="GitHub saved content"]',
-  );
+  const recovery = document.querySelector<HTMLButtonElement>('button[aria-label="GitHub queue"]');
   check(!!recovery && !recovery.innerText.trim(), "Retired deletion lost icon-only history access");
   recovery!.click();
+  await wait(
+    () =>
+      [...document.querySelectorAll("button")].some(
+        (button) => button.textContent?.trim() === "Drafts & history",
+      ),
+    "History view toggle missing",
+  );
+  [...document.querySelectorAll("button")]
+    .find((button) => button.textContent?.trim() === "Drafts & history")!
+    .click();
   await wait(
     () =>
       !!document.querySelector(

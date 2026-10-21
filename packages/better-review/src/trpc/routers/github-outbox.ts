@@ -1,7 +1,8 @@
 import { TRPCError } from "@trpc/server";
 
 import {
-  isGithubOutboxCommand,
+  isGithubOutboxAdmissionInput,
+  isGithubOutboxBatchControl,
   isGithubOutboxControl,
   isGithubOutboxHeartbeat,
   isGithubPrScope,
@@ -24,9 +25,17 @@ export const githubOutboxRouter = router({
     return { version: 1 as const, durableAdmission: true as const };
   }),
   identity: publicProcedure.query(() => ({ actor: getGithubOutboxRuntime().actor() })),
+  pending: publicProcedure.query(() => getGithubOutboxRuntime().outbox.listPending()),
+  batchControl: publicProcedure
+    .input(validate(isGithubOutboxBatchControl))
+    .mutation(({ input }) => getGithubOutboxRuntime().outbox.batchControl(input)),
   enqueue: publicProcedure
-    .input(validate(isGithubOutboxCommand))
-    .mutation(({ input }) => getGithubOutboxRuntime().outbox.enqueue(input)),
+    .input(validate(isGithubOutboxAdmissionInput))
+    .mutation(({ input }) =>
+      "command" in input
+        ? getGithubOutboxRuntime().outbox.enqueue(input.command, input.cycle)
+        : getGithubOutboxRuntime().outbox.enqueue(input),
+    ),
   snapshot: publicProcedure
     .input(validate(isGithubPrScope))
     .query(({ input }) => getGithubOutboxRuntime().outbox.snapshot(input)),

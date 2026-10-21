@@ -1,7 +1,11 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { createSignal } from "solid-js";
 
-import { normalizeSourcePath, type ResolvedSource } from "@better-review/shared";
+import {
+  normalizeSourcePath,
+  type ResolvedSource,
+  type ReviewModelIntent,
+} from "@better-review/shared";
 
 import type { SelectionEditorDraft } from "../components/AnchoredSelectionEditor";
 import type { InlineFindingDraft } from "../components/InlineFindingComment";
@@ -212,6 +216,7 @@ interface QuestionDestination {
   isCurrent: () => boolean;
   createSession: () => Promise<string>;
   client: (id: string) => Pick<ReviewClient, "history" | "send">;
+  model?: ReviewModelIntent;
 }
 
 /** Standalone chat panels use the same delivery implementation as the review page. */

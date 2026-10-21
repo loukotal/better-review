@@ -1,9 +1,10 @@
 import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
-import { useSearchParams, A } from "@solidjs/router";
+import { useSearchParams, useLocation, A } from "@solidjs/router";
 import {
   type Component,
   createSignal,
   createEffect,
+  createRenderEffect,
   createMemo,
   Show,
   For,
@@ -13,7 +14,7 @@ import {
   batch,
 } from "solid-js";
 
-import type { PrStatus, PrInfo } from "@better-review/shared";
+import type { PrStatus, PrInfo, PrDetail } from "@better-review/shared";
 import type { ResolvedSource } from "@better-review/shared";
 
 import { ChatPanel } from "./ChatPanel";
@@ -24,10 +25,13 @@ import { CommitNavigator } from "./components/CommitNavigator";
 import { DiffStatsBadge } from "./components/DiffStatsBadge";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
 import { GithubCommentCard } from "./components/GithubCommentCard";
-import { GithubPendingPanel } from "./components/GithubPendingPanel";
 import { InlineFindingComment } from "./components/InlineFindingComment";
 import { InlineSourceView } from "./components/InlineSourceView";
+import { PrChecks } from "./components/PrChecks";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
+import { PrMergePanel } from "./components/PrMergePanel";
+import { PrOverview, type PrDiscussionLocation } from "./components/PrOverview";
+import { PrReviewActions } from "./components/PrReviewActions";
 import { PrStatusBar } from "./components/PrStatusBar";
 import { ReadingDiffEmpty, ReadingDiffSummary } from "./components/ReadingDiffState";
 import { ReviewModeToggle } from "./components/ReviewModeToggle";
@@ -62,15 +66,36 @@ import {
   githubLocationInPatch,
   githubThreadForComment,
 } from "./lib/github-comment-views";
-import { githubPrScope, githubWrites, queueGithubWrite } from "./lib/github-writes";
+import {
+  currentGithubActor,
+  githubPrScope,
+  githubWrites,
+  queueGithubWrite,
+} from "./lib/github-writes";
+import {
+  resolvePrTab,
+  prListReturnPath,
+  prListBackSteps,
+  advancePrLinkState,
+  prQueryChanges,
+  prPageHref,
+  type PrTab,
+} from "./lib/pr-navigation";
 import { preserveReviewPosition } from "./lib/preserve-review-position";
 import {
   queryKeys,
   api,
   queryClient,
   fetchPrCore,
+  fetchPrDetail,
+  retainPrDetailForDisplay,
+  refreshPrDetail,
   fetchPrExtras,
+  getCachedPrExtras,
+  refreshPrExtras,
+  refreshPrListAfterReview,
   type IssueComment,
+  type PrExtrasData,
   getReviewedFiles,
   toggleReviewedFile,
   getReviewOrder,
@@ -118,6 +143,133 @@ interface QueuedPr {
 const AppContent: Component = () => {
   const { setPrUrl: setContextPrUrl } = usePrContext();
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const updatePrParams = (params: Record<string, string | undefined>, replace = false) => {
+    if (!prQueryChanges(location.search, params)) return;
+    setSearchParams(params, {
+      replace,
+      state: replace ? location.state : advancePrLinkState(location.state),
+    });
+  };
+  const activeTab = createMemo(() => resolvePrTab(searchParams));
+  const changesActive = () => activeTab() === "changes";
+  const [changesVisited, setChangesVisited] = createSignal(false);
+  const [detail, setDetail] = createSignal<PrDetail>();
+  const [detailView, setDetailView] = createSignal<PrDetail>();
+  const [detailStaleNotice, setDetailStaleNotice] = createSignal<string>();
+  const publishDetail = (data: PrDetail) => {
+    const view = retainPrDetailForDisplay(detailView(), data);
+    setDetail(data);
+    setDetailView(view.data);
+    setDetailStaleNotice(view.stale.length ? view.stale.join(" · ") : undefined);
+  };
+  const displayMetadata = () => {
+    const section = detailView()?.metadata;
+    return section?.status === "available" ? section.data : undefined;
+  };
+  const [detailError, setDetailError] = createSignal<string>();
+  const mergeDetail = createMemo<PrDetail | undefined>(() => {
+    const data = detail();
+    return data && detailError()
+      ? {
+          ...data,
+          mergeCapabilities: {
+            status: "unavailable",
+            message:
+              "Current merge permissions could not be refreshed. Refresh details before merging.",
+          },
+        }
+      : data;
+  });
+  const [refreshingDetail, setRefreshingDetail] = createSignal(false);
+  const [discussionSourceNotice, setDiscussionSourceNotice] = createSignal<string>();
+  const [commentsUnavailable, setCommentsUnavailable] = createSignal(false);
+  const [issueCommentsUnavailable, setIssueCommentsUnavailable] = createSignal(false);
+  const [reviewThreads, setReviewThreads] = createSignal<PrExtrasData["reviewThreads"]>();
+  let changesRoot: HTMLDivElement | undefined;
+  let reviewFocus:
+    | {
+        element: HTMLElement;
+        selection?: [number | null, number | null, "forward" | "backward" | "none" | null];
+      }
+    | undefined;
+  const rememberReviewFocus = () => {
+    const element = document.activeElement;
+    if (
+      !(element instanceof HTMLElement) ||
+      (!changesRoot?.contains(element) && !element.closest('[aria-label="Ask about selection"]'))
+    )
+      return;
+    reviewFocus = {
+      element,
+      selection:
+        element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement
+          ? [element.selectionStart, element.selectionEnd, element.selectionDirection]
+          : undefined,
+    };
+  };
+  const detailMetadata = () => {
+    const section = detail()?.metadata;
+    return section?.status === "available" ? section.data : undefined;
+  };
+  const detailHead = () => detailMetadata()?.head.sha;
+  const overviewApprovalOperations = () =>
+    outboxOperations().filter(
+      (item) =>
+        item.command.action.kind === "approve" &&
+        item.command.expectedActor.id === currentGithubActor()?.id &&
+        item.command.action.expectedHeadSha === detailHead() &&
+        item.status !== "cancelled",
+    );
+  const overviewApprovalState = () =>
+    overviewApprovalOperations().some((item) => item.status !== "synced")
+      ? ("pending" as const)
+      : prStatus()?.viewerApproval?.commitSha === detailHead() &&
+          prStatus()?.viewerApproval?.login === currentGithubActor()?.login &&
+          !!detailHead()
+        ? ("synced" as const)
+        : undefined;
+  const selectTab = (tab: PrTab) => {
+    updatePrParams({ tab });
+  };
+  // Run before JSX hides/inerts Changes, including browser history transitions.
+  createRenderEffect(
+    on(
+      changesActive,
+      (active, previous) => {
+        if (previous && !active) rememberReviewFocus();
+        if (!active) return;
+        const saved = reviewFocus;
+        const focusAtTransition = document.activeElement;
+        requestAnimationFrame(() => {
+          if (!changesActive() || !saved?.element.isConnected || saved.element.closest("[inert]"))
+            return;
+          if (
+            document.activeElement !== focusAtTransition ||
+            (focusAtTransition !== document.body &&
+              focusAtTransition !== document.documentElement &&
+              focusAtTransition !== saved.element &&
+              !(
+                focusAtTransition instanceof Element &&
+                focusAtTransition.closest('[aria-label="Pull request tabs"]')
+              ))
+          )
+            return;
+          saved.element.focus({ preventScroll: true });
+          if (
+            saved.selection &&
+            (saved.element instanceof HTMLTextAreaElement ||
+              saved.element instanceof HTMLInputElement)
+          ) {
+            const [start, end, direction] = saved.selection;
+            if (start !== null && end !== null)
+              saved.element.setSelectionRange(start, end, direction ?? undefined);
+          }
+        });
+      },
+      { defer: true },
+    ),
+  );
   const [prUrl, setPrUrl] = createSignal("");
   const [switchingPr, setSwitchingPr] = createSignal(false);
   const [conversationOpen, setConversationOpen] = createSignal(false);
@@ -184,6 +336,15 @@ const AppContent: Component = () => {
     headSha?: string | null;
     comparisonBaseSha?: string | null;
   }>({});
+  const ownApprovalOperations = createMemo(() =>
+    outboxOperations().filter(
+      (item) =>
+        item.command.action.kind === "approve" &&
+        item.command.expectedActor.id === currentGithubActor()?.id &&
+        item.command.action.expectedHeadSha === diffRevision().headSha &&
+        item.status !== "cancelled",
+    ),
+  );
   let diffScrollRef: HTMLDivElement | undefined;
 
   // Panel visibility
@@ -298,7 +459,7 @@ const AppContent: Component = () => {
       comparisonBaseSha: diffRevision().comparisonBaseSha,
       commitSha: currentCommitSha(),
       commitScope: reviewMode() === "commit",
-      loading: loading() || loadingCommits() || switchingPr(),
+      loading: !changesActive() || loading() || loadingCommits() || switchingPr(),
       files: files(),
     }),
     {
@@ -553,54 +714,36 @@ const AppContent: Component = () => {
   };
 
   // Navigate to next commit
-  const goToNextCommit = async () => {
+  const goToNextCommit = () => {
     const idx = currentCommitIndex();
     const c = commits();
     if (idx < c.length - 1) {
-      setCurrentCommitIndex(idx + 1);
-      await loadCommitDiff(c[idx + 1].sha);
+      selectCommit(idx + 1);
     }
   };
 
   // Navigate to previous commit
-  const goToPrevCommit = async () => {
+  const goToPrevCommit = () => {
     const idx = currentCommitIndex();
-    const c = commits();
     if (idx > 0) {
-      setCurrentCommitIndex(idx - 1);
-      await loadCommitDiff(c[idx - 1].sha);
+      selectCommit(idx - 1);
     }
   };
 
   // Select specific commit
-  const selectCommit = async (index: number) => {
+  const selectCommit = (index: number) => {
     const c = commits();
     if (index >= 0 && index < c.length) {
-      setCurrentCommitIndex(index);
-      await loadCommitDiff(c[index].sha);
+      updatePrParams({ mode: "commit", commit: c[index].sha.slice(0, 7) });
     }
-  };
-
-  // Switch to commit mode
-  const switchToCommitMode = async () => {
-    setReviewMode("commit");
-    const c = commits();
-    if (c.length > 0 && !commitDiff()) {
-      await loadCommitDiff(c[0].sha);
-    }
-  };
-
-  // Switch to full mode
-  const switchToFullMode = () => {
-    setReviewMode("full");
   };
 
   // Handle mode change
   const handleModeChange = (mode: ReviewMode) => {
     if (mode === "commit") {
-      switchToCommitMode();
+      selectCommit(Math.min(currentCommitIndex(), commits().length - 1));
     } else {
-      switchToFullMode();
+      updatePrParams({ mode: undefined, commit: undefined });
     }
   };
 
@@ -634,6 +777,7 @@ const AppContent: Component = () => {
   // Keyboard shortcut for focus mode
   onMount(() => {
     const handler = (e: KeyboardEvent) => {
+      if (!changesActive()) return;
       // Don't trigger in input/textarea/contenteditable
       const tag = (e.target as HTMLElement)?.tagName;
       const isEditable = (e.target as HTMLElement)?.isContentEditable;
@@ -648,7 +792,7 @@ const AppContent: Component = () => {
       }
     };
     window.addEventListener("keydown", handler);
-    // Cleanup on unmount would go here if needed
+    onCleanup(() => window.removeEventListener("keydown", handler));
   });
 
   // Fetch PR queue on mount
@@ -671,27 +815,27 @@ const AppContent: Component = () => {
     }
   });
 
-  // Load PR from URL query param on mount
-  onMount(() => {
-    const urlPr = searchParams.prUrl;
-    const prUrlValue = Array.isArray(urlPr) ? urlPr[0] : urlPr;
-    if (prUrlValue && !initialLoadTriggered()) {
-      setPrUrl(prUrlValue);
-      setInitialLoadTriggered(true);
-      // Call loadPr directly instead of relying on form DOM element
-      setTimeout(() => {
-        loadPr(new Event("submit"));
-      }, 0);
-    }
-  });
-
-  // Sync URL when PR is loaded
-  createEffect(() => {
-    const loaded = loadedPrUrl();
-    if (loaded) {
-      setSearchParams({ prUrl: loaded });
-    }
-  });
+  // Same-route PR navigation must load the new PR rather than retain its predecessor's status.
+  let routeLoadRequest = 0;
+  onCleanup(() => routeLoadRequest++);
+  createEffect(
+    on(
+      () => searchParams.prUrl,
+      (urlPr) => {
+        const request = ++routeLoadRequest;
+        const prUrlValue = Array.isArray(urlPr) ? urlPr[0] : urlPr;
+        if (prUrlValue && (!initialLoadTriggered() || prUrlValue !== prUrl())) {
+          setPrUrl(prUrlValue);
+          setInitialLoadTriggered(true);
+          // Call loadPr directly instead of relying on form DOM element
+          setTimeout(() => {
+            if (request === routeLoadRequest && prUrl() === prUrlValue)
+              void loadPr(new Event("submit"), true);
+          }, 0);
+        }
+      },
+    ),
+  );
 
   // Load saved review state when PR changes
   createEffect(() => {
@@ -713,28 +857,33 @@ const AppContent: Component = () => {
     }
   });
 
-  // Sync commit mode to URL params (using commit SHA for stable/shareable URLs)
+  // URL is authoritative on entry and Back/Forward; hydration never writes history.
   createEffect(
     on(
-      () => [reviewMode(), currentCommitIndex(), commits()] as const,
-      ([mode, idx, c]) => {
-        if (loadedPrUrl()) {
-          if (mode === "commit" && c[idx]) {
-            setSearchParams({
-              prUrl: loadedPrUrl()!,
-              mode: "commit",
-              commit: c[idx].sha.slice(0, 7),
-            });
-          } else {
-            setSearchParams({
-              prUrl: loadedPrUrl()!,
-              mode: undefined,
-              commit: undefined,
-            });
-          }
+      () =>
+        [
+          searchParams.mode,
+          searchParams.commit,
+          commits(),
+          loadedPrUrl(),
+          loading(),
+          changesVisited(),
+        ] as const,
+      ([mode, commit, available, loaded, pending, visited]) => {
+        if (!visited || pending || !loaded || loaded !== prUrl()) return;
+        if (mode !== "commit" || !available.length) {
+          setReviewMode("full");
+          return;
         }
+        const prefix = typeof commit === "string" ? commit : undefined;
+        let index = prefix ? available.findIndex((entry) => entry.sha.startsWith(prefix)) : 0;
+        if (index < 0) index = 0;
+        const sha = available[index]!.sha;
+        const changed = reviewMode() !== "commit" || currentCommitSha() !== sha;
+        setCurrentCommitIndex(index);
+        setReviewMode("commit");
+        if (changed || (!commitDiff() && !loadingCommits())) void loadCommitDiff(sha);
       },
-      { defer: true },
     ),
   );
 
@@ -745,9 +894,9 @@ const AppContent: Component = () => {
 
   // Update document title when PR is loaded
   createEffect(() => {
-    const status = prStatus();
-    if (status?.title) {
-      document.title = `${status.title} - better-review`;
+    const title = detailMetadata()?.title ?? prStatus()?.title;
+    if (title) {
+      document.title = `${title} - better-review`;
     } else {
       document.title = "better-review";
     }
@@ -758,109 +907,125 @@ const AppContent: Component = () => {
   });
 
   let prLoadGeneration = 0;
+  let detailReadGeneration = 0;
   onCleanup(() => prLoadGeneration++);
-  const loadPr = async (e: Event) => {
+  const loadPr = async (e: Event, fromRoute = false) => {
     e.preventDefault();
-    if (!prUrl() || loading()) return;
-
-    const currentPrUrl = prUrl();
+    if (!prUrl()) return;
+    let scope: ReturnType<typeof githubPrScope>;
+    try {
+      const input = prUrl().trim();
+      scope = githubPrScope(input.startsWith("github.com/") ? `https://${input}` : input);
+    } catch {
+      setError({
+        title: "Invalid pull request URL",
+        message: "Use https://github.com/owner/repo/pull/123.",
+      });
+      return;
+    }
+    const currentPrUrl = scope.url;
+    setPrUrl(currentPrUrl);
+    reviewFocus = undefined;
     const generation = ++prLoadGeneration;
+    const detailGeneration = ++detailReadGeneration;
     const isCurrentPr = () => generation === prLoadGeneration && prUrl() === currentPrUrl;
+    const cachedExtras = getCachedPrExtras(currentPrUrl);
     clearTimeout(initialOrderTimer);
-    initialOrderLoad = automaticOrder() ? { url: currentPrUrl, fallback: false } : null;
-    setInitialOrderPending(!!initialOrderLoad);
-    if (initialOrderLoad) {
+    initialOrderLoad = null;
+    batch(() => {
+      setChangesVisited(false);
+      setInitialOrderPending(false);
+      setLoading(false);
+      setError(null);
+      setDetailError(undefined);
+      setRefreshingDetail(false);
+      setDiscussionSourceNotice(undefined);
+      const cachedDetail = queryClient.getQueryData<PrDetail>(queryKeys.pr.detail(currentPrUrl));
+      setDetail(cachedDetail);
+      setDetailView(cachedDetail);
+      setDetailStaleNotice(undefined);
+      setDiff(null);
+      setDiffRevision({});
+      setReviewMode("full");
+      setDiffViewMode("original");
+      setReadingDiffs(new Map());
+      setReadingDiffLoadingKeys(new Set<string>());
+      setReadingDiffErrors(new Map());
+      setCurrentCommitIndex(0);
+      setCommitDiff(null);
+      ++commitDiffRequest;
+      setLoadingCommits(false);
+      setCommits([]);
+      setComments(cachedExtras?.comments ?? []);
+      setIssueComments(cachedExtras?.issueComments ?? []);
+      setPrInfo({ owner: scope.owner, repo: scope.repo, number: String(scope.number) });
+      setPrStatus(cachedExtras?.status ?? null);
+      setLoadingStatus(!cachedExtras?.status);
+      setLoadingComments(!cachedExtras);
+      setCommentsUnavailable(!!cachedExtras && cachedExtras.comments === null);
+      setIssueCommentsUnavailable(!!cachedExtras && cachedExtras.issueComments === null);
+      setReviewThreads(cachedExtras?.reviewThreads);
+      setLoadedPrUrl(currentPrUrl);
+      setContextPrUrl(currentPrUrl);
+      setSwitchingPr(false);
+    });
+    updatePrParams({ prUrl: currentPrUrl }, fromRoute);
+    void queryClient.cancelQueries({
+      predicate: (query) => query.queryKey[0] === "pr" && !query.queryKey.includes(currentPrUrl),
+    });
+    void fetchPrDetail(currentPrUrl)
+      .then((data) => {
+        if (isCurrentPr() && detailGeneration === detailReadGeneration) publishDetail(data);
+      })
+      .catch((cause) => {
+        if (isCurrentPr() && detailGeneration === detailReadGeneration)
+          setDetailError(
+            cause instanceof Error ? cause.message : "Pull request details unavailable",
+          );
+      });
+    void fetchPrExtras(currentPrUrl)
+      .then((data) => {
+        if (!isCurrentPr()) return;
+        setCommentsUnavailable(data.comments === null);
+        setIssueCommentsUnavailable(data.issueComments === null);
+        setReviewThreads(data.reviewThreads);
+        if (data.comments) setComments(data.comments);
+        if (data.issueComments) setIssueComments(data.issueComments);
+        if (data.status) setPrStatus(data.status);
+      })
+      .catch((err) => {
+        console.error("Failed to load PR comments and status:", err);
+        if (isCurrentPr()) {
+          setCommentsUnavailable(true);
+          setIssueCommentsUnavailable(true);
+        }
+      })
+      .finally(() => {
+        if (!isCurrentPr()) return;
+        setLoadingStatus(false);
+        setLoadingComments(false);
+      });
+  };
+
+  const loadChanges = async () => {
+    const currentPrUrl = loadedPrUrl();
+    if (!currentPrUrl || changesVisited() || currentPrUrl !== prUrl()) return;
+    const generation = prLoadGeneration;
+    const isCurrentPr = () => generation === prLoadGeneration && prUrl() === currentPrUrl;
+    batch(() => {
       setLoading(true);
+      setChangesVisited(true);
+      initialOrderLoad = automaticOrder() ? { url: currentPrUrl, fallback: false } : null;
+      setInitialOrderPending(!!initialOrderLoad);
+    });
+    if (initialOrderLoad) {
       const initial = initialOrderLoad;
-      // Session HTTP/SSE hydration must never hide the diff indefinitely.
       initialOrderTimer = setTimeout(() => {
         if (initialOrderLoad !== initial) return;
         initial.fallback = true;
         setInitialOrderPending(false);
       }, 10_000);
     }
-
-    // Cancel any in-flight queries for other PRs. Keep this PR's queries, such as the
-    // prefetch started from the PR list, so fetchQuery below joins them instead of refetching.
-    await queryClient.cancelQueries({
-      predicate: (query) => !query.queryKey.includes(currentPrUrl),
-    });
-    if (!isCurrentPr()) {
-      if (generation === prLoadGeneration) {
-        setLoading(false);
-        clearTimeout(initialOrderTimer);
-        initialOrderLoad = null;
-        setInitialOrderPending(false);
-      }
-      return;
-    }
-    setError(null);
-    setDiffRevision({});
-    // Reset commit mode state
-    setReviewMode("full");
-    setDiffViewMode("original");
-    setReadingDiffs(new Map());
-    setReadingDiffLoadingKeys(new Set<string>());
-    setReadingDiffErrors(new Map());
-    setCurrentCommitIndex(0);
-    setCommitDiff(null);
-
-    // Show cached data immediately if available
-    const cachedDiff = queryClient.getQueryData<string>(queryKeys.pr.diff(currentPrUrl));
-    const cachedInfo = queryClient.getQueryData<{
-      owner: string;
-      repo: string;
-      number: string;
-    } | null>(queryKeys.pr.info(currentPrUrl));
-    const cachedCommits = queryClient.getQueryData<PrCommit[]>(queryKeys.pr.commits(currentPrUrl));
-    const cachedComments = queryClient.getQueryData<PRComment[]>(
-      queryKeys.pr.comments(currentPrUrl),
-    );
-    const cachedIssueComments = queryClient.getQueryData<IssueComment[]>(
-      queryKeys.pr.issueComments(currentPrUrl),
-    );
-    const cachedStatus = queryClient.getQueryData<PrStatus>(queryKeys.pr.status(currentPrUrl));
-
-    if (cachedDiff) {
-      setDiff(cachedDiff);
-      setLoadedPrUrl(currentPrUrl);
-      setSwitchingPr(false);
-      setContextPrUrl(currentPrUrl);
-    }
-    if (cachedInfo) setPrInfo(cachedInfo);
-    if (cachedCommits) setCommits(cachedCommits);
-    if (cachedComments) setComments(cachedComments);
-    if (cachedIssueComments) setIssueComments(cachedIssueComments);
-    if (cachedStatus) setPrStatus(cachedStatus);
-
-    // Only show loading if no cached data
-    if (!cachedDiff) {
-      setLoading(true);
-      setLoadedPrUrl(null);
-      setPrInfo(null);
-      setPrStatus(null);
-      setCommits([]);
-      setComments([]);
-      setIssueComments([]);
-    }
-    setLoadingStatus(!cachedStatus);
-    setLoadingComments(!cachedComments);
-
-    // Comments and status load alongside the diff but never hold up the page.
-    void fetchPrExtras(currentPrUrl)
-      .then((data) => {
-        if (!isCurrentPr()) return;
-        if (data.comments) setComments(data.comments);
-        if (data.issueComments) setIssueComments(data.issueComments);
-        if (data.status) setPrStatus(data.status);
-      })
-      .catch((err) => console.error("Failed to load PR comments and status:", err))
-      .finally(() => {
-        if (!isCurrentPr()) return;
-        setLoadingStatus(false);
-        setLoadingComments(false);
-      });
-
     try {
       // Respects cache - only fetches if data is stale or missing
       const data = await fetchPrCore(currentPrUrl);
@@ -898,6 +1063,144 @@ const AppContent: Component = () => {
     } finally {
       if (generation === prLoadGeneration) setLoading(false);
     }
+  };
+
+  createEffect(() => {
+    if (changesActive() && loadedPrUrl() === prUrl() && !changesVisited()) void loadChanges();
+  });
+
+  const refreshDetail = async (afterWrite = false) => {
+    const url = loadedPrUrl();
+    const generation = prLoadGeneration;
+    const detailGeneration = ++detailReadGeneration;
+    if (!url) return;
+    setRefreshingDetail(true);
+    const isCurrent = () =>
+      generation === prLoadGeneration &&
+      url === prUrl() &&
+      detailGeneration === detailReadGeneration;
+    try {
+      const data = await refreshPrDetail(url, { afterWrite });
+      if (isCurrent()) {
+        publishDetail(data);
+        setDetailError(undefined);
+      }
+    } catch (cause) {
+      if (isCurrent()) setDetailError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
+    } finally {
+      if (isCurrent()) setRefreshingDetail(false);
+    }
+  };
+
+  const refreshAfterMerge = async () => {
+    const url = loadedPrUrl();
+    const generation = prLoadGeneration;
+    if (!url) return;
+    await queryClient.cancelQueries({
+      predicate: (query) => query.queryKey[0] === "pr" && query.queryKey.includes(url),
+    });
+    await queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey[0] === "pr" && query.queryKey.includes(url),
+      refetchType: "none",
+    });
+    const [extras] = await Promise.all([
+      refreshPrExtras(url),
+      refreshDetail(true),
+      refreshPrListAfterReview(),
+    ]);
+    if (generation !== prLoadGeneration || loadedPrUrl() !== url) return;
+    if (extras.status) setPrStatus(extras.status);
+    if (extras.comments) setComments(extras.comments);
+    if (extras.issueComments) setIssueComments(extras.issueComments);
+    setCommentsUnavailable(extras.comments === null);
+    setIssueCommentsUnavailable(extras.issueComments === null);
+    setReviewThreads(extras.reviewThreads);
+  };
+
+  // The app-shell completion watcher survives route changes and publishes shared
+  // read models. Observe only this PR's successful cache updates, without resetting review state.
+  onCleanup(
+    queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== "updated" || event.action.type !== "success") return;
+      const url = loadedPrUrl();
+      const key = event.query.queryKey;
+      if (!url || url !== prUrl() || key[0] !== "pr" || key[2] !== url) return;
+      if (key[1] === "detail") {
+        const data = queryClient.getQueryData<PrDetail>(queryKeys.pr.detail(url));
+        if (data) {
+          publishDetail(data);
+          setDetailError(undefined);
+        }
+      } else if (key[1] === "extras") {
+        const data = getCachedPrExtras(url);
+        if (!data) return;
+        if (data.comments) setComments(data.comments);
+        if (data.issueComments) setIssueComments(data.issueComments);
+        if (data.status) setPrStatus(data.status);
+        setCommentsUnavailable(data.comments === null);
+        setIssueCommentsUnavailable(data.issueComments === null);
+        setReviewThreads(data.reviewThreads);
+        setLoadingStatus(false);
+        setLoadingComments(false);
+      }
+    }),
+  );
+
+  const navigateOverviewSource = (location: PrDiscussionLocation) => {
+    selectTab("changes");
+    const generation = prLoadGeneration;
+    const deadline = Date.now() + 15_000;
+    const wait = () => {
+      if (generation !== prLoadGeneration || !changesActive()) return;
+      if (error() || Date.now() > deadline) {
+        setDiscussionSourceNotice(
+          "Source navigation unavailable. The original comment location is preserved in Overview.",
+        );
+        return;
+      }
+      if (loading() || !diff() || initialOrderPending()) {
+        setTimeout(wait, 50);
+        return;
+      }
+      const file = files().find((file) => file.name === location.path);
+      if (
+        !location.historical &&
+        location.sourceRef === diffRevision().headSha &&
+        reviewMode() === "full" &&
+        file &&
+        githubLocationInPatch(location, file)
+      ) {
+        setDiscussionSourceNotice(undefined);
+        scrollToFile(location.path, location.line, location.side);
+        return;
+      }
+      if (!location.sourceRef) {
+        setDiscussionSourceNotice(
+          `${location.path}:${location.line} (${location.side}): GitHub did not provide a trustworthy source revision. Open the original comment on GitHub; this location was not remapped to current HEAD.`,
+        );
+        return;
+      }
+      if (location.side === "LEFT") {
+        setDiscussionSourceNotice(
+          `${location.path}:${location.line} (LEFT): the comment records comparison head ${location.sourceRef}, not the immutable deleted-side source revision. Open its original GitHub location; this coordinate was not mapped onto HEAD.`,
+        );
+        return;
+      }
+      const sessionId = selectionController()?.currentSessionId();
+      if (!sessionId) {
+        setTimeout(wait, 50);
+        return;
+      }
+      void interactions.openSource({
+        sessionId,
+        path: location.path,
+        line: location.line,
+        side: location.side,
+        ref: location.sourceRef,
+      });
+    };
+    setTimeout(wait, 0);
   };
 
   const writeScope = () => {
@@ -1013,53 +1316,63 @@ const AppContent: Component = () => {
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header Bar - hidden in focus mode */}
-      <Show when={!focusMode()}>
+      <Show when={!focusMode() || !changesActive()}>
         <AppHeader
+          backHref={
+            loadedPrUrl() || searchParams.prUrl
+              ? prListReturnPath(searchParams.returnTo)
+              : undefined
+          }
+          backSteps={prListBackSteps(location.state, prListReturnPath(searchParams.returnTo))}
           hideNavigation={!!loadedPrUrl()}
           onOpenPr={() => setSwitchingPr(!switchingPr())}
           prSwitcherOpen={switchingPr()}
+          settings={
+            <ReviewSettings
+              automaticOrder={automaticOrder()}
+              onAutomaticOrderChange={(enabled) => {
+                saveAutomaticReviewOrder(enabled);
+                setAutomaticOrder(enabled);
+              }}
+            />
+          }
           actions={
             <>
-              {" "}
-              <div class="flex items-center gap-0.5 border-r border-border pr-2 mr-1">
+              <Show when={changesActive()}>
+                {" "}
+                <div class="flex items-center gap-0.5 border-r border-border pr-2 mr-1">
+                  <Button
+                    onClick={() => togglePanel("chat")}
+                    variant="ghost"
+                    size="sm"
+                    class={panelVisibility().chat ? "bg-bg-elevated text-text" : "text-text-muted"}
+                    aria-pressed={panelVisibility().chat}
+                    aria-controls="chat-panel"
+                    title="Toggle chat panel"
+                  >
+                    Chat
+                  </Button>
+                  <Button
+                    onClick={() => togglePanel("files")}
+                    variant="ghost"
+                    size="sm"
+                    class={panelVisibility().files ? "bg-bg-elevated text-text" : "text-text-muted"}
+                    aria-pressed={panelVisibility().files}
+                    aria-controls="file-tree-panel"
+                    title="Toggle file tree panel"
+                  >
+                    Files
+                  </Button>
+                </div>
                 <Button
-                  onClick={() => togglePanel("chat")}
+                  onClick={toggleFocusMode}
                   variant="ghost"
                   size="sm"
-                  class={panelVisibility().chat ? "bg-bg-elevated text-text" : "text-text-muted"}
-                  aria-pressed={panelVisibility().chat}
-                  aria-controls="chat-panel"
-                  title="Toggle chat panel"
+                  title="Enter focus mode (F)"
                 >
-                  Chat
+                  Focus
                 </Button>
-                <Button
-                  onClick={() => togglePanel("files")}
-                  variant="ghost"
-                  size="sm"
-                  class={panelVisibility().files ? "bg-bg-elevated text-text" : "text-text-muted"}
-                  aria-pressed={panelVisibility().files}
-                  aria-controls="file-tree-panel"
-                  title="Toggle file tree panel"
-                >
-                  Files
-                </Button>
-              </div>
-              <Button
-                onClick={toggleFocusMode}
-                variant="ghost"
-                size="sm"
-                title="Enter focus mode (F)"
-              >
-                Focus
-              </Button>
-              <ReviewSettings
-                automaticOrder={automaticOrder()}
-                onAutomaticOrderChange={(enabled) => {
-                  saveAutomaticReviewOrder(enabled);
-                  setAutomaticOrder(enabled);
-                }}
-              />
+              </Show>
             </>
           }
         >
@@ -1132,10 +1445,11 @@ const AppContent: Component = () => {
             </div>
           </Show>
           {/* PR Status Bar */}
-          <Show when={loadedPrUrl()}>
+          <Show when={loadedPrUrl() && changesActive()}>
             <div class="px-4 py-3 border-t border-border bg-bg flex flex-wrap items-center justify-between gap-x-6 gap-y-3 relative">
               <div class="flex-1 min-w-64">
                 <PrStatusBar
+                  onOpenChecks={() => selectTab("checks")}
                   status={prStatus()}
                   loading={loadingStatus()}
                   repoOwner={prInfo()?.owner}
@@ -1173,7 +1487,10 @@ const AppContent: Component = () => {
                 <Show when={nextPr()}>
                   {(next) => (
                     <A
-                      href={`/review?prUrl=${encodeURIComponent(next().url)}`}
+                      href={prPageHref(next().url, {
+                        returnTo: prListReturnPath(searchParams.returnTo),
+                      })}
+                      state={advancePrLinkState(location.state)}
                       class="px-2 py-1 text-xs text-text-muted hover:text-text"
                       title={`Next: ${next().title}`}
                     >
@@ -1199,22 +1516,15 @@ const AppContent: Component = () => {
                   </Button>
                 </SettingsPanel>
                 <ApproveButton
-                  approvalOperations={outboxOperations().filter(
-                    (item) =>
-                      item.command.action.kind === "approve" &&
-                      item.command.action.expectedHeadSha === diffRevision().headSha &&
-                      item.status !== "cancelled",
-                  )}
+                  approvalOperations={ownApprovalOperations()}
                   expectedHeadSha={diffRevision().headSha}
                   canSubmit={loadedPrUrl() === prUrl()}
                   approvalState={
-                    githubView()?.approvals.find(
-                      (approval) => approval.commitSha === diffRevision().headSha,
-                    )?.pending
+                    ownApprovalOperations().some((item) => item.status !== "synced")
                       ? "pending"
-                      : githubView()?.approvals.some(
-                            (approval) => approval.commitSha === diffRevision().headSha,
-                          )
+                      : prStatus()?.viewerApproval?.commitSha === diffRevision().headSha &&
+                          prStatus()?.viewerApproval?.login === currentGithubActor()?.login &&
+                          !!diffRevision().headSha
                         ? "synced"
                         : undefined
                   }
@@ -1240,18 +1550,41 @@ const AppContent: Component = () => {
         </AppHeader>
       </Show>
 
-      <GithubPendingPanel
-        prUrl={loadedPrUrl() === prUrl() ? loadedPrUrl() : null}
-        onRemoteSync={async (url) => {
-          const data = await api.fetchPrExtras(url);
-          if (!loadedPrUrl() || githubPrScope(loadedPrUrl()!).url !== url) return;
-          if (data.comments) setComments(data.comments);
-          if (data.issueComments) setIssueComments(data.issueComments);
-          if (data.status) setPrStatus(data.status);
-        }}
-      />
+      <Show when={loadedPrUrl()}>
+        <nav
+          aria-label="Pull request tabs"
+          class="flex shrink-0 flex-wrap gap-2 border-b border-border px-4 py-2"
+          onPointerDown={rememberReviewFocus}
+        >
+          <For each={["overview", "changes", "checks"] as const}>
+            {(tab) => (
+              <Button
+                size="sm"
+                variant={activeTab() === tab ? "primary" : "ghost"}
+                aria-current={activeTab() === tab ? "page" : undefined}
+                onClick={() => selectTab(tab)}
+              >
+                {tab[0].toUpperCase() + tab.slice(1)}
+              </Button>
+            )}
+          </For>
+          <Show when={activeTab() !== "checks"}>
+            <Button
+              size="sm"
+              variant="ghost"
+              class="ml-auto"
+              onClick={() => void refreshDetail().catch(() => {})}
+              disabled={refreshingDetail()}
+              aria-busy={refreshingDetail()}
+            >
+              Refresh details
+            </Button>
+          </Show>
+        </nav>
+      </Show>
+
       {/* Focus mode exit bar */}
-      <Show when={focusMode()}>
+      <Show when={focusMode() && changesActive()}>
         <div class="flex items-center justify-between px-3 py-1.5 bg-bg-surface border-b border-accent/30">
           <div class="flex items-center gap-2">
             <span class="text-xs text-accent font-medium">Focus mode</span>
@@ -1259,15 +1592,18 @@ const AppContent: Component = () => {
               Diff takes priority. Press Esc or F to exit.
             </span>
           </div>
-          <Button
-            onClick={toggleFocusMode}
-            variant="ghost"
-            size="xs"
-            class="text-accent hover:text-accent"
-            title="Exit focus mode (F or Esc)"
-          >
-            Exit <span class="text-accent/60 ml-1 font-mono">F</span>
-          </Button>
+          <div class="flex items-center gap-1">
+            <ReviewSettings />
+            <Button
+              onClick={toggleFocusMode}
+              variant="ghost"
+              size="xs"
+              class="text-accent hover:text-accent"
+              title="Exit focus mode (F or Esc)"
+            >
+              Exit <span class="text-accent/60 ml-1 font-mono">F</span>
+            </Button>
+          </div>
         </div>
       </Show>
 
@@ -1279,247 +1615,363 @@ const AppContent: Component = () => {
             controller={selectionController()}
             scope={selectionScope()}
             sourceDialogOpen={false}
-            isCurrent={() => askSelection() === draft && draft.selection.scope === selectionScope()}
+            inactive={!changesActive()}
+            isCurrent={() =>
+              changesActive() &&
+              askSelection() === draft &&
+              draft.selection.scope === selectionScope()
+            }
             onDismiss={dismissSelection}
           />
         )}
       </Show>
-      <div class="relative flex min-w-0 flex-1 overflow-hidden">
-        {/* Chat panel (left) - hidden in focus mode */}
-        <ChatPanel
-          hidden={!panelVisibility().chat || focusMode()}
-          selectionScope={selectionScope()}
-          interactions={interactions}
-          onSelectionController={setSelectionController}
-          prUrl={loadedPrUrl()}
-          initialSessionId={
-            typeof searchParams.sessionId === "string" ? searchParams.sessionId : undefined
-          }
-          prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
-          repoOwner={prInfo()?.owner ?? null}
-          repoName={prInfo()?.repo ?? null}
-          files={fileNames()}
-          reviewMode={reviewMode()}
-          displayedHeadSha={diffRevision().headSha ?? null}
-          commitSha={
-            reviewMode() === "commit" ? (commits()[currentCommitIndex()]?.sha ?? null) : null
-          }
-          theme={settings().theme}
-          aiAnnotations={aiAnnotations()}
-          onApplyReviewOrder={applyReviewOrder}
-          onAvailableReviewOrder={setAvailableOrder}
-          onInitialReviewOrder={hydrateInitialOrder}
-          initialReviewOrderReady={!automaticOrder() || (!loading() && !loadingCommits())}
-          onAnnotationsReceived={addNewAiAnnotations}
-        />
-
-        {/* Center content */}
-        <Show
-          when={diff() && !initialOrderPending()}
-          fallback={
-            <div class="flex-1 flex items-center justify-center">
-              <Show
-                when={loading() || initialOrderPending()}
-                fallback={
-                  <div class="w-full max-w-md px-6 text-center">
-                    <h2 class="text-lg font-semibold tracking-tight text-text">
-                      Open a pull request
-                    </h2>
-                    <p class="mt-2 text-sm leading-relaxed text-text-muted">
-                      Paste a GitHub PR URL above to start reviewing.
-                    </p>
-                    <p class="mt-4 font-mono text-xs text-text-faint">
-                      github.com/owner/repo/pull/123
-                    </p>
-                  </div>
-                }
-              >
-                <div class="flex items-center gap-3">
-                  <SpinnerIcon class="animate-spin text-accent" size={20} />
-                  <span class="text-text-faint text-base">Loading PR...</span>
-                </div>
-              </Show>
-            </div>
-          }
-        >
-          {/* Diff viewer (center) */}
-          <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
-            {/* Commit navigator (when in commit mode) */}
-            <Show when={reviewMode() === "commit" && commits().length > 0}>
-              <CommitNavigator
-                commits={commits()}
-                currentIndex={currentCommitIndex()}
-                onSelectCommit={selectCommit}
-                onPrev={goToPrevCommit}
-                onNext={goToNextCommit}
-                loading={loadingCommits()}
-              />
+      <Show when={loadedPrUrl() && !changesActive()}>
+        <main class="min-h-0 flex-1 overflow-y-auto p-5">
+          <div class="mx-auto max-w-5xl space-y-6">
+            <Show when={detailError() && activeTab() !== "checks"}>
+              <p role="alert">{detailError()}</p>
             </Show>
-
-            {/* Diff content */}
-            <div
-              ref={(element) => {
-                diffScrollRef = element;
-              }}
-              class={`flex-1 overflow-y-auto pb-3 ${focusMode() ? "px-1" : "px-2"}`}
+            <Show when={detailStaleNotice() && !detailError() && activeTab() === "overview"}>
+              <p role="status" class="text-sm text-text-muted">
+                Showing previous results for unavailable sections: {detailStaleNotice()}
+              </p>
+            </Show>
+            <Show when={activeTab() === "checks" && displayMetadata()}>
+              {(metadata) => (
+                <header class="space-y-1">
+                  <p class="text-xs text-text-muted">
+                    {prInfo()?.owner}/{prInfo()?.repo} · #{metadata().number}
+                  </p>
+                  <h1 class="break-words text-lg font-semibold tracking-tight">
+                    {metadata().title}
+                  </h1>
+                </header>
+              )}
+            </Show>
+            <Show
+              when={activeTab() === "overview"}
+              fallback={
+                <PrChecks
+                  checks={detailView()?.checks}
+                  refreshing={refreshingDetail()}
+                  loadError={detailError() ?? detailStaleNotice()}
+                  onRefresh={() => void refreshDetail().catch(() => {})}
+                />
+              }
             >
-              <Show when={sourceTarget()} keyed>
-                {(target) => (
-                  <InlineSourceView
-                    target={target}
-                    navigation={interactions.source}
-                    onClose={interactions.source.close}
-                    onChoose={(target) => void interactions.openSource(target)}
-                    onResolved={focusResolvedSource}
-                    onAskAi={askAboutSource}
-                    askEditorOpen={!!askSelection()}
+              <PrOverview
+                detail={detailView()}
+                url={loadedPrUrl()!}
+                githubView={githubView()}
+                operations={outboxOperations()}
+                onSource={navigateOverviewSource}
+                discussionsState={
+                  loadingComments()
+                    ? "loading"
+                    : commentsUnavailable()
+                      ? "unavailable"
+                      : "available"
+                }
+                threadEvidence={reviewThreads()}
+              />
+              <PrCommentsPanel
+                embedded
+                prUrl={loadedPrUrl()}
+                githubView={githubView()}
+                comments={issueComments()}
+                loading={loadingComments()}
+                unavailable={issueCommentsUnavailable()}
+                repoOwner={prInfo()?.owner}
+                repoName={prInfo()?.repo}
+                onAddComment={addIssueComment}
+                onEditComment={editIssueComment}
+                onDeleteComment={deleteIssueComment}
+              />
+              <div class="flex flex-wrap items-start gap-3">
+                <ApproveButton
+                  expectedHeadSha={detailHead()}
+                  canSubmit={!detailError() && detailMetadata()?.state === "OPEN"}
+                  approvalOperations={overviewApprovalOperations()}
+                  approvalState={overviewApprovalState()}
+                />
+                <PrReviewActions
+                  url={loadedPrUrl()!}
+                  headSha={detailHead()}
+                  canSubmit={!detailError() && detailMetadata()?.state === "OPEN"}
+                />
+              </div>
+              <Show when={mergeDetail()}>
+                {(value) => (
+                  <PrMergePanel
+                    detail={value()}
+                    pendingComments={
+                      outboxOperations().filter(
+                        (item) => item.status !== "synced" && item.status !== "cancelled",
+                      ).length
+                    }
+                    onChanged={refreshAfterMerge}
                   />
                 )}
               </Show>
-              <Show
-                when={activeDiff()}
-                fallback={
-                  <Show when={reviewMode() === "commit" && loadingCommits()}>
-                    <div class="text-text-faint text-base">Loading commit diff...</div>
-                  </Show>
-                }
-              >
-                <Show when={diffViewMode() === "reading" && !currentReadingDiff()}>
-                  <ReadingDiffEmpty
-                    loading={readingDiffLoading()}
-                    error={readingDiffError()}
-                    scopeLabel={readingDiffScopeLabel()}
-                    onGenerate={() => generateReadingDiff(false)}
-                  />
-                </Show>
-                <Show when={diffViewMode() === "reading" && currentReadingDiff()}>
-                  <ReadingDiffSummary
-                    result={currentReadingDiff()!}
-                    regenerating={readingDiffLoading()}
-                    error={readingDiffError()}
-                    onRegenerate={() => generateReadingDiff(true)}
-                    onNavigateEvidence={scrollToFile}
-                  />
-                </Show>
-                <Show when={findingNotice()}>
-                  <div
-                    data-finding-comment-notice
-                    role="alert"
-                    class="mb-3 rounded border border-warning/40 bg-bg-elevated p-3 text-sm"
-                  >
-                    {findingNotice()}{" "}
-                    <Button type="button" size="xs" onClick={interactions.dismissNotice}>
-                      Dismiss
-                    </Button>
+            </Show>
+          </div>
+        </main>
+      </Show>
+      <Show when={changesVisited() ? loadedPrUrl() : null} keyed>
+        <div
+          ref={(element) => {
+            changesRoot = element;
+          }}
+          class="relative flex min-w-0 flex-1 overflow-hidden"
+          style={{ display: changesActive() ? undefined : "none" }}
+          inert={!changesActive()}
+          aria-hidden={!changesActive()}
+        >
+          {/* Chat panel (left) - hidden in focus mode */}
+          <Show when={diff() !== null}>
+            <ChatPanel
+              hidden={!changesActive() || !panelVisibility().chat || focusMode()}
+              selectionScope={selectionScope()}
+              interactions={interactions}
+              onSelectionController={setSelectionController}
+              prUrl={loadedPrUrl()}
+              initialSessionId={
+                typeof searchParams.sessionId === "string" ? searchParams.sessionId : undefined
+              }
+              prNumber={prInfo()?.number ? parseInt(prInfo()!.number, 10) : null}
+              repoOwner={prInfo()?.owner ?? null}
+              repoName={prInfo()?.repo ?? null}
+              files={fileNames()}
+              reviewMode={reviewMode()}
+              displayedHeadSha={diffRevision().headSha ?? null}
+              commitSha={
+                reviewMode() === "commit" ? (commits()[currentCommitIndex()]?.sha ?? null) : null
+              }
+              theme={settings().theme}
+              aiAnnotations={aiAnnotations()}
+              onApplyReviewOrder={applyReviewOrder}
+              onAvailableReviewOrder={setAvailableOrder}
+              onInitialReviewOrder={hydrateInitialOrder}
+              initialReviewOrderReady={!automaticOrder() || (!loading() && !loadingCommits())}
+              onAnnotationsReceived={addNewAiAnnotations}
+            />
+          </Show>
+
+          {/* Center content */}
+          <Show
+            when={diff() && !initialOrderPending()}
+            fallback={
+              <div class="flex-1 flex items-center justify-center">
+                <Show
+                  when={loading() || initialOrderPending()}
+                  fallback={
+                    <div class="w-full max-w-md px-6 text-center">
+                      <h2 class="text-lg font-semibold tracking-tight text-text">
+                        Open a pull request
+                      </h2>
+                      <p class="mt-2 text-sm leading-relaxed text-text-muted">
+                        Paste a GitHub PR URL above to start reviewing.
+                      </p>
+                      <p class="mt-4 font-mono text-xs text-text-faint">
+                        github.com/owner/repo/pull/123
+                      </p>
+                    </div>
+                  }
+                >
+                  <div class="flex items-center gap-3">
+                    <SpinnerIcon class="animate-spin text-accent" size={20} />
+                    <span class="text-text-faint text-base">Loading PR...</span>
                   </div>
                 </Show>
-                <Show when={inlineFinding()} keyed>
-                  {(entry) => (
-                    <InlineFindingComment
-                      entry={entry}
-                      isCurrent={() => interactions.currentComment(entry.request)}
-                      onCancel={() => interactions.finishComment(entry)}
-                      onSubmit={async (body, draftKey) => {
-                        interactions.assertCurrentComment(entry.request);
-                        await addComment({
-                          filePath: entry.request.filePath,
-                          line: entry.request.line,
-                          side: "RIGHT",
-                          body,
-                          expectedHeadSha: entry.request.expectedHeadSha,
-                          draftKey,
-                        });
-                        interactions.finishComment(entry);
-                      }}
+              </div>
+            }
+          >
+            {/* Diff viewer (center) */}
+            <div class="flex min-w-0 flex-1 flex-col overflow-y-auto">
+              {/* Commit navigator (when in commit mode) */}
+              <Show when={reviewMode() === "commit" && commits().length > 0}>
+                <CommitNavigator
+                  commits={commits()}
+                  currentIndex={currentCommitIndex()}
+                  onSelectCommit={selectCommit}
+                  onPrev={goToPrevCommit}
+                  onNext={goToNextCommit}
+                  loading={loadingCommits()}
+                />
+              </Show>
+
+              {/* Diff content */}
+              <div
+                ref={(element) => {
+                  diffScrollRef = element;
+                }}
+                class={`flex-1 overflow-y-auto pb-3 ${focusMode() ? "px-1" : "px-2"}`}
+              >
+                <Show when={discussionSourceNotice()}>
+                  <p role="alert" class="mb-3 border border-warning/40 p-3 text-sm">
+                    {discussionSourceNotice()}
+                  </p>
+                </Show>
+                <Show when={sourceTarget()} keyed>
+                  {(target) => (
+                    <InlineSourceView
+                      target={target}
+                      navigation={interactions.source}
+                      onClose={interactions.source.close}
+                      onChoose={(target) => void interactions.openSource(target)}
+                      onResolved={focusResolvedSource}
+                      onAskAi={askAboutSource}
+                      askEditorOpen={!!askSelection()}
                     />
                   )}
                 </Show>
-                <Show when={!reviewCommentsHidden() && unplacedGithubComments().length}>
-                  <section
-                    aria-label="Review comments outside displayed patch"
-                    class="mb-3 space-y-2"
-                  >
-                    <h3 class="text-sm text-text-muted">
-                      Review comments outside the displayed patch
-                    </h3>
-                    <For each={unplacedGithubComments().map((comment) => comment.key)}>
-                      {(key) => (
-                        <GithubCommentCard
-                          comment={unplacedGithubComments().find((comment) => comment.key === key)!}
-                          scope={githubPrScope(loadedPrUrl()!)}
-                          operations={outboxOperations()}
-                          thread={githubThreadForComment(
-                            unplacedGithubComments().find((comment) => comment.key === key)!,
-                            githubView()?.threads ?? [],
-                            outboxOperations(),
-                          )}
-                        />
-                      )}
-                    </For>
-                  </section>
+                <Show
+                  when={activeDiff()}
+                  fallback={
+                    <Show when={reviewMode() === "commit" && loadingCommits()}>
+                      <div class="text-text-faint text-base">Loading commit diff...</div>
+                    </Show>
+                  }
+                >
+                  <Show when={diffViewMode() === "reading" && !currentReadingDiff()}>
+                    <ReadingDiffEmpty
+                      loading={readingDiffLoading()}
+                      error={readingDiffError()}
+                      scopeLabel={readingDiffScopeLabel()}
+                      onGenerate={() => generateReadingDiff(false)}
+                    />
+                  </Show>
+                  <Show when={diffViewMode() === "reading" && currentReadingDiff()}>
+                    <ReadingDiffSummary
+                      result={currentReadingDiff()!}
+                      regenerating={readingDiffLoading()}
+                      error={readingDiffError()}
+                      onRegenerate={() => generateReadingDiff(true)}
+                      onNavigateEvidence={scrollToFile}
+                    />
+                  </Show>
+                  <Show when={findingNotice()}>
+                    <div
+                      data-finding-comment-notice
+                      role="alert"
+                      class="mb-3 rounded border border-warning/40 bg-bg-elevated p-3 text-sm"
+                    >
+                      {findingNotice()}{" "}
+                      <Button type="button" size="xs" onClick={interactions.dismissNotice}>
+                        Dismiss
+                      </Button>
+                    </div>
+                  </Show>
+                  <Show when={inlineFinding()} keyed>
+                    {(entry) => (
+                      <InlineFindingComment
+                        entry={entry}
+                        isCurrent={() => interactions.currentComment(entry.request)}
+                        onCancel={() => interactions.finishComment(entry)}
+                        onSubmit={async (body, draftKey) => {
+                          interactions.assertCurrentComment(entry.request);
+                          await addComment({
+                            filePath: entry.request.filePath,
+                            line: entry.request.line,
+                            side: "RIGHT",
+                            body,
+                            expectedHeadSha: entry.request.expectedHeadSha,
+                            draftKey,
+                          });
+                          interactions.finishComment(entry);
+                        }}
+                      />
+                    )}
+                  </Show>
+                  <Show when={!reviewCommentsHidden() && unplacedGithubComments().length}>
+                    <section
+                      aria-label="Review comments outside displayed patch"
+                      class="mb-3 space-y-2"
+                    >
+                      <h3 class="text-sm text-text-muted">
+                        Review comments outside the displayed patch
+                      </h3>
+                      <For each={unplacedGithubComments().map((comment) => comment.key)}>
+                        {(key) => (
+                          <GithubCommentCard
+                            comment={unplacedGithubComments().find(
+                              (comment) => comment.key === key,
+                            )!}
+                            scope={githubPrScope(loadedPrUrl()!)}
+                            operations={outboxOperations()}
+                            thread={githubThreadForComment(
+                              unplacedGithubComments().find((comment) => comment.key === key)!,
+                              githubView()?.threads ?? [],
+                              outboxOperations(),
+                            )}
+                          />
+                        )}
+                      </For>
+                    </section>
+                  </Show>
+                  <DiffViewer
+                    findingComment={findingComment()}
+                    commentHeadSha={diffRevision().headSha}
+                    githubOperations={outboxOperations()}
+                    githubComments={
+                      reviewCommentsHidden() || diffViewMode() === "reading"
+                        ? []
+                        : githubView()?.comments
+                    }
+                    githubThreads={githubView()?.threads}
+                    askEditorOpen={!!askSelection()}
+                    commitScope={reviewMode() === "commit"}
+                    onAskAi={askAboutSource}
+                    selectionScope={selectionScope()}
+                    selectionClearToken={selectionClearToken()}
+                    rawDiff={activeDiff()!}
+                    parsedFiles={files()}
+                    comments={reviewCommentsHidden() ? [] : comments()}
+                    aiAnnotations={reviewCommentsHidden() ? [] : aiAnnotations()}
+                    onCreateFindingComment={(annotation) =>
+                      interactions.prepareComment(
+                        annotation,
+                        annotation.origin?.sessionId ?? "",
+                        annotation.origin?.revision,
+                      )
+                    }
+                    loadingComments={!reviewCommentsHidden() && loadingComments()}
+                    onAddComment={addComment}
+                    onReplyToComment={replyToComment}
+                    onEditComment={editComment}
+                    onDeleteComment={deleteComment}
+                    onResolveThread={resolveThread}
+                    onDismissAiAnnotation={dismissAiAnnotation}
+                    settings={settings()}
+                    repoOwner={prInfo()?.owner}
+                    repoName={prInfo()?.repo}
+                    fileOrder={reviewOrder()}
+                    highlightedLine={highlightedLine()}
+                    readFiles={readFiles()}
+                    onToggleRead={toggleFileRead}
+                    prUrl={loadedPrUrl()}
+                    scrollContainer={diffScrollRef}
+                    onSearchNavigate={scrollToFile}
+                  />
                 </Show>
-                <DiffViewer
-                  findingComment={findingComment()}
-                  commentHeadSha={diffRevision().headSha}
-                  githubOperations={outboxOperations()}
-                  githubComments={
-                    reviewCommentsHidden() || diffViewMode() === "reading"
-                      ? []
-                      : githubView()?.comments
-                  }
-                  githubThreads={githubView()?.threads}
-                  askEditorOpen={!!askSelection()}
-                  commitScope={reviewMode() === "commit"}
-                  onAskAi={askAboutSource}
-                  selectionScope={selectionScope()}
-                  selectionClearToken={selectionClearToken()}
-                  rawDiff={activeDiff()!}
-                  parsedFiles={files()}
-                  comments={reviewCommentsHidden() ? [] : comments()}
-                  aiAnnotations={reviewCommentsHidden() ? [] : aiAnnotations()}
-                  onCreateFindingComment={(annotation) =>
-                    interactions.prepareComment(
-                      annotation,
-                      annotation.origin?.sessionId ?? "",
-                      annotation.origin?.revision,
-                    )
-                  }
-                  loadingComments={!reviewCommentsHidden() && loadingComments()}
-                  onAddComment={addComment}
-                  onReplyToComment={replyToComment}
-                  onEditComment={editComment}
-                  onDeleteComment={deleteComment}
-                  onResolveThread={resolveThread}
-                  onDismissAiAnnotation={dismissAiAnnotation}
-                  settings={settings()}
-                  repoOwner={prInfo()?.owner}
-                  repoName={prInfo()?.repo}
-                  fileOrder={reviewOrder()}
-                  highlightedLine={highlightedLine()}
+              </div>
+            </div>
+
+            {/* File tree panel (right) */}
+            <Show when={panelVisibility().files}>
+              <div id="file-tree-panel" class="file-tree-shell flex shrink-0">
+                <FileTreePanel
+                  files={orderedFiles()}
+                  onFileSelect={(file) => scrollToFile(file)}
+                  reviewOrder={reviewOrder()}
                   readFiles={readFiles()}
                   onToggleRead={toggleFileRead}
-                  prUrl={loadedPrUrl()}
-                  scrollContainer={diffScrollRef}
-                  onSearchNavigate={scrollToFile}
                 />
-              </Show>
-            </div>
-          </div>
-
-          {/* File tree panel (right) */}
-          <Show when={panelVisibility().files}>
-            <div id="file-tree-panel" class="file-tree-shell flex shrink-0">
-              <FileTreePanel
-                files={orderedFiles()}
-                onFileSelect={(file) => scrollToFile(file)}
-                reviewOrder={reviewOrder()}
-                readFiles={readFiles()}
-                onToggleRead={toggleFileRead}
-              />
-            </div>
+              </div>
+            </Show>
           </Show>
-        </Show>
-      </div>
+        </div>
+      </Show>
     </div>
   );
 };

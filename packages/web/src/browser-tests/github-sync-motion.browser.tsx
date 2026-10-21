@@ -1,4 +1,4 @@
-import type { GithubOutboxOperation } from "@better-review/shared";
+import type { GithubOutboxOperation, GithubPrScope } from "@better-review/shared";
 
 import {
   githubJournal,
@@ -60,18 +60,28 @@ export async function testImmediateGithubSyncMotionInBrowser() {
         revision++;
         return { outcome: "accepted", operation };
       },
-      "githubOutbox.snapshot": async () => {
+      "githubOutbox.snapshot": async (input) => {
         if (snapshotGate) {
           snapshotStarted = true;
           await snapshotGate.promise;
         }
-        return { scope, revision, operations: structuredClone(records) };
+        const requested = input as GithubPrScope;
+        return {
+          scope: requested,
+          revision,
+          operations: structuredClone(
+            records.filter((item) => item.command.scope.url === requested.url),
+          ),
+        };
       },
     },
   });
   // No periodic snapshot can make these assertions pass.
   githubWrites.activate();
   await refreshGithubActor();
+  // Drain a mount-time snapshot before installing the held-request gate. Otherwise
+  // snapshot() can legitimately join that request rather than enter the new gate.
+  await githubWrites.snapshot(scope);
   snapshotGate = gate();
   const heldSnapshot = githubWrites.snapshot(scope);
   await wait(() => snapshotStarted, "Snapshot gate was not held");
@@ -243,6 +253,23 @@ export async function testImmediateGithubSyncMotionInBrowser() {
       revision++;
     }
     await githubWrites.snapshot(scope);
+    const follower = githubWrites
+      .getState(scope)
+      .operations.find((item) => item.command.operationId === records[1]!.command.operationId)!;
+    check(
+      !!follower.blockedByOperationId,
+      "Uncertain predecessor did not block dependent approval",
+    );
+    check(!global()?.querySelector(".animate-spin"), "Blocked-only aggregate falsely spins");
+    // Add genuinely independent runnable work. A blocked follower cannot stand in for it.
+    const independent = githubPrScope(scope.url.replace("/1", "/2"));
+    await queueGithubWrite(
+      independent.url,
+      { kind: "issue-comment", body: "independent runnable action" },
+      undefined,
+      [],
+    );
+    await githubWrites.recover(independent);
     spin(global(), "queued", "mixed warning aggregate");
     check(
       !!global()?.querySelector("[data-github-sync-warning]") &&
@@ -531,9 +558,20 @@ export async function testPierreInlineGithubSyncRotationInBrowser() {
       ["discussion", discussion()],
     ] as const) {
       check(
-        card!.querySelectorAll("[data-github-sync-status]").length === 1,
-        `${context} tombstone duplicates sync icons`,
+        card!.querySelectorAll("[data-comment-header] [data-github-sync-status]").length === 1 &&
+          card!.querySelectorAll("[data-comment-header] button[popovertarget]").length === 1,
+        `${context} tombstone must retain one header details control`,
       );
+      const pending = card!.querySelector('[role="img"][aria-label="Deletion pending"]');
+      check(
+        pending?.querySelectorAll("svg").length === 3 &&
+          pending.querySelectorAll('[aria-hidden="true"] [data-github-sync-status]').length === 3 &&
+          !pending.querySelector("button, [tabindex], a") &&
+          !card!.textContent?.includes("Deletion pending"),
+        `${context} tombstone must show three decorative body icons without visible pending text`,
+      );
+      for (const svg of pending!.querySelectorAll<SVGSVGElement>("svg"))
+        await rotates(svg, `${context}/delete-body-local-pending`);
       check(
         card!.querySelector("pre")?.textContent === "test",
         `${context} tombstone lost recoverable body`,
@@ -568,6 +606,14 @@ export async function testPierreInlineGithubSyncRotationInBrowser() {
     await rotates(icon(discussion()), "discussion/delete-queued reduced motion");
     await rotates(globalIcon(), "aggregate/delete-queued reduced motion");
     await rotates(approvalIcon(), "approval/queued reduced motion");
+    for (const [context, card] of [
+      ["inline", inline()],
+      ["discussion", discussion()],
+    ] as const)
+      for (const svg of card!.querySelectorAll<SVGSVGElement>(
+        '[aria-label="Deletion pending"] svg',
+      ))
+        await rotates(svg, `${context}/delete-body-queued reduced motion`);
     // Cancelling a queued deletion restores the original body on both surfaces.
     for (const deletion of records.filter(
       (item) => item.command.action.kind === "delete-comment",

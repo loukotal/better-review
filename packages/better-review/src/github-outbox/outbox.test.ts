@@ -9,6 +9,7 @@ import test, { type TestContext } from "node:test";
 
 import type {
   GithubActor,
+  GithubCommentRef,
   GithubOutboxCommand,
   GithubOutboxOperation,
   GithubPrScope,
@@ -48,7 +49,10 @@ function command(patch: Partial<GithubOutboxCommand> = {}): GithubOutboxCommand 
     ...patch,
   };
 }
-function result(op: GithubOutboxOperation, id = 123): GithubRemoteResult {
+function result(
+  op: GithubOutboxOperation,
+  id = 123,
+): Extract<GithubRemoteResult, { kind: "issue-comment" }> {
   return {
     kind: "issue-comment",
     id,
@@ -96,6 +100,89 @@ class Adapter implements GithubOutboxAdapter {
     return this.check(op);
   }
 }
+
+test("admitted approval completes after navigation releases the last UI lease", async (t) => {
+  let allowIdentity!: () => void;
+  const identity = new Promise<void>((resolve) => {
+    allowIdentity = resolve;
+  });
+  let posts = 0;
+  const head = "a".repeat(40);
+  const adapter = createGithubOutboxAdapter({
+    token: async () => "fixture-only",
+    fetch: async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/user") {
+        await identity;
+        return Response.json(actor);
+      }
+      if (path === "/repos/owner/repo/pulls/1") return Response.json({ head: { sha: head } });
+      assert.equal(path, "/repos/owner/repo/pulls/1/reviews");
+      assert.equal(init?.method, "POST");
+      posts++;
+      const payload = JSON.parse(String(init?.body));
+      return Response.json({
+        id: 99,
+        html_url: scope.url,
+        state: "APPROVED",
+        commit_id: head,
+        body: payload.body,
+        user: actor,
+      });
+    },
+  });
+  const f = await fixture(t, { adapter });
+  const clientId = await f.activate();
+  const cmd = command({ action: { kind: "approve", body: "", expectedHeadSha: head } });
+  await f.box.enqueue(cmd);
+  await f.box.heartbeat({ clientId, scope, visible: false });
+  allowIdentity();
+  await until(async () => (await operation(f, cmd.operationId)).status === "synced");
+  assert.equal(posts, 1);
+});
+
+test("restart resumes queued explicit intent without activity, with fresh identity and one dispatch", async (t) => {
+  const f = await fixture(t);
+  const cmd = command();
+  await f.box.enqueue(cmd);
+  await f.reopen();
+  await until(async () => (await operation(f, cmd.operationId)).status === "synced");
+  assert.equal(f.adapter.posts.length, 1);
+  assert.ok(f.adapter.identities > 0);
+  const db = new DatabaseSync(f.options.databasePath, { readOnly: true });
+  assert.equal(db.prepare("SELECT count(*) count FROM leases").get()!.count, 0);
+  db.close();
+});
+
+test("global pending discovery is body-free and read-only, excluding completed scopes", async (t) => {
+  const f = await fixture(t);
+  const first = command({
+    action: { kind: "issue-comment", body: "private-fixture-never-in-summary" },
+  });
+  const second = command({ scope: otherScope });
+  await f.box.enqueue(first);
+  await f.box.enqueue(second);
+  const summary = await f.box.listPending();
+  assert.equal(summary.length, 2);
+  assert.deepEqual(
+    summary.map((item) => item.pendingCount),
+    [1, 1],
+  );
+  assert.ok(summary.every((item) => item.counts.queued === 1));
+  assert.equal(f.adapter.identities, 0, "discovery itself never performs identity or dispatch");
+  assert.equal(f.adapter.posts.length, 0);
+  assert.ok(!JSON.stringify(summary).includes("private-fixture"));
+  await f.box.control({
+    requestId: randomUUID(),
+    operationId: first.operationId,
+    expectedRevision: 1,
+    kind: "cancel",
+  });
+  assert.deepEqual(
+    (await f.box.listPending()).map((item) => item.scope.url),
+    [otherScope.url],
+  );
+});
 
 test("database migration is atomic and SQLite durability settings are enabled", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "github-outbox-migration-"));
@@ -262,7 +349,7 @@ test("automatic retries stop at eight durable attempts and remain bounded", asyn
     outcome: "rejected",
     error: { code: "network", message: "before dispatch", retryable: true },
   });
-  const a = command();
+  const a = command({ queueDeadlineAt: new Date(f.options.now!() + 60 * 60_000).toISOString() });
   await f.box.enqueue(a);
   for (let attempt = 1; attempt <= 8; attempt++) {
     await until(async () => {
@@ -390,7 +477,6 @@ test("content admission aliases different UUIDs durably, preserves original repl
   assert.equal((await f.box.enqueue(a)).outcome, "accepted");
   const receipt = await f.box.enqueue(b);
   assert.equal(receipt.outcome, "duplicate");
-  if (receipt.outcome === "rejected") return;
   assert.equal(receipt.operation.command.operationId, a.operationId);
   assert.equal((await f.box.snapshot(scope)).operations.length, 1);
   await f.reopen();
@@ -411,14 +497,251 @@ test("content admission aliases different UUIDs durably, preserves original repl
   });
   const admitted = await f.box.enqueue(child);
   assert.equal(admitted.outcome, "accepted");
-  if (admitted.outcome !== "rejected") {
-    assert.deepEqual(admitted.operation.command.dependencies, [a.operationId]);
-    assert.deepEqual(admitted.operation.command.action, {
-      ...child.action,
-      target: { source: "local", kind: "issue-comment", operationId: a.operationId },
+  assert.deepEqual(admitted.operation.command.dependencies, [a.operationId]);
+  assert.deepEqual(admitted.operation.command.action, {
+    ...child.action,
+    target: { source: "local", kind: "issue-comment", operationId: a.operationId },
+  });
+  assert.equal((await f.box.enqueue(child)).outcome, "duplicate");
+  assert.equal(f.adapter.posts.length, 0);
+});
+
+test("renewed identical approval receives a cooldown, not a permanent success alias", async (t) => {
+  const adapter = new Adapter();
+  adapter.send = async () => ({
+    outcome: "accepted",
+    result: {
+      kind: "approval",
+      id: adapter.posts.length,
+      url: scope.url,
+      commitSha: "a".repeat(40),
+    },
+  });
+  const f = await fixture(t, { adapter });
+  const action = { kind: "approve", expectedHeadSha: "a".repeat(40), body: "Reviewed" } as const;
+  const first = command({ action });
+  await f.box.enqueue(first);
+  await f.activate();
+  await until(async () => (await operation(f, first.operationId)).status === "synced");
+  const synced = await operation(f, first.operationId);
+  // Later enrichment must not extend the first-synced deadline.
+  await f.box.close();
+  const store = await OutboxDatabase.open(f.options.databasePath);
+  const enriched = store.get(first.operationId)!;
+  enriched.updatedAt = new Date(Date.parse(enriched.updatedAt) + 58_000).toISOString();
+  store.transaction(() => store.save(enriched));
+  await store.close();
+  await f.reopen();
+  f.advance(59_000);
+  const renewed = command({ action });
+  const cooldown = await f.box.enqueue(renewed);
+  assert.equal(cooldown.outcome, "rejected");
+  if (cooldown.outcome !== "rejected") return;
+  assert.equal(cooldown.error.code, "approval-cooldown");
+  assert.equal(
+    cooldown.error.retryAt,
+    new Date(Date.parse(synced.updatedAt) + 60_000).toISOString(),
+  );
+  assert.equal(cooldown.error.retryable, true);
+  assert.equal((await f.box.snapshot(scope)).operations.length, 1);
+  assert.equal((await f.box.enqueue(first)).outcome, "duplicate");
+  await f.box.close();
+  await f.reopen();
+  assert.equal((await f.box.enqueue(renewed)).outcome, "rejected");
+  f.advance(1_000);
+  assert.equal((await f.box.enqueue(renewed)).outcome, "accepted");
+  assert.equal((await f.box.enqueue(renewed)).outcome, "duplicate");
+  const pendingDuplicate = await f.box.enqueue(command({ action }));
+  assert.equal(pendingDuplicate.outcome, "duplicate");
+  await f.activate();
+  await until(async () => (await operation(f, renewed.operationId)).status === "synced");
+  assert.equal(adapter.posts.length, 2);
+  assert.equal(
+    (await f.box.enqueue(command({ action: { ...action, body: "New review text" } }))).outcome,
+    "accepted",
+  );
+});
+
+for (const kind of ["request-changes", "review-comment"] as const) {
+  test(`${kind}: worker rejects accepted adapter evidence with wrong state/body/head/actor`, async (t) => {
+    const valid: GithubRemoteResult = {
+      kind: "review",
+      id: 1,
+      url: scope.url,
+      state: kind === "request-changes" ? "CHANGES_REQUESTED" : "COMMENTED",
+      commitSha: "a".repeat(40),
+      body: "Reviewed",
+      author: actor,
+      submittedAt: "2026-01-01T00:00:00Z",
+    };
+    for (const patch of [
+      { state: "COMMENTED" as const },
+      { body: "wrong" },
+      { commitSha: "b".repeat(40) },
+      { author: { id: 99, login: "other" } },
+    ]) {
+      // COMMENTED is valid for the comment action, so invert its event separately.
+      const invalid = {
+        ...valid,
+        ...patch,
+        ...("state" in patch && kind === "review-comment"
+          ? { state: "CHANGES_REQUESTED" as const }
+          : {}),
+      };
+      const adapter = new Adapter();
+      adapter.send = async () => ({ outcome: "accepted", result: invalid });
+      adapter.check = async () => ({ outcome: "matched", result: invalid });
+      const f = await fixture(t, { adapter });
+      const cmd = command({ action: { kind, expectedHeadSha: "a".repeat(40), body: "Reviewed" } });
+      await f.box.enqueue(cmd);
+      await f.activate();
+      await until(async () => (await operation(f, cmd.operationId)).status === "uncertain");
+      const pending = await operation(f, cmd.operationId);
+      await f.box.control({
+        kind: "reconcile",
+        requestId: randomUUID(),
+        operationId: cmd.operationId,
+        expectedRevision: pending.revision,
+      });
+      await until(() => adapter.reads.length > 0);
+      assert.equal((await operation(f, cmd.operationId)).status, "uncertain");
+      assert.equal(adapter.posts.length, 1);
+      await f.box.close();
+    }
+  });
+
+  test(`${kind}: repeat cooldown retains fresh UUID through restart`, async (t) => {
+    const adapter = new Adapter();
+    adapter.send = async (op) => ({
+      outcome: "accepted",
+      result: {
+        kind: "review",
+        id: adapter.posts.length,
+        url: scope.url,
+        state: kind === "request-changes" ? "CHANGES_REQUESTED" : "COMMENTED",
+        commitSha: "a".repeat(40),
+        body: "body" in op.command.action ? op.command.action.body : "",
+        author: actor,
+        submittedAt: "2026-01-01T00:00:00Z",
+      },
+    });
+    const f = await fixture(t, { adapter });
+    const action = { kind, expectedHeadSha: "a".repeat(40), body: "Reviewed" };
+    const first = command({ action });
+    await f.box.enqueue(first);
+    assert.equal((await f.box.enqueue(command({ action }))).outcome, "duplicate");
+    await f.activate();
+    await until(async () => (await operation(f, first.operationId)).status === "synced");
+    const renewed = command({ action });
+    const refusal = await f.box.enqueue(renewed);
+    assert.equal(refusal.outcome, "rejected");
+    if (refusal.outcome === "rejected") assert.equal(refusal.error.code, "review-cooldown");
+    await f.reopen();
+    assert.equal((await f.box.enqueue(renewed)).outcome, "rejected");
+    f.advance(60_000);
+    assert.equal((await f.box.enqueue(renewed)).outcome, "accepted");
+    await f.activate();
+    await until(async () => (await operation(f, renewed.operationId)).status === "synced");
+    assert.equal(adapter.posts.length, 2);
+  });
+}
+
+test("intervening review intent prevents approval/request-changes/approval aliasing", async (t) => {
+  const f = await fixture(t);
+  const approve = { kind: "approve", expectedHeadSha: "a".repeat(40), body: "Reviewed" } as const;
+  const changes = { ...approve, kind: "request-changes" } as const;
+  const first = command({ action: approve });
+  const second = command({ action: changes });
+  const third = command({ action: approve });
+  assert.equal((await f.box.enqueue(first)).outcome, "accepted");
+  assert.equal((await f.box.enqueue(second)).outcome, "accepted");
+  assert.equal((await f.box.enqueue(third)).outcome, "accepted");
+  const repeat = await f.box.enqueue(command({ action: approve }));
+  assert.equal(repeat.outcome, "duplicate");
+  assert.equal(repeat.operation.command.operationId, third.operationId);
+  assert.equal((await f.box.enqueue(command({ action: changes }))).outcome, "accepted");
+});
+
+for (const kind of ["request-changes", "review-comment"] as const) {
+  for (const wrongEvent of [false, true]) {
+    test(`${kind}: durable worker uses real HTTP adapter, timeout reconciliation${wrongEvent ? " rejects wrong event" : " confirms without repost"}`, async (t) => {
+      let posts = 0;
+      let remote: Record<string, unknown> | undefined;
+      const adapter = createGithubOutboxAdapter({
+        token: async () => "mock-only",
+        timeoutMs: 20,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/user") return Response.json(actor);
+          if (path === "/repos/owner/repo/pulls/1")
+            return Response.json({ head: { sha: "a".repeat(40) } });
+          assert.equal(path, "/repos/owner/repo/pulls/1/reviews");
+          if (init?.method === "POST") {
+            posts++;
+            const payload = JSON.parse(String(init.body));
+            assert.equal(payload.event, kind === "request-changes" ? "REQUEST_CHANGES" : "COMMENT");
+            assert.equal(payload.commit_id, "a".repeat(40));
+            remote = {
+              id: 91,
+              html_url: scope.url,
+              body: payload.body,
+              commit_id: payload.commit_id,
+              user: actor,
+              submitted_at: "2026-01-01T00:00:00Z",
+              state: wrongEvent
+                ? "APPROVED"
+                : kind === "request-changes"
+                  ? "CHANGES_REQUESTED"
+                  : "COMMENTED",
+            };
+            return new Promise<Response>(() => {});
+          }
+          return Response.json(remote ? [remote] : []);
+        },
+      });
+      const f = await fixture(t, { adapter });
+      const cmd = command({
+        action: { kind, expectedHeadSha: "a".repeat(40), body: "Review body" },
+      });
+      await f.box.enqueue(cmd);
+      await f.activate();
+      await until(
+        async () =>
+          (await operation(f, cmd.operationId)).status === (wrongEvent ? "uncertain" : "synced"),
+      );
+      await f.reopen();
+      await f.activate();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const saved = await operation(f, cmd.operationId);
+      assert.equal(saved.status, wrongEvent ? "uncertain" : "synced");
+      if (!wrongEvent) assert.equal(saved.result?.kind, "review");
+      assert.equal(posts, 1);
     });
   }
-  assert.equal((await f.box.enqueue(child)).outcome, "duplicate");
+}
+
+test("pending and uncertain approval duplicates still bind to the original operation", async (t) => {
+  const f = await fixture(t);
+  const action = { kind: "approve", expectedHeadSha: "a".repeat(40), body: "Reviewed" } as const;
+  const original = command({ action });
+  await f.box.enqueue(original);
+  const pending = await f.box.enqueue(command({ action }));
+  assert.equal(pending.outcome, "duplicate");
+  if (pending.outcome === "duplicate")
+    assert.equal(pending.operation.command.operationId, original.operationId);
+  await f.box.close();
+  const store = await OutboxDatabase.open(f.options.databasePath);
+  const uncertain = store.get(original.operationId)!;
+  uncertain.status = "uncertain";
+  uncertain.retryMode = "blocked";
+  store.transaction(() => store.save(uncertain));
+  await store.close();
+  await f.reopen();
+  f.advance(120_000);
+  const replay = await f.box.enqueue(command({ action }));
+  assert.equal(replay.outcome, "duplicate");
+  if (replay.outcome === "duplicate")
+    assert.equal(replay.operation.command.operationId, original.operationId);
   assert.equal(f.adapter.posts.length, 0);
 });
 
@@ -576,7 +899,6 @@ test("synced local/alias targets and remote targets dedup; alias controls change
   });
   const duplicate = await f.box.enqueue(remote);
   assert.equal(duplicate.outcome, "duplicate");
-  if (duplicate.outcome === "rejected") return;
   const control = {
     requestId: randomUUID(),
     operationId: remote.operationId,
@@ -643,7 +965,7 @@ test("creation content dedup preserves recreation after edits/deletes of its loc
             const unrelatedAlias = { ...unrelatedParent, operationId: randomUUID() };
             await f.box.enqueue(unrelatedParent);
             await f.box.enqueue(unrelatedAlias);
-            const unrelatedTargets = [
+            const unrelatedTargets: GithubCommentRef[] = [
               { source: "remote" as const, kind: commentKind, id: 999 },
               {
                 source: "remote" as const,
@@ -680,10 +1002,9 @@ test("creation content dedup preserves recreation after edits/deletes of its loc
                 "duplicate",
                 "unrelated local/remote/kind mutations must preserve original dedup, including at 59 seconds",
               );
-              if (unchanged.outcome !== "rejected")
-                assert.equal(unchanged.operation.command.operationId, creation.operationId);
+              assert.equal(unchanged.operation.command.operationId, creation.operationId);
             }
-            const target =
+            const target: GithubCommentRef =
               targetSource === "remote"
                 ? { source: "remote" as const, kind: commentKind, id: 123 }
                 : {
@@ -720,15 +1041,13 @@ test("creation content dedup preserves recreation after edits/deletes of its loc
               "accepted",
               "recreation must survive an intervening mutation of the original creation",
             );
-            if (admitted.outcome === "rejected") return;
             assert.equal(admitted.operation.command.operationId, replacement.operationId);
             // Original UUIDs/aliases must still replay to the original, even
             // though fresh UUIDs now represent a distinct creation intent.
             for (const original of [creation, alias]) {
               const replay = await f.box.enqueue(original);
               assert.equal(replay.outcome, "duplicate");
-              if (replay.outcome !== "rejected")
-                assert.equal(replay.operation.command.operationId, creation.operationId);
+              assert.equal(replay.operation.command.operationId, creation.operationId);
             }
             await f.reopen();
             const unrelated = command({
@@ -753,8 +1072,7 @@ test("creation content dedup preserves recreation after edits/deletes of its loc
               "duplicate",
               "unrelated target mutations must not disable dedup",
             );
-            if (repeated.outcome !== "rejected")
-              assert.equal(repeated.operation.command.operationId, replacement.operationId);
+            assert.equal(repeated.operation.command.operationId, replacement.operationId);
             assert.equal(f.adapter.posts.length, 0);
           });
         }
@@ -1190,7 +1508,7 @@ test("synchronous mutation fence enforces the deadline even before its timer can
 
 test("uncertain reconciliation preserves sanitized rate-limit classification and the remote retry deadline across restart", async (t) => {
   let time = Date.parse("2026-01-01T00:00:00.000Z");
-  const retryAt = "2026-01-01T01:00:00.000Z";
+  const retryAt = "2026-01-01T00:30:00.000Z";
   const f = await fixture(t, { now: () => time });
   f.adapter.send = async () => ({
     outcome: "uncertain",
@@ -1205,7 +1523,7 @@ test("uncertain reconciliation preserves sanitized rate-limit classification and
       retryAt,
     },
   });
-  const a = command();
+  const a = command({ queueDeadlineAt: "2026-01-01T01:00:00.000Z" });
   await f.box.enqueue(a);
   await f.activate();
   await until(async () => (await operation(f, a.operationId)).error?.code === "rate-limit");
@@ -1342,7 +1660,7 @@ test("active uncertain FIFO head automatically reconciles reads with durable exp
   assert.equal(f.adapter.posts.length, 1);
 });
 
-test("restart of crashed inflight automatically reads on activation and never reposts", async (t) => {
+test("restart of crashed inflight automatically reads without UI activity and never reposts", async (t) => {
   const f = await fixture(t);
   const a = command();
   await f.box.enqueue(a);
@@ -1356,13 +1674,12 @@ test("restart of crashed inflight automatically reads on activation and never re
   db.close();
   await f.reopen();
   f.adapter.check = async (current) => ({ outcome: "matched", result: result(current) });
-  await f.activate();
   await until(async () => (await operation(f, a.operationId)).status === "synced");
   assert.equal(f.adapter.posts.length, 0);
   assert.equal(f.adapter.reads.length, 1);
 });
 
-test("global two-job limit includes identity preflight and reconciliation across six active PRs", async (t) => {
+test("global two-job limit includes identity preflight and reconciliation across six background PRs", async (t) => {
   const f = await fixture(t);
   let identityCalls = 0;
   let live = 0;
@@ -1391,7 +1708,6 @@ test("global two-job limit includes identity preflight and reconciliation across
   for (let number = 1; number <= 6; number++) {
     const pr = { ...scope, number, url: `https://github.com/owner/repo/pull/${number}` };
     await f.box.enqueue(command({ scope: pr }));
-    await f.activate(pr);
   }
   await until(() => identityCalls === 2);
   await new Promise((resolve) => setTimeout(resolve, 15));
@@ -1884,7 +2200,7 @@ test("heartbeat and enqueue wake immediately; different PRs run concurrently, on
   pending.shift()!();
 });
 
-test("two visible tabs keep a PR active until last lease expires; hidden tab cannot revoke another", async (t) => {
+test("UI lease expiry never pauses already admitted work", async (t) => {
   const f = await fixture(t, { leaseMs: 100 });
   const first = await f.activate();
   const second = await f.activate();
@@ -1895,10 +2211,9 @@ test("two visible tabs keep a PR active until last lease expires; hidden tab can
   f.advance(101);
   const b = command({ action: { kind: "issue-comment", body: "second write" } });
   await f.box.enqueue(b);
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  assert.equal(f.adapter.posts.length, 1);
-  await f.activate(scope, second);
   await until(async () => (await operation(f, b.operationId)).status === "synced");
+  assert.equal(f.adapter.posts.length, 2);
+  await f.box.heartbeat({ clientId: second, scope, visible: false });
 });
 
 test("live wrong actor and failed identity refresh never post, even with active leases", async (t) => {
@@ -1936,7 +2251,6 @@ test("lost acknowledgment never replays; restart and absent reconciliation remai
   await f.box.enqueue(a);
   await until(async () => (await operation(f, a.operationId)).status === "uncertain");
   await f.reopen();
-  await f.activate();
   f.advance(1_000_000);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(f.adapter.posts.length, 1);
@@ -1952,13 +2266,14 @@ test("lost acknowledgment never replays; restart and absent reconciliation remai
     ).outcome,
     "rejected",
   );
+  const readsBefore = f.adapter.reads.length;
   await f.box.control({
     requestId: randomUUID(),
     operationId: a.operationId,
     expectedRevision: op.revision,
     kind: "reconcile",
   });
-  await until(() => f.adapter.reads.length === 1);
+  await until(() => f.adapter.reads.length > readsBefore);
   await until(async () => (await operation(f, a.operationId)).revision > op.revision + 1);
   assert.equal((await operation(f, a.operationId)).status, "uncertain");
   f.adapter.check = async (current) => ({ outcome: "matched", result: result(current) });

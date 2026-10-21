@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { TRPCError } from "@trpc/server";
 
-import type { GithubActor } from "@better-review/shared";
+import type { GithubActor, GithubOutboxError } from "@better-review/shared";
 
 import { STORE_BASE_DIR } from "../store";
 import { createGithubOutbox } from "./outbox";
@@ -15,15 +15,49 @@ export async function createGithubOutboxRuntime(options: {
   identityRefreshMs?: number;
 }) {
   let actor: GithubActor | undefined;
+  let identityError: GithubOutboxError | undefined;
   let closed = false;
   let refreshing: Promise<void> | undefined;
   const refreshIdentity = () =>
     (refreshing ??= (async () => {
       try {
         const identity = await options.adapter.identity();
-        if (!closed) actor = identity.outcome === "known" ? identity.actor : undefined;
+        if (!closed) {
+          actor = identity.outcome === "known" ? identity.actor : undefined;
+          // Distinguish startup/transient unknown from an actual permanent auth
+          // failure. Otherwise the browser would retry a logged-out account forever.
+          const transient =
+            identity.outcome !== "known" &&
+            identity.error.retryable &&
+            ["identity-unknown", "network", "unavailable", "rate-limit"].includes(
+              identity.error.code,
+            );
+          const retryAt =
+            identity.outcome !== "known" && identity.error.retryAt
+              ? Date.parse(identity.error.retryAt)
+              : NaN;
+          identityError =
+            identity.outcome === "known"
+              ? undefined
+              : {
+                  code: transient ? "identity-unknown" : identity.error.code,
+                  retryable: transient,
+                  ...(Number.isFinite(retryAt) ? { retryAt: new Date(retryAt).toISOString() } : {}),
+                  message: transient
+                    ? "GitHub account verification is temporarily unavailable; saved work will retry."
+                    : "GitHub account verification failed. Check gh auth status and sign in, then retry the saved operation.",
+                };
+        }
       } catch {
-        if (!closed) actor = undefined;
+        if (!closed) {
+          actor = undefined;
+          identityError = {
+            code: "identity-unknown",
+            retryable: true,
+            message:
+              "GitHub account verification is temporarily unavailable; saved work will retry.",
+          };
+        }
       }
     })().finally(() => {
       refreshing = undefined;
@@ -32,6 +66,7 @@ export async function createGithubOutboxRuntime(options: {
     databasePath: options.databasePath,
     adapter: options.adapter,
     getCachedActor: () => actor,
+    getCachedIdentityError: () => identityError,
   });
   void refreshIdentity();
   const timer = setInterval(() => {

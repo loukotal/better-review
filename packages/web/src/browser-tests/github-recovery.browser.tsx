@@ -95,7 +95,14 @@ export async function testAppCancelledCommentRecoveryInBrowser() {
     (await githubJournal.editorDrafts(scope)).every((draft) => !draft.body.trim()),
     "Submitted body remained in editor rather than retained operation",
   );
-  document.querySelector<HTMLButtonElement>('button[aria-label="GitHub pending writes"]')!.click();
+  document.querySelector<HTMLButtonElement>('button[aria-label="GitHub queue"]')!.click();
+  await wait(
+    () => !!document.querySelector(`[data-github-queue-action="${operationId}"] summary`),
+    "Pending action row missing",
+  );
+  document
+    .querySelector<HTMLElement>(`[data-github-queue-action="${operationId}"] summary`)!
+    .click();
   await wait(
     () => !!document.querySelector(`[popover]:popover-open [data-operation-id="${operationId}"]`),
     "Pending cancellation controls missing",
@@ -114,9 +121,7 @@ export async function testAppCancelledCommentRecoveryInBrowser() {
   );
   await window.dismissBrowserPopover("escape");
   await wait(() => !document.querySelector("[popover]:popover-open"), "Recovery did not close");
-  const recovery = document.querySelector<HTMLButtonElement>(
-    'button[aria-label="GitHub saved content"]',
-  );
+  const recovery = document.querySelector<HTMLButtonElement>('button[aria-label="GitHub queue"]');
   check(!!recovery, "Zero-pending history icon disappeared with retained cancelled text");
   check(
     recovery!.querySelectorAll("svg").length === 1 && !recovery!.innerText.trim(),
@@ -127,6 +132,16 @@ export async function testAppCancelledCommentRecoveryInBrowser() {
     "Cancelled comment still rendered as pending",
   );
   recovery!.click();
+  await wait(
+    () =>
+      [...document.querySelectorAll("button")].some(
+        (button) => button.textContent?.trim() === "Drafts & history",
+      ),
+    "History view toggle missing",
+  );
+  [...document.querySelectorAll("button")]
+    .find((button) => button.textContent?.trim() === "Drafts & history")!
+    .click();
   await wait(
     () =>
       !!document.querySelector(

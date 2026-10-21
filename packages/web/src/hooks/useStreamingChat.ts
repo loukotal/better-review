@@ -1,6 +1,11 @@
 import { batch, createEffect, createSignal, onCleanup } from "solid-js";
 
-import type { ReviewSnapshot, ReviewMessage, ReviewSettlement } from "@better-review/shared";
+import type {
+  ReviewSnapshot,
+  ReviewMessage,
+  ReviewSettlement,
+  ReviewModelIntent,
+} from "@better-review/shared";
 
 import { createReviewClient, type ReviewClient } from "../lib/review-client";
 
@@ -29,6 +34,7 @@ export interface UseStreamingChatOptions {
   onError?: (error: string) => void;
 }
 export interface SendMessageOptions {
+  model?: ReviewModelIntent;
   reviewMode?: "full" | "commit";
   commitSha?: string;
 }
@@ -134,7 +140,7 @@ export function useStreamingChat(
   let pending:
     | { body: string; key: string; id?: string; resolve: (success: boolean) => void }
     | undefined;
-  let retry: { body: string; key: string } | undefined;
+  let retry: { body: string; key: string; model?: ReviewModelIntent } | undefined;
   let latest: ReviewSnapshot | undefined;
 
   function connected() {
@@ -226,7 +232,7 @@ export function useStreamingChat(
   });
   onCleanup(disconnect);
 
-  async function submit(body: string, key: string): Promise<boolean> {
+  async function submit(body: string, key: string, model?: ReviewModelIntent): Promise<boolean> {
     if (!client || pending || isStreaming()) return false;
     const target = client;
     const version = generation;
@@ -240,7 +246,7 @@ export function useStreamingChat(
     setIsStreaming(true);
     setAwaitingFirstToken(true);
     try {
-      const receipt = await target.send(body, key);
+      const receipt = await target.send(body, key, model);
       if (generation !== version || !pending) return false;
       pending.id = receipt.submissionId;
       if (latest) apply(latest);
@@ -252,7 +258,7 @@ export function useStreamingChat(
     } catch (cause) {
       if (generation !== version) return false;
       const message = cause instanceof Error ? cause.message : "Failed to send review message";
-      retry = { body, key };
+      retry = { body, key, model };
       setRetryableMessage(body);
       setError(message);
       resetStreaming();
@@ -280,8 +286,9 @@ export function useStreamingChat(
     streamingRevision,
     revision,
     activeTools,
-    sendMessage: (body: string, _options?: SendMessageOptions) => submit(body, crypto.randomUUID()),
-    retry: () => (retry ? submit(retry.body, retry.key) : Promise.resolve(false)),
+    sendMessage: (body: string, options?: SendMessageOptions) =>
+      submit(body, crypto.randomUUID(), options?.model),
+    retry: () => (retry ? submit(retry.body, retry.key, retry.model) : Promise.resolve(false)),
     async abort() {
       const target = client;
       const version = generation;

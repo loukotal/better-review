@@ -15,7 +15,7 @@ import {
   untrack,
 } from "solid-js";
 
-import { type StoredSession } from "@better-review/shared";
+import { type StoredSession, type ReviewModelIntent } from "@better-review/shared";
 
 import { AnnotationBlock } from "./components/AnnotationBlock";
 import { FileLink } from "./components/FileLink";
@@ -49,6 +49,7 @@ import {
   renderMermaidCodeBlock,
   renderSemanticTextCodeBlock,
 } from "./lib/markdown";
+import { modelIntent } from "./lib/model-selection";
 import { createReviewClient } from "./lib/review-client";
 import { createQuestionDelivery, type ReviewInteractions } from "./lib/review-interactions";
 import {
@@ -134,6 +135,9 @@ export function ChatPanel(props: ChatPanelProps) {
   const [input, setInput] = createSignal("");
   const [linkNotice, setLinkNotice] = createSignal<string | null>(null);
   const [sendingSelection, setSendingSelection] = createSignal(false);
+  const [modelReady, setModelReady] = createSignal(false);
+  const [modelError, setModelError] = createSignal<string | null>(null);
+  const [selectedModel, setSelectedModel] = createSignal<ReviewModelIntent | null>(null);
   const selectionDelivery = createQuestionDelivery(() => ({
     scope: props.selectionScope ?? "",
     ready: !!props.prUrl && !disposed,
@@ -182,6 +186,7 @@ export function ChatPanel(props: ChatPanelProps) {
   });
 
   const reviewActionsDisabled = () =>
+    !modelReady() ||
     sendingSelection() ||
     initializing() ||
     creatingNewSession() ||
@@ -449,11 +454,13 @@ export function ChatPanel(props: ChatPanelProps) {
 
   async function submitMessage(message: string) {
     const trimmedMessage = message.trim();
-    if (!trimmedMessage || reviewActionsDisabled() || !sessionId()) return;
+    const model = selectedModel();
+    if (!trimmedMessage || !model || reviewActionsDisabled() || !sessionId()) return;
 
     setPullNotice(null);
     setInput("");
     await chat.sendMessage(trimmedMessage, {
+      model: modelIntent(model),
       reviewMode: props.reviewMode,
       commitSha: props.reviewMode === "commit" ? (props.commitSha ?? undefined) : undefined,
     });
@@ -466,9 +473,12 @@ export function ChatPanel(props: ChatPanelProps) {
     selectionIsCurrent: () => boolean,
   ): Promise<boolean> {
     const prUrl = props.prUrl;
+    const model = selectedModel();
     if (
       !selection ||
       !prUrl ||
+      !modelReady() ||
+      !model ||
       sendingSelection() ||
       initializing() ||
       creatingNewSession() ||
@@ -493,6 +503,7 @@ export function ChatPanel(props: ChatPanelProps) {
     try {
       const delivery = props.interactions ?? selectionDelivery;
       const id = await delivery.askAbout(selection, body, {
+        model: modelIntent(model),
         target,
         isCurrent,
         client: createReviewClient,
@@ -528,7 +539,11 @@ export function ChatPanel(props: ChatPanelProps) {
       currentSessionId: sessionId,
       currentBusy: () => chat.isStreaming() || chat.compacting(),
       disabled: () =>
-        initializing() || creatingNewSession() || pullingLatest() || sendingSelection(),
+        !modelReady() ||
+        initializing() ||
+        creatingNewSession() ||
+        pullingLatest() ||
+        sendingSelection(),
       sessions,
       send: sendSelection,
     }),
@@ -1452,6 +1467,13 @@ export function ChatPanel(props: ChatPanelProps) {
                 align="left"
                 disabled={chat.isStreaming() || initializing() || creatingNewSession()}
                 class="shrink-0"
+                onStateChange={(state) => {
+                  batch(() => {
+                    setSelectedModel(state.model ? modelIntent(state.model) : null);
+                    setModelError(state.error);
+                    setModelReady(state.ready);
+                  });
+                }}
               />
             </div>
             <Checkbox
@@ -1468,6 +1490,22 @@ export function ChatPanel(props: ChatPanelProps) {
           </Show>
         </div>
       </div>
+
+      <Show when={sessionId() && !modelReady()}>
+        <div role={modelError() ? "alert" : "status"} class="px-3 py-2 text-xs text-text-muted">
+          {modelError() ?? "Loading review model. New prompts are blocked until it is ready."}
+          <Show when={modelError()}>
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              onClick={() => setAssistantSettingsOpen(true)}
+            >
+              Open model settings
+            </Button>
+          </Show>
+        </div>
+      </Show>
 
       {/* Messages */}
       <div
@@ -1638,7 +1676,15 @@ export function ChatPanel(props: ChatPanelProps) {
         <div class="flex items-center justify-between gap-3 border-t border-error/20 bg-error/10 px-3 py-2">
           <div class="text-error text-sm">{displayError() ?? "The last prompt failed."}</div>
           <Show when={chat.retryableMessage() && !chat.isStreaming()}>
-            <Button type="button" variant="secondary" size="xs" onClick={() => void chat.retry()}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="xs"
+              disabled={!modelReady()}
+              onClick={() => {
+                if (modelReady()) void chat.retry();
+              }}
+            >
               Retry
             </Button>
           </Show>
@@ -1683,7 +1729,11 @@ export function ChatPanel(props: ChatPanelProps) {
                     : "Load a PR first"
               }
               disabled={
-                !sessionId() || chat.isStreaming() || creatingNewSession() || sendingSelection()
+                !modelReady() ||
+                !sessionId() ||
+                chat.isStreaming() ||
+                creatingNewSession() ||
+                sendingSelection()
               }
               aria-label="Message review assistant"
               class="w-full resize-none"
@@ -1710,6 +1760,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 type="submit"
                 disabled={
                   !sessionId() ||
+                  !modelReady() ||
                   chat.isStreaming() ||
                   creatingNewSession() ||
                   sendingSelection() ||

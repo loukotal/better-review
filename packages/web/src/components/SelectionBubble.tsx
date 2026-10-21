@@ -31,7 +31,19 @@ export function SelectionBubble(props: {
     let lastRect = anchor.fallbackRect;
     let focusPending = !!props.expanded;
     let focusFrame: number | undefined;
+    const inertAncestor = (node: Node): boolean => {
+      if (node instanceof Element && node.closest("[inert]")) return true;
+      const root = node.getRootNode();
+      return root instanceof ShadowRoot ? inertAncestor(root.host) : false;
+    };
+    const inactive = () => inertAncestor(bubble) || inertAncestor(anchor.root);
     const update = () => {
+      if (inactive()) {
+        if (bubble.matches(":popover-open")) bubble.hidePopover();
+        if (!props.retained) props.onHide();
+        return;
+      }
+      if (!bubble.matches(":popover-open")) bubble.showPopover();
       let rect;
       try {
         rect = anchor.rect(!props.expanded);
@@ -80,7 +92,7 @@ export function SelectionBubble(props: {
       if (focusPending) {
         focusPending = false;
         focusFrame = requestAnimationFrame(() => {
-          if (bubble.isConnected)
+          if (bubble.isConnected && !inactive())
             bubble.querySelector<HTMLTextAreaElement>("textarea")?.focus({ preventScroll: true });
         });
       }
@@ -98,17 +110,24 @@ export function SelectionBubble(props: {
       cancel: (id) => cancelAnimationFrame(id),
     });
     const observer = new MutationObserver(watcher.refresh);
-    observer.observe(document, { childList: true, subtree: true });
+    observer.observe(document, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["inert"],
+    });
     observer.observe(anchor.root, { childList: true, subtree: true });
     const resize = new ResizeObserver(watcher.refresh);
     resize.observe(bubble);
     const pointer = (event: Event) => {
+      if (inactive()) return;
       if (!event.composedPath().includes(bubble)) {
         if (props.expanded) (props.onClose ?? props.onDismiss)();
         else props.onHide();
       }
     };
     const key = (event: KeyboardEvent) => {
+      if (inactive()) return;
       if (event.key === "Escape" && !event.isComposing && !event.defaultPrevented) {
         event.preventDefault();
         event.stopPropagation();

@@ -40,7 +40,9 @@ export function matches(
 ): boolean {
   if (!isGithubRemoteResult(result)) return false;
   if (
-    (result.kind === "issue-comment" || result.kind === "review-comment") &&
+    (result.kind === "issue-comment" ||
+      result.kind === "review-comment" ||
+      result.kind === "review") &&
     result.author.id !== op.command.expectedActor.id
   )
     return false;
@@ -71,6 +73,14 @@ export function matches(
       );
     case "approve":
       return result.kind === "approval" && result.commitSha === a.expectedHeadSha;
+    case "request-changes":
+    case "review-comment":
+      return (
+        result.kind === "review" &&
+        result.commitSha === a.expectedHeadSha &&
+        result.body === a.body &&
+        result.state === (a.kind === "request-changes" ? "CHANGES_REQUESTED" : "COMMENTED")
+      );
     case "edit-comment":
       return (
         result.kind === a.target.kind &&

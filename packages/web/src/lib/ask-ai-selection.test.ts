@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { parseDiffFromFile, parsePatchFiles } from "@pierre/diffs";
 
-import type { ReviewSnapshot } from "@better-review/shared";
+import type { ReviewSnapshot, ReviewModelIntent } from "@better-review/shared";
 
 import {
   createSelectionSender,
@@ -328,4 +328,35 @@ test("creation failure and navigation before submission never send", async () =>
   assert.equal(h.sends.length, 0);
   h.navigate();
   await assert.rejects(h.sender.send(h.options), /revision changed/);
+});
+
+test("a question retry retains its original model and receipt key after the global choice changes", async () => {
+  const h = harness();
+  const model: ReviewModelIntent = {
+    providerId: "fixture",
+    modelId: "A",
+    variant: null,
+    thinkingLevel: "high",
+  };
+  const calls: Array<{ model?: ReviewModelIntent; key: string }> = [];
+  const options = {
+    ...h.options,
+    model,
+    client: (id: string) => ({
+      history: h.options.client(id).history,
+      send: async (_body: string, key: string, captured?: ReviewModelIntent) => {
+        calls.push({ model: captured, key });
+        if (calls.length === 1) throw new Error("lost receipt");
+        return { submissionId: "one" };
+      },
+    }),
+  };
+  await assert.rejects(h.sender.send(options), /lost receipt/);
+  await h.sender.send({ ...options, model: { ...model, modelId: "B" } });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.key, calls[1]?.key);
+  assert.deepEqual(
+    calls.map((call) => call.model?.modelId),
+    ["A", "A"],
+  );
 });

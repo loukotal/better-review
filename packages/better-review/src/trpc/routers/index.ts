@@ -2,6 +2,7 @@ import { router } from "../index";
 import { githubOutboxRouter } from "./github-outbox";
 import { modelsRouter } from "./models";
 import { prRouter } from "./pr";
+import { prDetailRouter } from "./pr-detail";
 import { prReviewRouter } from "./pr-review";
 import { projectsRouter } from "./projects";
 import { prsRouter } from "./prs";
@@ -12,6 +13,7 @@ import { userRouter } from "./user";
 export const appRouter = router({
   githubOutbox: githubOutboxRouter,
   pr: prRouter,
+  prDetail: prDetailRouter,
   prs: prsRouter,
   projects: projectsRouter,
   user: userRouter,

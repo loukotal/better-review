@@ -6,6 +6,7 @@ import type {
 import { isGithubRemoteResult } from "@better-review/shared";
 
 import { OutboxDatabase } from "./database.js";
+import { expireOperation, queueDeadline } from "./lifecycle";
 import type {
   GithubDispatchOutcome,
   GithubOutboxAdapter,
@@ -113,6 +114,9 @@ export class OutboxWorker {
     });
     this.timer = setInterval(() => this.wake(), options.pollMs);
     this.timer.unref();
+    // These are already admitted explicit user intents. Browser visibility is
+    // telemetry, never permission to finish (or read-reconcile) durable work.
+    setImmediate(() => this.wake());
   }
   private save(op: GithubOutboxOperation): void {
     op.revision++;
@@ -122,18 +126,24 @@ export class OutboxWorker {
   wake(): void {
     if (!this.alive()) return;
     const now = this.options.now();
+    this.store.transaction(() => {
+      for (const op of this.store.list()) if (expireOperation(op, now)) this.save(op);
+    });
     const scopes = this.store.db
-      .prepare("SELECT DISTINCT scope FROM leases WHERE expires>?")
-      .all(now);
+      .prepare(
+        "SELECT DISTINCT scope FROM operations WHERE json_extract(data,'$.status') NOT IN ('synced','cancelled') ORDER BY scope",
+      )
+      .all();
     for (const row of scopes) {
       if (this.slots.size >= 2 || this.slotWaiters.size > 0) break;
       const scope = row.scope as string;
       if (this.running.has(scope) || this.checking.has(scope)) continue;
       const first = this.store
         .list(scope)
-        .find((op) => op.status !== "synced" && op.status !== "cancelled");
+        .find((op) => !op.archivedAt && op.status !== "synced" && op.status !== "cancelled");
       if (
         !first ||
+        first.timedOutAt ||
         (first.status !== "queued" &&
           first.status !== "retry-failed" &&
           first.status !== "uncertain")
@@ -170,16 +180,13 @@ export class OutboxWorker {
       this.running.set(scope, task);
     }
   }
-  private active(op: GithubOutboxOperation): boolean {
-    return !!this.store.db
-      .prepare("SELECT 1 FROM leases WHERE scope=? AND expires>? LIMIT 1")
-      .get(op.command.scope.url, this.options.now());
-  }
   private async bounded<T>(
     fn: (signal: AbortSignal, beforeMutation: () => void) => Promise<T>,
+    timeoutMs = this.options.attemptTimeoutMs,
   ): Promise<T> {
+    if (timeoutMs <= 0) throw new Error("GitHub queue deadline exceeded");
     const controller = new AbortController();
-    const deadline = performance.now() + this.options.attemptTimeoutMs;
+    const deadline = performance.now() + timeoutMs;
     const beforeMutation = () => {
       // Timers/polling cannot fence a synchronous preflight completion. Re-read
       // the durable token and monotonic deadline at the adapter's actual send.
@@ -211,7 +218,7 @@ export class OutboxWorker {
           timer = setTimeout(() => {
             controller.abort();
             reject(new Error("Adapter deadline exceeded"));
-          }, this.options.attemptTimeoutMs);
+          }, timeoutMs);
         }),
       ]);
     } finally {
@@ -220,9 +227,17 @@ export class OutboxWorker {
       if (cancel) this.cancellations.delete(cancel);
     }
   }
-  private async identity(op: GithubOutboxOperation): Promise<GithubOutboxError | undefined> {
+  private async identity(
+    op: GithubOutboxOperation,
+    respectQueueDeadline = false,
+  ): Promise<GithubOutboxError | undefined> {
     try {
-      const identity = await this.bounded((signal) => this.options.adapter.identity({ signal }));
+      const identity = await this.bounded(
+        (signal) => this.options.adapter.identity({ signal }),
+        respectQueueDeadline
+          ? Math.min(this.options.attemptTimeoutMs, queueDeadline(op) - this.options.now())
+          : this.options.attemptTimeoutMs,
+      );
       if (identity.outcome !== "known")
         return sanitized(identity.error, "GitHub identity could not be verified.");
       if (identity.actor.id !== op.command.expectedActor.id)
@@ -256,14 +271,19 @@ export class OutboxWorker {
   }
   private async attempt(initial: GithubOutboxOperation): Promise<void> {
     // Identity reads precede claiming a write; controls may run while this awaits.
-    const identityError = await this.identity(initial);
+    const identityError = await this.identity(initial, true);
     if (this.stopped || this.store.compromised) return;
     if (!identityError) await this.discoverThread(initial);
     if (this.stopped || this.store.compromised) return;
     let dispatched: GithubOutboxOperation | undefined;
     this.store.transaction(() => {
       const op = this.store.get(initial.command.operationId)!;
-      if (op.revision !== initial.revision || !this.active(op)) return;
+      if (op.revision !== initial.revision) return;
+      if (expireOperation(op, this.options.now())) {
+        this.save(op);
+        return;
+      }
+      if (op.archivedAt || op.timedOutAt) return;
       if (identityError) {
         op.status = "retry-failed";
         op.error = identityError;
@@ -319,10 +339,28 @@ export class OutboxWorker {
     let outcome: GithubDispatchOutcome;
     try {
       // Recheck durable ownership immediately before entering adapter preflight.
-      outcome = await this.bounded((signal, beforeMutation) => {
-        if (!this.alive() || signal.aborted) throw new Error("Worker stopped");
-        return this.options.adapter.dispatch(sent, { signal, beforeMutation });
-      });
+      outcome = await this.bounded(
+        (signal, beforeMutation) => {
+          if (!this.alive() || signal.aborted) throw new Error("Worker stopped");
+          return this.options.adapter.dispatch(sent, {
+            signal,
+            beforeMutation: () => {
+              beforeMutation();
+              const current = this.store.get(sent.command.operationId);
+              if (
+                !current ||
+                current.archivedAt ||
+                current.timedOutAt ||
+                current.status !== "inflight" ||
+                current.revision !== sent.revision ||
+                queueDeadline(current) <= this.options.now()
+              )
+                throw new Error("GitHub queue mutation fence failed");
+            },
+          });
+        },
+        Math.min(this.options.attemptTimeoutMs, queueDeadline(sent) - this.options.now()),
+      );
     } catch {
       outcome = {
         outcome: "uncertain" as const,
@@ -496,6 +534,7 @@ export class OutboxWorker {
         current.retryMode = "blocked";
         current.result = outcome.result;
         delete current.error;
+        delete current.timedOutAt;
         delete current.nextAttemptAt;
       } else {
         current.error =
@@ -514,7 +553,9 @@ export class OutboxWorker {
             current.error.code,
           );
         if (authBlocked) delete current.nextAttemptAt;
-        else current.nextAttemptAt = this.backoff(count, current.error.retryAt, 5_000);
+        else if (!current.timedOutAt && !current.archivedAt)
+          current.nextAttemptAt = this.backoff(count, current.error.retryAt, 5_000);
+        else delete current.nextAttemptAt;
       }
       this.save(current);
     });

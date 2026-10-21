@@ -2,6 +2,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { type Models, type ModelThinkingLevel, type Message } from "@earendil-works/pi-ai";
 import {
   Harness,
+  AgentDoc,
   configure,
   createRegistry,
   defineDoc,
@@ -16,6 +17,11 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import type { ReviewMessage, ReviewSnapshot, ReviewSettlement } from "@better-review/shared";
 
 import type { PrReviewSession } from "../pr-review-sessions";
+import {
+  AdmissionIntentDoc,
+  admissionFingerprint,
+  ReviewAdmissionConflict,
+} from "./admission-intent";
 import { reviewerExtension } from "./agent";
 import { measure, startMeasurement } from "./metrics";
 import type { SubmissionSandbox } from "./microsandbox";
@@ -45,6 +51,7 @@ export async function openReviewEngine(options: {
   let observingRun = false;
   let lastObservedSubmission = 0;
   let closed = false;
+  let admissions: Promise<void> = Promise.resolve();
   let session = options.session;
   const releaseSandbox = async () => {
     const active = vm;
@@ -342,6 +349,47 @@ export async function openReviewEngine(options: {
     }, context);
     session = next;
   }
+  async function legacyIntent(record: SubmissionRecord) {
+    if (record.type !== "input" || record.entry === undefined) return undefined;
+    try {
+      const [storedEntry, agent, review] = await Promise.all([
+        storage.entry(conversation.id, record.entry, context),
+        harness.snapshotAsOf(AgentDoc, conversation.id, record.entry, context),
+        harness.snapshotAsOf(ReviewDoc, conversation.id, record.entry, context),
+      ]);
+      const messages = storedEntry?.entry.model;
+      const original = messages?.length === 1 ? messages[0] : undefined;
+      if (
+        storedEntry?.entry.kind !== "pi.user" ||
+        original?.role !== "user" ||
+        typeof original.content !== "string" ||
+        !agent?.model ||
+        !review?.session
+      )
+        return undefined;
+      const saved = JSON.parse(review.session) as PrReviewSession;
+      if (
+        saved.id !== options.session.id ||
+        ![2, 3].includes(saved.runtimeVersion) ||
+        typeof saved.headSha !== "string" ||
+        typeof saved.baseSha !== "string" ||
+        !Array.isArray(saved.files)
+      )
+        return undefined;
+      return {
+        id: record.id,
+        fingerprint: admissionFingerprint(
+          original.content,
+          agent.model,
+          agent.thinkingLevel ?? "off",
+          saved,
+        ),
+      };
+    } catch {
+      // Missing/unreadable historical evidence is not permission to guess from current settings.
+      return undefined;
+    }
+  }
   async function submit(
     body: string,
     requestId: string,
@@ -349,42 +397,85 @@ export async function openReviewEngine(options: {
     thinkingLevel?: ModelThinkingLevel,
     nextSession?: PrReviewSession,
   ) {
-    // requestId is persisted before work starts; retrying an admitted HTTP request is safe.
-    const existing = await storage.submissionByRequest(conversation.id, requestId, context);
-    if (existing) return { submissionId: String(existing.id) };
-    if (nextSession) await syncSession(nextSession);
-    else {
-      const inspection = await harness.inspect(context);
-      if (inspection.tasks.length || inspection.submissions.length)
-        throw new Error("Review is running");
-    }
-    await releaseSandbox();
-    await conversation.configure({ model, thinkingLevel }, context);
-    const durationDone = startMeasurement("review.duration");
-    const receipt = await conversation.submit(
-      { type: "input", content: body, requestId, whenBusy: "reject" },
-      context,
+    // Capture before the first await, including caller-owned objects. Omitted thinking
+    // means Pi's default "off", never whatever a previous prompt configured.
+    const capturedSession = structuredClone(nextSession ?? session);
+    const capturedModel = { provider: model.provider, modelId: model.modelId };
+    const capturedThinking = thinkingLevel ?? "off";
+    const fingerprint = admissionFingerprint(
+      body,
+      capturedModel,
+      capturedThinking,
+      capturedSession,
     );
-    // Concurrent HTTP retries can both pass submissionByRequest before admission. The
-    // durable layer deduplicates their receipts; observe that receipt only once too.
-    // Submission IDs increase monotonically, so this needs no growing request-ID set.
-    if (receipt.id <= lastObservedSubmission) return { submissionId: String(receipt.id) };
-    lastObservedSubmission = receipt.id;
-    const generation = ++runGeneration;
-    observingRun = true;
-    void receipt
-      .wait(context)
-      .then(() => {
-        if (!closed) durationDone();
-        if (generation === runGeneration) observingRun = false;
-        if (generation === runGeneration) return releaseSandbox();
-      })
-      .catch(() => {
-        if (!closed) durationDone();
-        if (generation === runGeneration) observingRun = false;
-        console.error("[Review] Submission interrupted");
-      });
-    return { submissionId: String(receipt.id) };
+    const attempt = admissions.then(async () => {
+      const earlier = await storage.submissionByRequest(conversation.id, requestId, context);
+      const proof =
+        earlier &&
+        !(await harness.snapshot(AdmissionIntentDoc, conversation.id, requestId, context))
+          ?.fingerprint
+          ? await legacyIntent(earlier)
+          : undefined;
+      // Claim the key durably before configuration/admission. A crash between these
+      // commits permits only the identical intent to finish admission on retry.
+      const existing = await conversation.commit(async (tx) => {
+        const previous = await tx.submissionByRequest(conversation.id, requestId);
+        const intent = await tx.doc(AdmissionIntentDoc, conversation.id, requestId, null);
+        if (intent.fingerprint && intent.fingerprint !== fingerprint)
+          throw new ReviewAdmissionConflict("intent_changed");
+        // Only the original user entry and historical documents at its commit can
+        // verify a legacy claim; current agent/session settings cannot.
+        if (previous && !intent.fingerprint) {
+          if (!proof || proof.id !== previous.id)
+            throw new ReviewAdmissionConflict("legacy_unverifiable");
+          if (proof.fingerprint !== fingerprint)
+            throw new ReviewAdmissionConflict("intent_changed");
+        }
+        if (previous && previous.type !== "input")
+          throw new ReviewAdmissionConflict("intent_changed");
+        intent.fingerprint = fingerprint;
+        return previous;
+      }, context);
+      if (existing) return { submissionId: String(existing.id) };
+      await syncSession(capturedSession);
+      await releaseSandbox();
+      await conversation.configure(
+        { model: capturedModel, thinkingLevel: capturedThinking },
+        context,
+      );
+      const durationDone = startMeasurement("review.duration");
+      const receipt = await conversation.submit(
+        { type: "input", content: body, requestId, whenBusy: "reject" },
+        context,
+      );
+      // The durable layer may return an already-admitted receipt after interrupted
+      // admission. Observe that receipt only once too.
+      // Submission IDs increase monotonically, so this needs no growing request-ID set.
+      if (receipt.id <= lastObservedSubmission) return { submissionId: String(receipt.id) };
+      lastObservedSubmission = receipt.id;
+      const generation = ++runGeneration;
+      observingRun = true;
+      void receipt
+        .wait(context)
+        .then(() => {
+          if (!closed) durationDone();
+          if (generation === runGeneration) observingRun = false;
+          if (generation === runGeneration) return releaseSandbox();
+        })
+        .catch(() => {
+          if (!closed) durationDone();
+          if (generation === runGeneration) observingRun = false;
+          console.error("[Review] Submission interrupted");
+        });
+      return { submissionId: String(receipt.id) };
+    });
+    // Serialize configuration and admission, but never wait for model execution.
+    // Rejections do not poison subsequent identical retries or other request IDs.
+    admissions = attempt.then(
+      () => undefined,
+      () => undefined,
+    );
+    return attempt;
   }
   return {
     harness,

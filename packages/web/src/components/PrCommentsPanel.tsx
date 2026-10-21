@@ -4,6 +4,11 @@ import { Button, MessageForm, Textarea } from "../design-system";
 import { ChevronDownIcon } from "../icons/chevron-down-icon";
 import { CommentIcon } from "../icons/comment-icon";
 import type { projectGithubComments } from "../lib/github-comment-views";
+import { remoteCommentDetails } from "../lib/github-comment-views";
+import {
+  githubConversationReplyBody,
+  groupGithubConversation,
+} from "../lib/github-conversation-threads";
 import { createGithubEditorDraft } from "../lib/github-editor-draft";
 import { githubPrScope } from "../lib/github-writes";
 import type { IssueComment } from "../lib/query";
@@ -18,6 +23,7 @@ interface PrCommentsPanelProps {
   embedded?: boolean;
   comments: IssueComment[];
   loading?: boolean;
+  unavailable?: boolean;
   repoOwner?: string | null;
   repoName?: string | null;
   onAddComment?: (body: string, draftKey?: string) => Promise<void>;
@@ -28,136 +34,6 @@ interface PrCommentsPanelProps {
     expectedBody?: string,
   ) => Promise<void>;
   onDeleteComment?: (commentId: number) => Promise<void>;
-}
-
-interface DisplayComment extends IssueComment {
-  /** Body with quote block stripped (for replies) */
-  displayBody: string;
-}
-
-interface CommentThread {
-  root: DisplayComment;
-  replies: DisplayComment[];
-}
-
-/**
- * Extract quoted text from a comment body (lines starting with >)
- */
-function extractQuotedText(body: string): string | null {
-  const lines = body.trim().split("\n");
-  if (!lines[0]?.startsWith(">")) return null;
-
-  const quoteLines: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith(">")) {
-      // Remove the > prefix and trim
-      quoteLines.push(line.slice(1).trim());
-    } else if (line.trim() === "") {
-      // Preserve empty lines within quote block
-      quoteLines.push("");
-    } else {
-      // End of quote block
-      break;
-    }
-  }
-
-  return quoteLines.join("\n").trim() || null;
-}
-
-/**
- * Find which comment is being replied to by matching quoted text.
- * Returns the comment ID being replied to, or null if not found.
- */
-function findReplyTarget(comment: IssueComment, previousComments: IssueComment[]): number | null {
-  const quotedText = extractQuotedText(comment.body);
-  if (!quotedText) return null;
-
-  // Search backwards through previous comments to find a match
-  for (let i = previousComments.length - 1; i >= 0; i--) {
-    const candidate = previousComments[i];
-
-    // Check against stripped body (for replies that quoted the displayed text)
-    const strippedBody = stripQuoteBlock(candidate.body).trim();
-    if (strippedBody && strippedBody.startsWith(quotedText)) {
-      return candidate.id;
-    }
-
-    // Check against original body (for root comments or replies that quoted the original)
-    const originalBody = candidate.body.trim();
-    if (originalBody.startsWith(quotedText)) {
-      return candidate.id;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Strip the quote block and @mention from the beginning of a reply body.
- */
-function stripQuoteBlock(body: string): string {
-  const lines = body.split("\n");
-  let contentStartIndex = 0;
-
-  // Skip quote lines
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line.startsWith(">") || line === "") {
-      contentStartIndex = i + 1;
-    } else {
-      break;
-    }
-  }
-
-  // Get the remaining content
-  let remaining = lines.slice(contentStartIndex).join("\n").trim();
-
-  // Strip leading @mention if present
-  remaining = remaining.replace(/^@[\w-]+\s*/, "").trim();
-
-  return remaining;
-}
-
-/**
- * Convert IssueComment to DisplayComment
- */
-function toDisplayComment(comment: IssueComment, isReply: boolean): DisplayComment {
-  return {
-    ...comment,
-    displayBody: isReply ? stripQuoteBlock(comment.body) : comment.body,
-  };
-}
-
-/**
- * Group comments into threads based on quote matching.
- * A reply to any comment in a thread gets added to that thread.
- */
-function groupIntoThreads(comments: IssueComment[]): CommentThread[] {
-  if (comments.length === 0) return [];
-
-  const threads: CommentThread[] = [];
-  const commentToThread = new Map<number, number>(); // comment id -> thread index
-
-  for (let i = 0; i < comments.length; i++) {
-    const comment = comments[i];
-    const previousComments = comments.slice(0, i);
-    const replyTargetId = findReplyTarget(comment, previousComments);
-
-    if (replyTargetId !== null && commentToThread.has(replyTargetId)) {
-      // This is a reply to an existing comment - add to its thread
-      const threadIndex = commentToThread.get(replyTargetId)!;
-      threads[threadIndex].replies.push(toDisplayComment(comment, true));
-      // Map this comment to the same thread so replies to it also go here
-      commentToThread.set(comment.id, threadIndex);
-    } else {
-      // This is a root comment - start a new thread
-      const threadIndex = threads.length;
-      threads.push({ root: toDisplayComment(comment, false), replies: [] });
-      commentToThread.set(comment.id, threadIndex);
-    }
-  }
-
-  return threads;
 }
 
 export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
@@ -188,9 +64,20 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
   );
   const hasComments = createMemo(() => (views()?.length ?? props.comments.length) > 0);
   const commentCount = createMemo(() => views()?.length ?? props.comments.length);
+  const viewThreads = createMemo(() =>
+    groupGithubConversation(views() ?? [], (comment) => remoteCommentDetails(comment).knownLogin),
+  );
 
   // Group comments into threads
-  const threads = createMemo(() => groupIntoThreads(props.comments));
+  const threads = createMemo(() =>
+    groupGithubConversation(props.comments, (comment) => comment.user.login).map((thread) => ({
+      root: { ...thread.root, displayBody: thread.root.body },
+      replies: thread.replies.map((reply) => ({
+        ...reply,
+        displayBody: githubConversationReplyBody(reply.body),
+      })),
+    })),
+  );
 
   const handleReply = (commentId: number, username: string, quotedBody: string) => {
     setReplyingToId(commentId);
@@ -294,6 +181,11 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
   return (
     <Show when={!props.loading}>
       <div class="border-t border-border">
+        <Show when={props.unavailable}>
+          <p role="alert" class="p-3 text-sm text-text-muted">
+            GitHub conversation comments unavailable. Displayed comments may be cached.
+          </p>
+        </Show>
         <Show when={saveError()}>
           <p role="alert" class="text-xs text-error">
             {saveError()}
@@ -334,7 +226,11 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
             <Show
               when={hasComments()}
               fallback={
-                <div class="text-sm text-text-faint py-2">No conversation comments yet</div>
+                <div class="text-sm text-text-faint py-2">
+                  {props.unavailable
+                    ? "Conversation could not be loaded."
+                    : "No conversation comments yet"}
+                </div>
               }
             >
               <Show
@@ -342,7 +238,10 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                 fallback={
                   <For each={threads()}>
                     {(thread) => (
-                      <div class="bg-bg-elevated border border-border p-3">
+                      <div
+                        data-github-conversation-thread={`legacy:${thread.root.id}`}
+                        class="bg-bg-elevated border border-border p-3"
+                      >
                         {/* Root comment */}
                         <CommentView
                           comment={thread.root}
@@ -379,14 +278,37 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                   </For>
                 }
               >
-                <For each={views()?.map((comment) => comment.key)}>
-                  {(key) => (
-                    <GithubCommentCard
-                      comment={views()!.find((comment) => comment.key === key)!}
-                      scope={githubPrScope(props.prUrl!)}
-                      operations={props.githubView?.operations ?? []}
-                    />
-                  )}
+                <For each={viewThreads().map((thread) => thread.root.key)}>
+                  {(rootKey) => {
+                    const thread = () => viewThreads().find((item) => item.root.key === rootKey)!;
+                    return (
+                      <div data-github-conversation-thread={rootKey} class="space-y-2">
+                        <For
+                          each={[thread().root, ...thread().replies].map((comment) => comment.key)}
+                        >
+                          {(key) => {
+                            const comment = () => views()!.find((item) => item.key === key)!;
+                            return (
+                              <div
+                                class={key === rootKey ? "" : "ml-3 border-l border-border pl-3"}
+                              >
+                                <GithubCommentCard
+                                  comment={comment()}
+                                  displayBody={
+                                    key === rootKey
+                                      ? undefined
+                                      : githubConversationReplyBody(comment().body)
+                                  }
+                                  scope={githubPrScope(props.prUrl!)}
+                                  operations={props.githubView?.operations ?? []}
+                                />
+                              </div>
+                            );
+                          }}
+                        </For>
+                      </div>
+                    );
+                  }}
                 </For>
               </Show>
             </Show>

@@ -1,11 +1,20 @@
-import { applyReviewUpdate, type ReviewSnapshot, type ReviewUpdate } from "@better-review/shared";
+import {
+  applyReviewUpdate,
+  type ReviewSnapshot,
+  type ReviewUpdate,
+  type ReviewModelIntent,
+} from "@better-review/shared";
 
 import { fetchWithApiAuth } from "./apiAuth";
 import { observeReview } from "./review-observation";
 
 export interface ReviewClient {
   history(): Promise<ReviewSnapshot>;
-  send(body: string, requestId: string): Promise<{ submissionId: string }>;
+  send(
+    body: string,
+    requestId: string,
+    model?: ReviewModelIntent,
+  ): Promise<{ submissionId: string }>;
   abort(): Promise<void>;
   compact(): Promise<void>;
   observe(
@@ -36,7 +45,7 @@ export function createReviewClient(sessionId: string): ReviewClient {
   }
   return {
     history: () => request<ReviewSnapshot>(""),
-    send: (body, requestId) => request("", { body, requestId }),
+    send: (body, requestId, model) => request("", { body, requestId, ...(model ? { model } : {}) }),
     abort: async () => {
       await request("/abort", {});
     },

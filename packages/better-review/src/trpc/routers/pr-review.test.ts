@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { Effect } from "effect";
 
-import type { ReviewSnapshot } from "@better-review/shared";
+import type { ReviewSnapshot, ReviewModelIntent } from "@better-review/shared";
 
 import { GhService } from "../../gh/gh";
 import { PrCheckoutService } from "../../pr-checkout";
@@ -87,6 +87,7 @@ test("automatic reviews coalesce busy launches while explicit creation always ma
   const histories = new Map<string, ReviewSnapshot>();
   let active: string | null = null;
   let admissions = 0;
+  const sentModels: Array<ReviewModelIntent | undefined> = [];
   const list = () => ({
     sessions: [...sessions.values()].map((s) => ({
       id: s.id,
@@ -141,38 +142,55 @@ test("automatic reviews coalesce busy launches while explicit creation always ma
     ),
   );
   t.mock.method(reviewConversations, "history", async (id: string) => histories.get(id) ?? null);
-  t.mock.method(reviewConversations, "send", async (id: string, body: string) => {
-    admissions++;
-    const submissionId = `submission-${admissions}`;
-    histories.set(id, {
-      sessionId: id,
-      running: true,
-      compacting: false,
-      settlements: [],
-      messages: [
-        {
-          id: submissionId,
-          submissionId,
-          role: "user",
-          parts: [{ type: "text", text: body }],
-          metadata: { timestamp: new Date().toISOString() },
-        },
-      ],
-    });
-    return { submissionId };
-  });
+  t.mock.method(
+    reviewConversations,
+    "send",
+    async (id: string, body: string, _request: string, model?: ReviewModelIntent) => {
+      sentModels.push(model);
+      admissions++;
+      const submissionId = `submission-${admissions}`;
+      histories.set(id, {
+        sessionId: id,
+        running: true,
+        compacting: false,
+        settlements: [],
+        messages: [
+          {
+            id: submissionId,
+            submissionId,
+            role: "user",
+            parts: [{ type: "text", text: body }],
+            metadata: { timestamp: new Date().toISOString() },
+          },
+        ],
+      });
+      return { submissionId };
+    },
+  );
   const caller = prReviewRouter.createCaller({
     gh: null,
     opencode: null,
     diffCache: null,
     prContext: null,
   });
+  const model: ReviewModelIntent = {
+    providerId: "openai-codex",
+    modelId: "gpt-6.1-sol",
+    variant: null,
+    thinkingLevel: "high",
+  };
   const [first, duplicate] = await Promise.all([
-    caller.startAutomatic({ prUrl: fixtureSession.prUrl }),
-    caller.startAutomatic({ prUrl: fixtureSession.prUrl }),
+    caller.startAutomatic({ prUrl: fixtureSession.prUrl, model }),
+    caller.startAutomatic({ prUrl: fixtureSession.prUrl, model }),
   ]);
   assert.deepEqual(first, duplicate);
   assert.equal(admissions, 1);
+  assert.deepEqual(sentModels, [model]);
+  assert.deepEqual(
+    sessions.get(first.sessionId!)?.automaticReview?.model,
+    model,
+    "automatic recovery retains the admitted model intent",
+  );
   // Exercise the actual explicit-create route, not a fake createSession callback.
   const createInput = {
     prUrl: fixtureSession.prUrl,
