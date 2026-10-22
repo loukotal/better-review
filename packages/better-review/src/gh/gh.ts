@@ -1,5 +1,6 @@
 import { Context, Data, Effect, Layer, Schema } from "effect";
 
+import { viewerApprovalForReview } from "@better-review/shared";
 import type {
   PrInfo,
   PrState,
@@ -153,6 +154,12 @@ const ReviewDecisionSchema = Schema.NullOr(
 );
 
 const PrStatusSchema = Schema.Struct({
+  reviewContext: Schema.optional(
+    Schema.Struct({
+      actor: Schema.Struct({ id: Schema.Number, login: Schema.String }),
+      headSha: Schema.String,
+    }),
+  ),
   reviewDecision: Schema.optional(ReviewDecisionSchema),
   viewerApproval: Schema.optional(
     Schema.NullOr(Schema.Struct({ login: Schema.String, commitSha: Schema.String })),
@@ -289,7 +296,12 @@ export const decodeGithubPrSearchResponse = Schema.decodeUnknownSync(GraphQLSear
 
 const GithubReviewStatusSchema = Schema.Struct({
   data: Schema.Struct({
-    viewer: Schema.optional(Schema.Struct({ login: Schema.String })),
+    viewer: Schema.optional(
+      Schema.Struct({
+        login: Schema.String,
+        databaseId: Schema.optional(Schema.NullOr(Schema.Number)),
+      }),
+    ),
     repository: Schema.NullOr(
       Schema.Struct({
         pullRequest: Schema.NullOr(
@@ -375,24 +387,40 @@ export function decodeGithubReviewStatus(value: unknown, expectedHeadSha: string
   // Only a complete set of known user requests can rule out a renewed request.
   // Team membership is unknown here; never guess that a team request excludes the viewer.
   const requests = pr.reviewRequests;
-  const viewerCanStillRelyOnApproval =
-    requests?.pageInfo &&
-    !requests.pageInfo.hasNextPage &&
-    requests.nodes?.every(
-      (request) =>
-        request?.requestedReviewer?.__typename === "User" &&
-        !!request.requestedReviewer.login &&
-        request.requestedReviewer.login !== data.viewer?.login,
-    );
   return {
+    ...(data.viewer?.databaseId &&
+    Number.isSafeInteger(data.viewer.databaseId) &&
+    data.viewer.databaseId > 0
+      ? {
+          reviewContext: {
+            actor: { id: data.viewer.databaseId, login: data.viewer.login },
+            headSha: pr.headRefOid,
+          },
+        }
+      : {}),
     reviewDecision: pr.reviewDecision ?? null,
-    viewerApproval:
-      viewerCanStillRelyOnApproval &&
-      data.viewer &&
-      ownReview?.state === "APPROVED" &&
-      ownReview.commit?.oid === expectedHeadSha
-        ? { login: data.viewer.login, commitSha: expectedHeadSha }
-        : null,
+    viewerApproval: data.viewer
+      ? viewerApprovalForReview({
+          login: data.viewer.login,
+          headSha: expectedHeadSha,
+          latest: ownReview
+            ? { state: ownReview.state, commitSha: ownReview.commit?.oid ?? null }
+            : undefined,
+          requests:
+            requests?.pageInfo && requests.nodes
+              ? {
+                  complete: !requests.pageInfo.hasNextPage,
+                  items: requests.nodes.map((request) => ({
+                    kind: request?.requestedReviewer?.__typename === "User" ? "user" : "unknown",
+                    name:
+                      request?.requestedReviewer?.__typename === "User"
+                        ? (request.requestedReviewer.login ?? "")
+                        : "",
+                  })),
+                }
+              : undefined,
+        })
+      : null,
     checks: Schema.decodeUnknownSync(Schema.Array(CheckRunSchema))(
       (pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [])
         .filter((context) => context.__typename === "CheckRun")
@@ -1042,7 +1070,7 @@ const ghCli: GhCli = {
         "graphql",
         "-f",
         `query=query($owner: String!, $repo: String!, $number: Int!) {
-          viewer { login }
+          viewer { login databaseId }
           repository(owner: $owner, name: $repo) {
             pullRequest(number: $number) {
               headRefOid reviewDecision

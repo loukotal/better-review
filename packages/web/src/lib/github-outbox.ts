@@ -46,6 +46,8 @@ export interface GithubOutboxTransport {
 }
 
 export interface BrowserGithubOperation {
+  /** Durable admission aliases that produced this canonical operation. */
+  submittedOperationIds?: readonly string[];
   command: GithubOutboxCommand;
   backendOwned: boolean;
   status: GithubOutboxOperation["status"] | "local-pending";
@@ -269,6 +271,10 @@ export function createGithubOutbox(options: {
         .filter((entry) => entry.operation)
         .map((entry) => [entry.command.operationId, entry.operation!.command.operationId]),
     );
+    for (const [submitted, canonical] of aliases) {
+      const item = operations.get(canonical);
+      if (item) item.submittedOperationIds = [...(item.submittedOperationIds ?? []), submitted];
+    }
     const canonicalGraph = createGithubDependencyGraph([...operations.values()], now(), aliases);
     for (const item of operations.values()) {
       item.command = structuredClone(item.command);

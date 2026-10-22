@@ -84,6 +84,9 @@ export interface GithubApprovalView extends Decoration {
   raw?: unknown;
 }
 export interface GithubReadToken {
+  approvalActor?: GithubActor;
+  /** Canonical result -> observed submission IDs durably acknowledged before this read. */
+  approvalBridges?: ReadonlyMap<string, ReadonlySet<string>>;
   scope: GithubPrScope;
   serial: number;
   /** Only results known BEFORE the request can be retired by its response. */

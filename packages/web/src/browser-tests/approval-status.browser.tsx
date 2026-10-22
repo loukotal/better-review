@@ -14,6 +14,7 @@ import {
 } from "../lib/github-writes";
 import { fetchPrExtras, queryClient, queryKeys } from "../lib/query";
 import { mountAppFixture } from "./mount-app";
+import { prDetailFixture } from "./pr-detail-fixture";
 
 const url = "https://github.com/browser-fixture/isolated/pull/1";
 declare global {
@@ -146,10 +147,33 @@ export async function testPendingAndRefreshedApprovalDecisionsInBrowser() {
   await mountAppFixture({
     extras: { status: remoteStatus, comments: [], issueComments: [] },
     procedures: {
+      "prDetail.refresh": () => {
+        const detail = prDetailFixture(url, head);
+        if (remoteStatus.viewerApproval && detail.reviews.status === "available")
+          detail.reviews.data = [
+            {
+              id: "R_1",
+              author: "browser-fixture",
+              state: "APPROVED",
+              body: "",
+              submittedAt: "2026-01-01T00:00:00Z",
+              commitSha: head,
+              url: `${url}#pullrequestreview-1`,
+            },
+          ];
+        return detail;
+      },
       "prs.list": () => ({ prs: [pr(null), { ...pr(null), url: nextUrl, number: 2 }] }),
       "pr.extras": () => {
         extrasReads++;
-        const data = { status: remoteStatus, comments: [], issueComments: [] };
+        const data = {
+          status: {
+            ...remoteStatus,
+            reviewContext: { actor: { id: 42, login: "browser-fixture" }, headSha: head },
+          },
+          comments: [],
+          issueComments: [],
+        };
         if (holdRead) {
           holdRead = false;
           return new Promise((resolve) => {

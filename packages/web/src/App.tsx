@@ -54,6 +54,7 @@ import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
 import {
   projectGithubComments,
+  githubApprovalState,
   subscribeGithubComments,
   githubCommentLocation,
   githubLocationInPatch,
@@ -194,14 +195,14 @@ const AppContent: Component = () => {
         item.command.action.expectedHeadSha === detailHead() &&
         item.status !== "cancelled",
     );
-  const overviewApprovalState = () =>
-    overviewApprovalOperations().some((item) => item.status !== "synced")
-      ? ("pending" as const)
-      : prStatus()?.viewerApproval?.commitSha === detailHead() &&
-          prStatus()?.viewerApproval?.login === currentGithubActor()?.login &&
-          !!detailHead()
-        ? ("synced" as const)
-        : undefined;
+  const approvalState = (head: string | null | undefined) => {
+    outboxVersion();
+    const url = loadedPrUrl();
+    return url && url === prUrl() && (!detailHead() || detailHead() === head)
+      ? githubApprovalState(url, head, currentGithubActor(), prStatus())
+      : undefined;
+  };
+  const overviewApprovalState = () => approvalState(detailHead());
   const selectTab = (tab: PrTab) => {
     updatePrParams({ tab });
   };
@@ -1316,15 +1317,7 @@ const AppContent: Component = () => {
                   approvalOperations={ownApprovalOperations()}
                   expectedHeadSha={diffRevision().headSha}
                   canSubmit={loadedPrUrl() === prUrl()}
-                  approvalState={
-                    ownApprovalOperations().some((item) => item.status !== "synced")
-                      ? "pending"
-                      : prStatus()?.viewerApproval?.commitSha === diffRevision().headSha &&
-                          prStatus()?.viewerApproval?.login === currentGithubActor()?.login &&
-                          !!diffRevision().headSha
-                        ? "synced"
-                        : undefined
-                  }
+                  approvalState={approvalState(diffRevision().headSha)}
                 />
               </div>
             </div>

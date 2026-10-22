@@ -55,8 +55,8 @@ function fixture() {
           : { data: { enqueuePullRequest: { mergeQueueEntry: { id: "Q1" } } } },
       );
     }
-    if (query === "query{viewer{id login}}")
-      return Response.json({ data: { viewer: { id: state.actor, login: "me" } } });
+    if (query === "query{viewer{id login databaseId}}")
+      return Response.json({ data: { viewer: { id: state.actor, login: "me", databaseId: 42 } } });
     if (query.includes("mergeCommitAllowed"))
       return Response.json(
         state.unknown
@@ -196,6 +196,7 @@ test("detail exposes metadata, both check kinds, URLs and explicit section evide
     url,
   );
   assert.equal(detail.metadata.status, "available");
+  assert.equal(detail.actor.status === "available" && detail.actor.data.databaseId, 42);
   assert.equal(detail.checks.status, "available");
   if (detail.checks.status === "available")
     assert.deepEqual(

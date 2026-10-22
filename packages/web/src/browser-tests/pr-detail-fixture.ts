@@ -7,7 +7,7 @@ export function prDetailFixture(url: string, headSha = "a".repeat(40)): PrDetail
     actor: {
       status: "available",
       complete: true,
-      data: { id: "U_fixture_graphql", login: "browser-fixture" },
+      data: { id: "U_fixture_graphql", login: "browser-fixture", databaseId: 42 },
     },
     metadata: {
       status: "available",

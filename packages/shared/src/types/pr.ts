@@ -50,6 +50,8 @@ export interface PrStatus {
   reviewDecision?: ReviewDecision;
   /** Current-head viewer approval, with no renewed or unknown applicable review request. */
   viewerApproval?: { login: string; commitSha: string } | null;
+  /** Verified GitHub response identity/head, including for negative approval evidence. */
+  reviewContext?: { actor: { id: number; login: string }; headSha: string };
   state: PrState;
   draft: boolean;
   mergeable: boolean | null;

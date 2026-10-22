@@ -5,6 +5,7 @@ export type PrDetailSection<T> =
 export interface PrDetailActor {
   id: string;
   login: string;
+  databaseId?: number;
 }
 export type PrMergeMethod = "merge" | "squash" | "rebase";
 export type PrMergeAction =

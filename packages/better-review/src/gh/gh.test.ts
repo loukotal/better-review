@@ -105,6 +105,27 @@ test("search decoder retains aggregate decision independently of historical appr
   }
 });
 
+test("negative approval status carries verified numeric actor and head, not guessed request context", () => {
+  const payload = {
+    data: {
+      viewer: { login: "viewer", databaseId: 42 },
+      repository: {
+        pullRequest: {
+          headRefOid: "head",
+          reviewDecision: "APPROVED",
+          latestReviews: { nodes: [] },
+          reviewRequests: { nodes: [], pageInfo: { hasNextPage: false } },
+          commits: { nodes: [] },
+        },
+      },
+    },
+  };
+  const decoded = decodeGithubReviewStatus(payload, "head");
+  assert.equal(decoded.viewerApproval, null);
+  assert.deepEqual(decoded.reviewContext, { actor: { id: 42, login: "viewer" }, headSha: "head" });
+  assert.equal(decodeGithubReviewStatus(payload, "another-head").reviewContext, undefined);
+});
+
 test("own approval requires the current viewer's latest approved review on the current head", () => {
   const decode = (state: string, oid = "head", login = "viewer") =>
     decodeGithubReviewStatus(

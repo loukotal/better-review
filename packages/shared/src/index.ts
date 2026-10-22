@@ -8,3 +8,4 @@ export * from "./review-status";
 export * from "./review-conversation";
 export * from "./review-model";
 export * from "./source-navigation";
+export * from "./viewer-approval";

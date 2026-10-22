@@ -1,6 +1,13 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 
-import type { IssueComment, PRComment, PrDetail } from "@better-review/shared";
+import type {
+  GithubActor,
+  IssueComment,
+  PRComment,
+  PrDetail,
+  PrStatus,
+} from "@better-review/shared";
+import { viewerApprovalForReview } from "@better-review/shared";
 
 import type { BrowserGithubOperation } from "./github-outbox";
 import {
@@ -11,13 +18,33 @@ import {
   type GithubRemoteReview,
   type GithubThreadView,
 } from "./github-outbox-projection";
-import { githubPrScope, githubWrites } from "./github-writes";
+import { currentGithubActor, githubPrScope, githubWrites } from "./github-writes";
 
 const projection = createGithubOutboxProjection();
 const reads = new Map<string, { comments: PRComment[]; issueComments: IssueComment[] }>();
 const reviewReads = new Map<string, GithubRemoteReview[]>();
 const commentReadSerials = new Map<string, number>();
 const reviewReadSerials = new Map<string, number>();
+const approvalReads = new Map<string, { token: GithubReadToken; approved: boolean }>();
+const approvalStatusReads = new Map<string, { token: GithubReadToken; approved: boolean }>();
+const approvalReadKey = (url: string, actorId: number, head: string) =>
+  JSON.stringify([url, actorId, head]);
+// First-seen synced rows are history, not a new approval of the current review state.
+const observedPendingApprovals = new Set<string>();
+const observedApprovalIntents = (item: BrowserGithubOperation) =>
+  [item.command.operationId, ...(item.submittedOperationIds ?? [])].filter((id) =>
+    observedPendingApprovals.has(id),
+  );
+githubWrites.subscribe(() => {
+  for (const state of githubWrites.getStates())
+    for (const item of state.operations)
+      if (
+        item.command.action.kind === "approve" &&
+        item.status !== "synced" &&
+        item.status !== "cancelled"
+      )
+        observedPendingApprovals.add(item.command.operationId);
+});
 const listeners = new Set<() => void>();
 export function subscribeGithubComments(listener: () => void) {
   listeners.add(listener);
@@ -26,7 +53,16 @@ export function subscribeGithubComments(listener: () => void) {
   };
 }
 export function beginGithubCommentRead(url: string) {
-  return projection.beginRead(githubWrites.getState(githubPrScope(url)));
+  const state = githubWrites.getState(githubPrScope(url));
+  return {
+    ...projection.beginRead(state),
+    approvalActor: currentGithubActor(),
+    approvalBridges: new Map(
+      state.operations
+        .filter((item) => item.status === "synced" && observedApprovalIntents(item).length > 0)
+        .map((item) => [item.command.operationId, new Set(observedApprovalIntents(item))]),
+    ),
+  };
 }
 function normalize(data: {
   comments: PRComment[];
@@ -122,12 +158,55 @@ export function acceptGithubDetailRead(token: GithubReadToken, detail: PrDetail)
     return false;
   reviewReadSerials.set(token.scope.url, token.serial);
   reviewReads.set(token.scope.url, reviews);
+  if (
+    token.approvalActor &&
+    detail.url === token.scope.url &&
+    detail.reviews.complete &&
+    detail.metadata.status === "available" &&
+    detail.metadata.complete &&
+    detail.actor.status === "available" &&
+    detail.actor.complete &&
+    detail.actor.data?.databaseId === token.approvalActor.id &&
+    detail.actor.data?.login === token.approvalActor?.login
+  ) {
+    const ownReviews = detail.reviews.data
+      .filter((review) => review.author === token.approvalActor!.login)
+      .toSorted((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
+    const latest = ownReviews[0];
+    // Timestamp ties/unknown ordering cannot prove a positive latest state.
+    const ambiguous =
+      ownReviews.length > 1 &&
+      ownReviews.some(
+        (review) =>
+          (!review.submittedAt || review.submittedAt === latest?.submittedAt) &&
+          (review.state !== latest?.state || review.commitSha !== latest?.commitSha),
+      );
+    approvalReads.set(
+      approvalReadKey(token.scope.url, token.approvalActor.id, detail.metadata.data.head.sha),
+      {
+        token,
+        approved: !!viewerApprovalForReview({
+          login: token.approvalActor.login,
+          headSha: detail.metadata.data.head.sha,
+          latest: ambiguous ? undefined : latest,
+          requests:
+            detail.reviewRequests.status === "available"
+              ? { complete: detail.reviewRequests.complete, items: detail.reviewRequests.data }
+              : undefined,
+        }),
+      },
+    );
+  }
   for (const listener of listeners) listener();
   return true;
 }
 export function acceptGithubCommentRead(
   token: GithubReadToken,
-  data: { comments: PRComment[] | null; issueComments: IssueComment[] | null },
+  data: {
+    comments: PRComment[] | null;
+    issueComments: IssueComment[] | null;
+    status?: PrStatus | null;
+  },
 ) {
   if (token.serial < (commentReadSerials.get(token.scope.url) ?? 0)) return false;
   const previous = reads.get(token.scope.url);
@@ -161,6 +240,26 @@ export function acceptGithubCommentRead(
   )
     return false;
   commentReadSerials.set(token.scope.url, token.serial);
+  if (
+    data.status?.reviewContext &&
+    token.approvalActor &&
+    data.status.url === token.scope.url &&
+    data.status.reviewContext.actor.id === token.approvalActor.id &&
+    data.status.reviewContext.actor.login === token.approvalActor.login
+  )
+    approvalStatusReads.set(
+      approvalReadKey(
+        token.scope.url,
+        data.status.reviewContext.actor.id,
+        data.status.reviewContext.headSha,
+      ),
+      {
+        token,
+        approved:
+          data.status.viewerApproval?.login === data.status.reviewContext.actor.login &&
+          data.status.viewerApproval?.commitSha === data.status.reviewContext.headSha,
+      },
+    );
   reads.set(token.scope.url, next);
   for (const listener of listeners) listener();
   return true;
@@ -178,6 +277,65 @@ export function seedGithubCommentRead(
 }
 export function projectGithubComments(url: string) {
   return projection.project(githubWrites.getState(githubPrScope(url)));
+}
+
+/** A confirmed receipt bridges read latency, never a timer or an optimistic write.
+ * Only a complete, same-head/account read STARTED after confirmation supersedes it.
+ */
+export function githubApprovalState(
+  url: string,
+  head: string | null | undefined,
+  actor: GithubActor | undefined,
+  status: PrStatus | null,
+): "pending" | "synced" | undefined {
+  if (!head || !actor) return;
+  const scope = githubPrScope(url);
+  const operations = githubWrites
+    .getState(scope)
+    .operations.filter(
+      (item) =>
+        item.command.scope.url === scope.url &&
+        item.command.expectedActor.id === actor.id &&
+        item.command.action.kind === "approve" &&
+        item.command.action.expectedHeadSha === head &&
+        item.status !== "cancelled",
+    );
+  if (operations.some((item) => item.status !== "synced")) return "pending";
+  const confirmed = operations.filter(
+    (item) =>
+      observedApprovalIntents(item).length > 0 &&
+      item.operation?.result?.kind === "approval" &&
+      item.operation.result.commitSha === head,
+  );
+  if (confirmed.length) {
+    // A new acknowledged alias is a new intent generation even if its canonical
+    // result was already superseded. Reads must cover every observed acknowledged
+    // submission ID. Polling and result metadata revisions do not change that set.
+    const coversIntents = (token: GithubReadToken, item: BrowserGithubOperation) =>
+      token.confirmed.has(item.command.operationId) &&
+      observedApprovalIntents(item).every((id) =>
+        token.approvalBridges?.get(item.command.operationId)?.has(id),
+      );
+    const read = approvalReads.get(approvalReadKey(scope.url, actor.id, head));
+    const candidate = approvalStatusReads.get(approvalReadKey(scope.url, actor.id, head));
+    const statusRead =
+      candidate?.token.approvalActor?.id === actor.id &&
+      confirmed.every((item) => coversIntents(candidate.token, item))
+        ? candidate
+        : undefined;
+    if (
+      read &&
+      read.token.approvalActor?.id === actor.id &&
+      (!statusRead || read.token.serial > statusRead.token.serial) &&
+      confirmed.every((item) => coversIntents(read.token, item))
+    )
+      return read.approved ? "synced" : undefined;
+    if (statusRead) return statusRead.approved ? "synced" : undefined;
+    return "synced";
+  }
+  return status?.viewerApproval?.commitSha === head && status.viewerApproval.login === actor.login
+    ? "synced"
+    : undefined;
 }
 
 const object = (value: unknown): value is Record<string, unknown> =>

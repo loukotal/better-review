@@ -19,7 +19,11 @@ import {
   type PolicyFailure,
 } from "./pr-detail-policy";
 
-const actor = z.object({ id: z.string(), login: z.string() });
+const actor = z.object({
+  id: z.string(),
+  login: z.string(),
+  databaseId: z.number().int().positive().optional(),
+});
 const identity = z.object({ login: z.string() }).nullable();
 const metadata = z.object({
   id: z.string(),
@@ -146,7 +150,9 @@ export function createPrDetailClient(options: PrDetailHttpOptions = {}) {
       }
     }
     const [viewer, meta, labels, reviews, reviewRequests, caps] = await Promise.all([
-      section(async () => actor.parse((await graphql("query{viewer{id login}}")).viewer)),
+      section(async () =>
+        actor.parse((await graphql("query{viewer{id login databaseId}}")).viewer),
+      ),
       section(async () => {
         const m = metadata.parse(
           await pr(

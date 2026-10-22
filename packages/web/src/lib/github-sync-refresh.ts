@@ -76,8 +76,14 @@ export function createGithubSyncRefreshCoordinator(options: {
       let changed = false;
       for (const item of state.operations) {
         const id = item.command.operationId;
-        const previous = known.get(id);
-        known.set(id, item.status);
+        const ids = [id, ...(item.submittedOperationIds ?? [])];
+        const previous =
+          ids
+            .map((alias) => known.get(alias))
+            .find(
+              (status) => status !== undefined && status !== "synced" && status !== "cancelled",
+            ) ?? known.get(id);
+        for (const alias of ids) known.set(alias, item.status);
         // First-seen synced operations are history, including journal hydration/reloads.
         if (
           item.status !== "synced" ||

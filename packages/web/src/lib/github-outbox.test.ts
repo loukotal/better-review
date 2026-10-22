@@ -1296,6 +1296,7 @@ test("different UUID duplicate receipt acknowledges submitted journal entry and 
   assert.equal((await journal.entries(scope))[0].command.operationId, id(2));
   assert.equal(client.getState(scope).operations.length, 1);
   assert.equal(client.getState(scope).operations[0].command.operationId, id(1));
+  assert.ok(client.getState(scope).operations[0].submittedOperationIds?.includes(id(2)));
   assert.equal(client.getState(scope).pendingCount, 1);
   assert.equal((await client.draftForOperation(scope, id(2)))?.submittedOperationId, id(1));
   assert.equal(
@@ -1313,6 +1314,7 @@ test("different UUID duplicate receipt acknowledges submitted journal entry and 
   client = createGithubOutbox({ journal, transport: wire });
   await client.recover(scope);
   assert.equal(client.getState(scope).operations.length, 1);
+  assert.ok(client.getState(scope).operations[0].submittedOperationIds?.includes(id(2)));
   assert.equal(client.getState(scope).pendingCount, 1);
   await client.submit({
     scope,
