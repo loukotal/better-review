@@ -3,13 +3,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import type { PrDetailCheck, PrDetailSection } from "@better-review/shared";
 
 import { Button } from "../design-system";
-import {
-  checkGroups,
-  checkPresentation,
-  checkUrl,
-  summarizePrChecks,
-  type CheckGroup,
-} from "../lib/pr-checks";
+import { checkGroups, checkPresentation, checkUrl, summarizePrChecks } from "../lib/pr-checks";
 
 export { checkPresentation } from "../lib/pr-checks";
 
@@ -21,7 +15,12 @@ export function PrChecks(props: {
 }) {
   const checks = createMemo(() => (props.checks?.status === "available" ? props.checks.data : []));
   const summary = createMemo(() => summarizePrChecks(checks()));
-  const [expanded, setExpanded] = createSignal<Partial<Record<CheckGroup, boolean>>>({});
+  // Native toggle events arrive asynchronously. One group's update must not
+  // reapply another group's default before its pending user toggle settles.
+  const groups = checkGroups.map((group) => {
+    const [expanded, setExpanded] = createSignal<boolean>();
+    return { ...group, expanded, setExpanded };
+  });
   const onlyPassed = () => summary().total > 0 && summary().passed === summary().total;
   return (
     <section aria-label="Pull request checks" class="space-y-3">
@@ -117,18 +116,13 @@ export function PrChecks(props: {
               </For>
             </p>
             <div class="overflow-hidden rounded border border-border divide-y divide-border">
-              <For each={checkGroups}>
+              <For each={groups}>
                 {(group) => (
                   <Show when={summary()[group.key]}>
                     <details
-                      open={expanded()[group.key] ?? (group.key !== "passed" || onlyPassed())}
+                      open={group.expanded() ?? (group.key !== "passed" || onlyPassed())}
                       onToggle={(event) => {
-                        const open = event.currentTarget.open;
-                        setExpanded((previous) =>
-                          previous[group.key] === open
-                            ? previous
-                            : { ...previous, [group.key]: open },
-                        );
+                        group.setExpanded(event.currentTarget.open);
                       }}
                     >
                       <summary class="cursor-pointer bg-bg-surface px-3 py-2 text-sm font-medium">
