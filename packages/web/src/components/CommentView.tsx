@@ -381,8 +381,12 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
           disabled={!body().trim() || isSubmitting()}
           variant="primary"
           size="sm"
+          class="min-w-14"
+          aria-label={isSubmitting() ? "Sending reply" : undefined}
         >
-          {isSubmitting() ? "Replying..." : "Reply"}
+          <Show when={isSubmitting()} fallback="Reply">
+            <GithubSyncStatus status="saving-local" iconOnly />
+          </Show>
         </Button>
         <Button
           type="button"
@@ -638,11 +642,12 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
           disabled={!body().trim() || isSubmitting() || !ready()}
           variant="primary"
           size="sm"
+          class="min-w-20"
+          aria-label={isSubmitting() ? "Sending comment" : undefined}
         >
-          <Show when={isSubmitting()}>
+          <Show when={isSubmitting()} fallback="Comment">
             <GithubSyncStatus status="saving-local" iconOnly />
           </Show>
-          {isSubmitting() ? "Saving locally…" : "Comment"}
         </Button>
         <Button
           type="button"

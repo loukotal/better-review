@@ -163,8 +163,8 @@ export async function testAppNestedConversationRepliesInBrowser() {
   const editor = card()!.querySelector("textarea")!;
   editor.value = "Second reply";
   editor.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  await wait(() => !button("Save").disabled, "Reply draft did not become ready");
-  button("Save").click();
+  await wait(() => !button("Reply").disabled, "Reply draft did not become ready");
+  button("Reply").click();
   await wait(() => commands.length === 1, "Nested reply did not reach RPC admission");
   check(commands[0]!.action.kind === "issue-comment", "Issue reply became a GitHub review thread");
   const action = commands[0]!.action;
@@ -359,8 +359,8 @@ export async function testAppNestedReviewRepliesInBrowser(mode?: string) {
     const editor = element.querySelector("textarea")!;
     editor.value = body;
     editor.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await wait(() => !button("Save").disabled, "Review reply draft not ready");
-    button("Save").click();
+    await wait(() => !button("Reply").disabled, "Review reply draft not ready");
+    button("Reply").click();
     await wait(() => !!card(body), "Review reply lost from optimistic projection");
   };
   await fixture("hold-ack");

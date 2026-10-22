@@ -126,7 +126,7 @@ export async function testAppGithubEditorFocusInBrowser() {
         "Draft autosave submitted a write",
       );
       check(
-        !!button(key, "Save") &&
+        !!button(key, mode === "Edit" ? "Save" : "Reply") &&
           !button(key, "Keep draft and close") &&
           !button(key, "Save locally"),
         "Confusing edit labels remain",
@@ -138,6 +138,132 @@ export async function testAppGithubEditorFocusInBrowser() {
           "Thread metadata froze after editor closed",
         );
     }
+  }
+  return { passed };
+}
+
+/** Actual reply editors stay spinner-only while durable admission is held or fails. */
+export async function testAppGithubReplySubmitSpinnerInBrowser() {
+  const url = "https://github.com/browser-fixture/isolated/pull/1";
+  const scope = githubPrScope(url);
+  const issue: IssueComment = {
+    id: 10,
+    body: "original discussion",
+    html_url: `${url}#issuecomment-10`,
+    user: { login: "browser-fixture", avatar_url: "" },
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    canEdit: true,
+  };
+  let passed = 0,
+    enqueues = 0;
+  const check = (value: unknown, message: string) => {
+    if (!value) throw new Error(message);
+    passed++;
+  };
+  const wait = async (predicate: () => boolean, message: string) => {
+    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
+    check(predicate(), message);
+  };
+  await mountAppFixture({
+    extras: {
+      comments: [
+        {
+          ...issue,
+          id: 20,
+          node_id: "reply-comment-node",
+          path: "src/example.ts",
+          line: 9,
+          original_line: 9,
+          side: "RIGHT",
+          threadId: "reply-thread",
+        },
+      ],
+      issueComments: [issue],
+      status: null,
+    },
+    procedures: {
+      "githubOutbox.enqueue": () => {
+        enqueues++;
+        return new Promise(() => {});
+      },
+    },
+  });
+  await refreshGithubActor();
+  document.querySelector<HTMLButtonElement>('[aria-controls="pr-conversation"]')!.click();
+  for (const kind of ["review-comment", "issue-comment"] as const) {
+    const key = `remote:${kind}:${kind === "review-comment" ? 20 : 10}`;
+    const card = () => document.querySelector<HTMLElement>(`[data-github-comment-key="${key}"]`)!;
+    await wait(() => !!card(), "Reply target missing");
+    await window.clickBrowserGithubCommentButton(key, "Reply");
+    await wait(() => !!card().querySelector("textarea:not(:disabled)"), "Reply draft not ready");
+    const text = `held ${kind} reply`;
+    await window.typeBrowserGithubEditor(key, text);
+    const editor = card().querySelector("textarea")!;
+    const selection = [editor.selectionStart, editor.selectionEnd];
+    const form = card().querySelector("form")!;
+    const button = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    check(button.textContent?.trim() === "Reply", "Idle reply mislabeled");
+    const bounds = button.getBoundingClientRect();
+    const admit = githubJournal.admit;
+    let admissions = 0;
+    let fail!: () => void;
+    githubJournal.admit = async () => {
+      admissions++;
+      await new Promise<void>((_resolve, reject) => {
+        fail = () => reject(new Error("Fixture reply storage failed"));
+      });
+      throw new Error("Unreachable");
+    };
+    try {
+      await window.clickBrowserGithubCommentButton(key, "Reply");
+      await wait(() => admissions === 1, "Reply did not reach held admission");
+      check(button.disabled && editor.disabled, "Pending reply still interactive");
+      check(
+        button.getAttribute("aria-label") === "Sending reply",
+        "Pending reply lacks accessible label",
+      );
+      check(
+        button.textContent?.trim() === "" && !!button.querySelector("svg.github-sync-spin"),
+        "Pending reply must show only shared spinner",
+      );
+      const pendingBounds = button.getBoundingClientRect();
+      check(
+        bounds.width === pendingBounds.width && bounds.height === pendingBounds.height,
+        "Pending reply changed button size",
+      );
+      button.click();
+      form.requestSubmit();
+      await new Promise(requestAnimationFrame);
+      check(admissions === 1 && enqueues === 0, "Pending reply submitted twice or reached GitHub");
+      fail();
+      await wait(
+        () => !button.disabled && !!card().querySelector('[role="alert"]'),
+        "Failed reply did not restore idle state",
+      );
+      await new Promise(requestAnimationFrame);
+      check(
+        button.textContent?.trim() === "Reply" && !button.hasAttribute("aria-label"),
+        "Failed reply did not restore Reply label",
+      );
+      check(
+        card().querySelector("textarea") === editor && document.activeElement === editor,
+        "Failed reply lost editor/focus",
+      );
+      check(
+        editor.value === text &&
+          editor.selectionStart === selection[0] &&
+          editor.selectionEnd === selection[1],
+        "Failed reply lost draft/caret",
+      );
+      check(
+        (await githubJournal.entries(scope)).length === 0,
+        "Failed reply admitted an operation",
+      );
+    } finally {
+      githubJournal.admit = admit;
+    }
+    await window.clickBrowserGithubCommentButton(key, "Cancel");
   }
   return { passed };
 }

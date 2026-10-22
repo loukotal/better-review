@@ -167,11 +167,12 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
             disabled={!newCommentBody().trim() || isSubmitting() || !(draft?.ready() ?? true)}
             variant="primary"
             size="sm"
+            class="min-w-14"
+            aria-label={isSubmitting() ? "Sending reply" : undefined}
           >
-            <Show when={isSubmitting() && draft}>
+            <Show when={isSubmitting()} fallback="Reply">
               <GithubSyncStatus status="saving-local" iconOnly />
             </Show>
-            {isSubmitting() ? (draft ? "Saving locally…" : "Posting...") : "Reply"}
           </Button>
         </div>
       </MessageForm>
@@ -363,11 +364,12 @@ export const PrCommentsPanel: Component<PrCommentsPanelProps> = (props) => {
                         }
                         variant="primary"
                         size="sm"
+                        class="min-w-20"
+                        aria-label={isSubmitting() ? "Sending comment" : undefined}
                       >
-                        <Show when={isSubmitting() && draft}>
+                        <Show when={isSubmitting()} fallback="Comment">
                           <GithubSyncStatus status="saving-local" iconOnly />
                         </Show>
-                        {isSubmitting() ? (draft ? "Saving locally…" : "Posting...") : "Comment"}
                       </Button>
                     </div>
                   </div>

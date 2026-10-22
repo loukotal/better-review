@@ -235,9 +235,15 @@ export function GithubCommentCard(props: {
               <Button
                 type="submit"
                 size="sm"
+                class="min-w-14"
+                aria-label={
+                  saving() ? (mode() === "edit" ? "Saving comment" : "Sending reply") : undefined
+                }
                 disabled={!activeDraft().body().trim() || saving() || !activeDraft().ready()}
               >
-                Save
+                <Show when={saving()} fallback={mode() === "edit" ? "Save" : "Reply"}>
+                  <GithubSyncStatus status="saving-local" iconOnly />
+                </Show>
               </Button>
               <Button
                 size="sm"
