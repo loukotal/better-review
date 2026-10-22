@@ -2,7 +2,8 @@ import { z } from "zod";
 
 import type { ReviewModelIntent } from "@better-review/shared";
 
-import { REASONING_EFFORTS, resolveSelectedModel } from "../model-selection";
+import { REASONING_EFFORTS, type ResolvedReviewModel } from "../model-resolution";
+import { resolveSelectedModel } from "../model-selection";
 
 export const reviewModelIntentSchema = z.object({
   providerId: z.string().min(1),
@@ -11,7 +12,7 @@ export const reviewModelIntentSchema = z.object({
   thinkingLevel: z.enum(REASONING_EFFORTS),
 });
 
-export function resolveReviewModelIntent(intent: ReviewModelIntent) {
+export function resolveReviewModelIntent(intent: ReviewModelIntent): ResolvedReviewModel {
   const selected = resolveSelectedModel(reviewModelIntentSchema.parse(intent));
   return {
     model: { provider: selected.providerId, modelId: selected.modelId },

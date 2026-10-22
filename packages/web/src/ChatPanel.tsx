@@ -31,8 +31,7 @@ import { SpinnerIcon } from "./icons/spinner-icon";
 import { type SourceSelection, type SelectionChatController } from "./lib/ask-ai-selection";
 import {
   availableReviewOrder,
-  type AvailableReviewOrder,
-  type InitialReviewOrder,
+  type ReviewOrderObservation,
   type SavedReviewOrderScope,
 } from "./lib/automatic-review-order";
 import { parseChatFileReference } from "./lib/chat-file-reference";
@@ -89,8 +88,7 @@ interface ChatPanelProps {
     ref?: string,
   ) => void;
   onApplyReviewOrder?: (files: string[]) => void;
-  onAvailableReviewOrder?: (order: AvailableReviewOrder | null) => void;
-  onInitialReviewOrder?: (result: InitialReviewOrder) => void;
+  onReviewOrderObservation?: (observation: ReviewOrderObservation) => void;
   /** Wait for App to verify the displayed PR revision, including cached opens. */
   initialReviewOrderReady?: boolean;
   onAnnotationsReceived?: (annotations: Annotation[]) => void;
@@ -319,6 +317,7 @@ export function ChatPanel(props: ChatPanelProps) {
           )
         : null;
     const snapshotLoaded = !!sid && chat.snapshot()?.sessionId === sid;
+    let hydration: ReviewOrderObservation["hydration"];
     if (
       !initializing() &&
       props.initialReviewOrderReady !== false &&
@@ -326,17 +325,14 @@ export function ChatPanel(props: ChatPanelProps) {
       (sessionError() ||
         (resolvedSessionTarget() === sessionTarget() && (snapshotLoaded || chat.error())))
     ) {
-      // Publish initial hydration before the live-order callback can reorder mounted files.
-      const result: InitialReviewOrder = {
+      hydration = {
         prUrl: props.prUrl,
         mode: props.reviewMode ?? "full",
         revision: revision ?? null,
-        order,
         snapshotLoaded,
       };
-      untrack(() => props.onInitialReviewOrder?.(result));
     }
-    props.onAvailableReviewOrder?.(order);
+    untrack(() => props.onReviewOrderObservation?.({ order, ...(hydration ? { hydration } : {}) }));
   });
 
   // Initialize session when PR changes

@@ -11,7 +11,8 @@ import lockfile from "proper-lockfile";
 
 import type { ReviewSnapshot, ReviewModelIntent } from "@better-review/shared";
 
-import { getCurrentReviewModel, getCurrentReviewThinkingLevel } from "../model-selection";
+import type { ResolvedReviewModel } from "../model-resolution";
+import { resolveCurrentReviewModel } from "../model-selection";
 import {
   readPrReviewSession,
   PrReviewSessionService,
@@ -45,8 +46,7 @@ export function createReviewRuntime(options: {
   ensureCheckout: (id: string) => Promise<void>;
   sandbox: (session: PrReviewSession) => Promise<SubmissionSandbox>;
   legacy: (id: string) => ReviewSnapshot;
-  model: () => { provider: string; modelId: string };
-  resolveModelIntent?: typeof resolveReviewModelIntent;
+  resolveModel: (intent?: ReviewModelIntent) => ResolvedReviewModel;
   admitted?: (id: string, requestId: string, submissionId: string) => Promise<void>;
 }) {
   const engines = new Map<string, Promise<ReviewEngine>>();
@@ -71,7 +71,15 @@ export function createReviewRuntime(options: {
     });
     return acquiring;
   };
-  async function get(id: string, initial?: ReturnType<typeof resolveReviewModelIntent>) {
+  function resolveModel(intent?: ReviewModelIntent): ResolvedReviewModel {
+    const resolved = options.resolveModel(intent);
+    // Own the captured tuple even when an injected resolver reuses mutable objects.
+    return {
+      model: { provider: resolved.model.provider, modelId: resolved.model.modelId },
+      thinkingLevel: resolved.thinkingLevel,
+    };
+  }
+  async function get(id: string, initial?: ResolvedReviewModel) {
     if (closing) throw new Error("Review runtime is shutting down");
     if (!/^[A-Za-z0-9._:-]+$/.test(id) || id.includes(".."))
       throw new Error("Invalid review session ID");
@@ -83,11 +91,7 @@ export function createReviewRuntime(options: {
       if (!session) throw new Error("Review session not found");
       await mkdir(options.directory, { recursive: true });
       const database = path.join(options.directory, `${id}.sqlite`);
-      const selected =
-        initial ??
-        (session.automaticReview?.model
-          ? (options.resolveModelIntent ?? resolveReviewModelIntent)(session.automaticReview.model)
-          : { model: options.model(), thinkingLevel: getCurrentReviewThinkingLevel() });
+      const selected = initial ?? resolveModel(session.automaticReview?.model);
       const engine = await openReviewEngine({
         database,
         session,
@@ -103,9 +107,7 @@ export function createReviewRuntime(options: {
       engine.resume();
       const pending = session.automaticReview;
       if (session.runtimeVersion === 3 && pending?.prompt && !pending.submissionId) {
-        const selected = pending.model
-          ? (options.resolveModelIntent ?? resolveReviewModelIntent)(pending.model)
-          : { model: options.model(), thinkingLevel: getCurrentReviewThinkingLevel() };
+        const selected = resolveModel(pending.model);
         const receipt = await engine.submit(
           pending.prompt,
           pending.idempotencyKey,
@@ -125,9 +127,7 @@ export function createReviewRuntime(options: {
   }
   async function admit(id: string, body: string, requestId: string, intent?: ReviewModelIntent) {
     // Capture server-authoritative intent before checkout/session IO can yield to a model change.
-    const { model, thinkingLevel } = intent
-      ? (options.resolveModelIntent ?? resolveReviewModelIntent)(intent)
-      : { model: options.model(), thinkingLevel: getCurrentReviewThinkingLevel() };
+    const { model, thinkingLevel } = resolveModel(intent);
     const engine = await get(id, { model, thinkingLevel });
     const session = await options.readSession(id);
     if (!session) throw new Error("Review session not found");
@@ -281,11 +281,8 @@ function service() {
       ensureCheckout: ensureSessionCheckout,
       sandbox: (session) => createReviewMicrosandbox(session, session.id),
       legacy: readLegacyHistory,
-      model: () => {
-        const value = getCurrentReviewModel();
-        const slash = value.indexOf("/");
-        return { provider: value.slice(0, slash), modelId: value.slice(slash + 1) };
-      },
+      resolveModel: (intent) =>
+        intent ? resolveReviewModelIntent(intent) : resolveCurrentReviewModel(),
       admitted: (id, key, submissionId) =>
         appRuntime.runPromise(
           Effect.gen(function* () {

@@ -126,3 +126,97 @@ test("explicit selection survives server restart instead of reverting to the Cod
     "saved",
   );
 });
+
+test("selection policy preserves current preference, catalog ordering, wire format and in-memory state on failed atomic rename", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "review-model-policy-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const authPath = path.join(directory, "auth.json");
+  const selectionPath = path.join(directory, "selection.json");
+  await writeFile(authPath, JSON.stringify({ "openai-codex": { type: "api", key: "fixture" } }));
+  const env = {
+    PATH: process.env.PATH,
+    HOME: directory,
+    BETTER_REVIEW_MODEL: "",
+    BETTER_REVIEW_PI_AUTH_PATH: authPath,
+    BETTER_REVIEW_OPENCODE_AUTH_PATH: path.join(directory, "missing-auth.json"),
+    BETTER_REVIEW_MODEL_SELECTION_PATH: selectionPath,
+  };
+  function run(source: string, overrides: Record<string, string> = {}) {
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+      import { mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+      import { getSelectedModel, getModelSelectionState, resolveCurrentReviewModel, resolveSelectedModel, setSelectedModel, searchModels } from ${JSON.stringify(new URL("./model-selection.ts", import.meta.url).href)};
+      ${source}
+    `,
+      ],
+      { env: { ...env, ...overrides }, encoding: "utf8" },
+    );
+    assert.equal(child.status, 0, child.stderr);
+    return JSON.parse(child.stdout);
+  }
+  const result = run(`
+    const preference = getSelectedModel();
+    const effective = resolveCurrentReviewModel();
+    const search = searchModels('');
+    const selected = setSelectedModel({ providerId: 'openai-codex', modelId: 'gpt-6.1-sol', variant: 'named', thinkingLevel: 'high' });
+    const wire = JSON.parse(readFileSync(process.env.BETTER_REVIEW_MODEL_SELECTION_PATH, 'utf8'));
+    rmSync(process.env.BETTER_REVIEW_MODEL_SELECTION_PATH);
+    mkdirSync(process.env.BETTER_REVIEW_MODEL_SELECTION_PATH);
+    let failed = false;
+    try { setSelectedModel({ providerId: 'openai-codex', modelId: 'gpt-5.5', thinkingLevel: 'low' }); } catch { failed = true; }
+    const after = getSelectedModel();
+    const inherited = resolveSelectedModel({ providerId: 'openai-codex', modelId: 'gpt-5.5' });
+    console.log(JSON.stringify({ preference, effective, connected: search.connectedProvidersCount, firstProvider: search.models[0].providerId, count: search.models.length, wire, failed, after, inherited, source: getModelSelectionState().selectionSource, temporary: readdirSync(${JSON.stringify(directory)}).filter(name => name.endsWith('.tmp')) }));
+  `);
+  assert.equal(
+    result.preference.providerId,
+    "openai",
+    "the default remains the UI-visible preference",
+  );
+  assert.equal(
+    result.effective.model.provider,
+    "openai-codex",
+    "execution routes without rewriting preference",
+  );
+  assert.equal(result.effective.thinkingLevel, result.preference.thinkingLevel);
+  assert.equal(result.connected, 1);
+  assert.equal(result.firstProvider, "openai-codex");
+  assert.equal(result.count, 50);
+  assert.deepEqual(result.wire, {
+    providerId: "openai-codex",
+    modelId: "gpt-6.1-sol",
+    variant: "named",
+    thinkingLevel: "high",
+  });
+  assert.equal(result.failed, true);
+  assert.equal(result.after.modelId, "gpt-6.1-sol");
+  assert.equal(result.after.thinkingLevel, "high");
+  assert.equal(
+    result.inherited.thinkingLevel,
+    "high",
+    "failed persistence cannot leak its new thinking into memory",
+  );
+  assert.equal(result.source, "saved");
+  assert.deepEqual(result.temporary, []);
+  const noAuth = {
+    BETTER_REVIEW_PI_AUTH_PATH: path.join(directory, "missing.json"),
+    BETTER_REVIEW_MODEL_SELECTION_PATH: path.join(directory, "fresh-selection.json"),
+  };
+  assert.equal(
+    run("console.log(JSON.stringify(getSelectedModel()))", noAuth).providerId,
+    "anthropic",
+  );
+  const configured = run("console.log(JSON.stringify(getModelSelectionState()))", {
+    ...noAuth,
+    BETTER_REVIEW_MODEL: "openai-codex/gpt-5.5",
+  });
+  assert.equal(configured.providerId, "openai-codex");
+  assert.equal(configured.modelId, "gpt-5.5");
+  assert.equal(configured.selectionSource, "default");
+});

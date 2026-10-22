@@ -4,10 +4,6 @@ import type { GithubPrScope } from "@better-review/shared";
 
 import { useGithubQueue } from "../context/GithubQueueContext";
 import { Button } from "../design-system";
-import {
-  githubDeliveryCheckOutcome,
-  type GithubDeliveryCheckOutcome,
-} from "../lib/github-delivery-check";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
 import { revealGithubQueueContent } from "../lib/github-queue-layout";
 import { getGithubSyncTimeoutMs } from "../lib/github-queue-settings";
@@ -33,12 +29,20 @@ export function GithubOperationDetails(props: {
   onRevealBlocker?: (operationId: string) => boolean;
 }) {
   const [error, setError] = createSignal<string>();
-  const [localBusy, setBusy] = createSignal(false);
-  const [checkingDelivery, setCheckingDelivery] = createSignal<string>();
-  const [retryAttempts, setRetryAttempts] = createSignal<Record<string, number>>({});
-  const [deliveryChecks, setDeliveryChecks] = createSignal<
-    Record<string, { ackRevision: number; outcome: GithubDeliveryCheckOutcome; at?: string }>
-  >({});
+  const decisions = githubWrites.createDecisions();
+  const [decisionState, setDecisionState] = createSignal(decisions.getState());
+  onCleanup(decisions.subscribe(() => setDecisionState(decisions.getState())));
+  onCleanup(() => decisions.dispose());
+  const checkingDelivery = () => decisionState().checkingDelivery;
+  const deliveryChecks = () => decisionState().deliveryChecks;
+  const retries = () => decisionState().retries;
+  const retryErrorMessage = (id: string) => {
+    const facts = retries()[id];
+    const error = facts?.backendError;
+    return error
+      ? `${error.message}${error.httpStatus ? ` (HTTP ${error.httpStatus})` : ""}`
+      : facts?.admissionError;
+  };
   const [version, setVersion] = createSignal(0);
   const [revealed, setRevealed] = createSignal<string>();
   const [confirmation, setConfirmation] = createSignal<{
@@ -47,7 +51,7 @@ export function GithubOperationDetails(props: {
   }>();
   const [now, setNow] = createSignal(Date.now());
   const queue = useGithubQueue();
-  const busy = () => localBusy() || !!queue?.batchBusy?.();
+  const busy = () => !!decisionState().busyKind || !!queue?.batchBusy?.();
   if (!queue) onCleanup(githubWrites.subscribe(() => setVersion((value) => value + 1)));
   const all = () =>
     queue?.states().find((state) => state.scope.url === props.scope.url)?.operations ??
@@ -58,21 +62,6 @@ export function GithubOperationDetails(props: {
         all().find((entry) => entry.command.operationId === item.command.operationId) ?? item,
     ),
   );
-  createEffect(() => {
-    const requested = deliveryChecks();
-    for (const item of operations()) {
-      const id = item.command.operationId;
-      const check = requested[id];
-      if (check?.outcome === "pending") {
-        const outcome = githubDeliveryCheckOutcome(check.ackRevision, item.operation);
-        if (outcome !== "pending")
-          setDeliveryChecks((previous) => ({
-            ...previous,
-            [id]: { ...check, outcome, at: item.operation?.updatedAt },
-          }));
-      }
-    }
-  });
   createEffect(() => {
     if (!props.operations.some((item) => item.admissionRetryAt)) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -86,16 +75,15 @@ export function GithubOperationDetails(props: {
   };
   const checkAdmission = async (item: BrowserGithubOperation) => {
     if (busy()) return;
-    setBusy(true);
     setError(undefined);
-    try {
-      githubWrites.setQueueTimeoutMs(getGithubSyncTimeoutMs());
-      await githubWrites.retryAdmission(props.scope, item.command.operationId);
-    } catch {
+    const result = await decisions.run({
+      kind: "retry-admission",
+      scope: props.scope,
+      operationId: item.command.operationId,
+      timeoutMs: getGithubSyncTimeoutMs(),
+    });
+    if (result.kind === "unavailable" || result.kind === "rejected")
       setError("Admission could not be checked. Saved content is retained.");
-    } finally {
-      setBusy(false);
-    }
   };
   const control = async (
     item: BrowserGithubOperation,
@@ -103,108 +91,22 @@ export function GithubOperationDetails(props: {
     scope = props.scope,
   ) => {
     if (!item.operation || busy()) return;
-    setBusy(true);
     setError(undefined);
-    if (kind === "retry")
-      setRetryAttempts((previous) => ({
-        ...previous,
-        [item.command.operationId]: item.operation!.attempts,
-      }));
-    if (kind === "reconcile") {
-      setCheckingDelivery(item.command.operationId);
-      setDeliveryChecks((previous) => ({
-        ...previous,
-        [item.command.operationId]: { ackRevision: item.operation!.revision, outcome: "pending" },
-      }));
-    }
-    try {
-      const receipt = await githubWrites.control(scope, {
-        ...(kind === "allow-manual-retry"
-          ? {
-              kind: "resolve-uncertainty" as const,
-              resolution: { kind: "confirm-not-applied" as const },
-            }
-          : kind === "retry"
-            ? { kind, queueTimeoutMs: getGithubSyncTimeoutMs() }
-            : { kind }),
-        requestId: crypto.randomUUID(),
-        operationId: item.command.operationId,
-        expectedRevision: item.operation.revision,
-      });
-      if (receipt?.outcome === "rejected") {
-        setError(receipt.error.message);
-        if (kind === "allow-manual-retry") setConfirmation(undefined);
-        if (kind === "reconcile")
-          setDeliveryChecks((previous) => ({
-            ...previous,
-            [item.command.operationId]: {
-              ackRevision: item.operation!.revision,
-              outcome: "failed",
-            },
-          }));
-      } else {
-        if (kind === "allow-manual-retry") setConfirmation(undefined);
-        if (kind === "retry" && receipt) {
-          for (const delay of [0, 150, 300, 600, 1200, 2400]) {
-            if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-            const fresh = await githubWrites.snapshot(scope);
-            const operation = fresh.operations.find(
-              (entry) => entry.command.operationId === item.command.operationId,
-            )?.operation;
-            if (
-              operation &&
-              operation.attempts > item.operation.attempts &&
-              !["queued", "inflight"].includes(operation.status)
-            )
-              break;
-          }
-        }
-        if (kind === "reconcile" && receipt) {
-          // Reconcile acknowledges scheduling before the GitHub read finishes.
-          // Its worker publishes a newer revision. Never label that acknowledgement
-          // a completed check, or offer consent against the pre-read revision.
-          const ackRevision = receipt.operation.revision;
-          setDeliveryChecks((previous) => ({
-            ...previous,
-            [item.command.operationId]: { ackRevision, outcome: "pending" },
-          }));
-          let outcome: GithubDeliveryCheckOutcome = "pending";
-          for (const delay of [0, 150, 300, 600, 1200, 2400]) {
-            if (outcome !== "pending") break;
-            if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-            const fresh = await githubWrites.snapshot(scope);
-            const operation = fresh.operations.find(
-              (entry) => entry.command.operationId === item.command.operationId,
-            )?.operation;
-            outcome = githubDeliveryCheckOutcome(ackRevision, operation);
-            if (outcome !== "pending")
-              setDeliveryChecks((previous) => ({
-                ...previous,
-                [item.command.operationId]: { ackRevision, outcome, at: operation?.updatedAt },
-              }));
-          }
-        }
-      }
-    } catch {
+    const result = await decisions.run({
+      kind,
+      scope,
+      operation: item,
+      ...(kind === "retry" ? { timeoutMs: getGithubSyncTimeoutMs() } : {}),
+    });
+    if (result.kind === "disposed" || result.kind === "ignored") return;
+    if (result.kind === "rejected") setError(result.message);
+    if (result.kind === "unavailable")
       setError(
         kind === "reconcile"
           ? "Delivery check status is unavailable. No completed GitHub check is confirmed."
           : "Control not acknowledged. Saved work is retained; reconnect to check again.",
       );
-      if (kind === "reconcile")
-        setDeliveryChecks((previous) => ({
-          ...previous,
-          [item.command.operationId]: {
-            ackRevision:
-              previous[item.command.operationId]?.ackRevision ?? item.operation!.revision,
-            outcome: "failed",
-          },
-        }));
-      if (kind === "allow-manual-retry") setConfirmation(undefined);
-    } finally {
-      setBusy(false);
-      setCheckingDelivery(undefined);
-    }
+    if (kind === "allow-manual-retry") setConfirmation(undefined);
   };
   return (
     <div class="space-y-3 text-xs">
@@ -309,17 +211,18 @@ export function GithubOperationDetails(props: {
                   </Button>
                 </Show>
               </div>
-              <Show when={retryAttempts()[item.command.operationId] !== undefined}>
+              <Show when={retries()[item.command.operationId]}>
                 <p role="status" class="text-text-muted">
-                  {(item.operation?.attempts ?? 0) <= retryAttempts()[item.command.operationId]!
+                  {!retries()[item.command.operationId]!.advanced
                     ? "Retry requested. Waiting for GitHub."
-                    : item.status === "inflight" || item.status === "queued"
+                    : retries()[item.command.operationId]!.status === "inflight" ||
+                        retries()[item.command.operationId]!.status === "queued"
                       ? "Retrying on GitHub…"
-                      : item.status === "retry-failed"
-                        ? `Retry failed: ${operationErrorMessage(item) ?? "GitHub rejected this attempt."}`
-                        : item.status === "uncertain"
+                      : retries()[item.command.operationId]!.status === "retry-failed"
+                        ? `Retry failed: ${retryErrorMessage(item.command.operationId) ?? "GitHub rejected this attempt."}`
+                        : retries()[item.command.operationId]!.status === "uncertain"
                           ? "Retry delivery unknown. Do not resend without resolving it."
-                          : item.status === "synced"
+                          : retries()[item.command.operationId]!.status === "synced"
                             ? "Retry confirmed on GitHub."
                             : "Retry state changed. Refresh its status."}
                 </p>

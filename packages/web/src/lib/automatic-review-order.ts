@@ -35,13 +35,26 @@ export interface AvailableReviewOrder {
   files: string[];
 }
 
-export interface InitialReviewOrder {
-  prUrl: string;
+export interface ReviewOrderObservation {
+  order: AvailableReviewOrder | null;
+  hydration?: {
+    prUrl: string;
+    mode: "full" | "commit";
+    revision: string | null;
+    /** Errors release the page too; the first late snapshot must not replay saved history. */
+    snapshotLoaded: boolean;
+  };
+}
+
+export interface AutomaticReviewOrderContext {
+  requestedUrl: string;
+  loadedUrl: string | null;
   mode: "full" | "commit";
   revision: string | null;
-  order: AvailableReviewOrder | null;
-  /** Errors release the page too; a later first snapshot must not replay saved history. */
-  snapshotLoaded: boolean;
+  paths: string[];
+  loading: boolean;
+  loadingCommits: boolean;
+  switchingPr: boolean;
 }
 
 export interface SavedReviewOrderScope {
@@ -138,6 +151,146 @@ export function createAutomaticOrderTracker(storage?: StorageAccess) {
         );
       } catch {}
       return order.files;
+    },
+  };
+}
+
+/** Own automatic acceptance, not manual ordering or the displayed-order cache. */
+export function createAutomaticReviewOrder(options: {
+  storage?: StorageAccess;
+  apply(files: string[]): void;
+  /** UI adapter: observations read current context without relying on effect order. */
+  context?: () => AutomaticReviewOrderContext;
+}) {
+  let state = { enabled: loadAutomaticReviewOrder(options.storage), initialPending: false };
+  const tracker = createAutomaticOrderTracker(options.storage);
+  let context: AutomaticReviewOrderContext | undefined;
+  let latest: AvailableReviewOrder | null = null;
+  let initial: { url: string; fallback: boolean } | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false;
+  const listeners = new Set<() => void>();
+  const currentContext = () => options.context?.() ?? context;
+  const publish = (previous: typeof state) => {
+    if (!disposed && previous !== state) for (const listener of listeners) listener();
+  };
+  function clearInitial() {
+    clearTimeout(timer);
+    timer = undefined;
+    initial = null;
+    if (state.initialPending) state = { ...state, initialPending: false };
+  }
+  const matches = (order: AvailableReviewOrder, current: AutomaticReviewOrderContext) =>
+    current.loadedUrl === current.requestedUrl &&
+    order.prUrl === current.loadedUrl &&
+    order.mode === current.mode &&
+    order.revision === current.revision;
+  function take(order: AvailableReviewOrder, paths: string[]) {
+    if (!order.files.length || new Set(order.files).size !== order.files.length) return null;
+    return tracker.take(order, paths);
+  }
+  function applyLive() {
+    const current = currentContext();
+    if (
+      disposed ||
+      !state.enabled ||
+      state.initialPending ||
+      !latest ||
+      !current ||
+      current.loading ||
+      current.loadingCommits ||
+      current.switchingPr ||
+      !matches(latest, current)
+    )
+      return;
+    const files = take(latest, current.paths);
+    if (files && !disposed) options.apply(files);
+  }
+  return {
+    getState: (): Readonly<typeof state> => state,
+    subscribe(listener: () => void) {
+      if (!disposed) listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    updateContext(value: AutomaticReviewOrderContext) {
+      if (disposed) return;
+      context = value;
+      applyLive();
+    },
+    beginInitialLoad(url: string) {
+      if (disposed) return;
+      const previous = state;
+      clearInitial();
+      if (state.enabled) {
+        const captured = { url, fallback: false };
+        initial = captured;
+        state = { ...state, initialPending: true };
+        timer = setTimeout(() => {
+          if (disposed || initial !== captured) return;
+          const before = state;
+          captured.fallback = true;
+          state = { ...state, initialPending: false };
+          timer = undefined;
+          applyLive();
+          publish(before);
+        }, 10_000);
+      }
+      publish(previous);
+    },
+    cancelInitialLoad() {
+      if (disposed) return;
+      const previous = state;
+      clearInitial();
+      publish(previous);
+    },
+    observe(observation: ReviewOrderObservation) {
+      if (disposed) return;
+      const previous = state;
+      latest = observation.order;
+      const hydration = observation.hydration;
+      const current = currentContext();
+      if (
+        initial &&
+        hydration &&
+        current &&
+        initial.url === hydration.prUrl &&
+        hydration.prUrl === current.loadedUrl &&
+        hydration.prUrl === current.requestedUrl &&
+        hydration.mode === current.mode &&
+        hydration.revision === current.revision
+      ) {
+        if (latest && state.enabled && matches(latest, current)) {
+          const files = take(latest, current.paths);
+          // Apply before releasing the initial render gate. On fallback, only
+          // consume the first loaded history; future completed orders remain live.
+          if (files && !initial.fallback && !disposed) options.apply(files);
+        }
+        if (hydration.snapshotLoaded) initial = null;
+        else initial.fallback = true;
+        clearTimeout(timer);
+        timer = undefined;
+        if (state.initialPending) state = { ...state, initialPending: false };
+      }
+      applyLive();
+      publish(previous);
+    },
+    setEnabled(enabled: boolean) {
+      if (disposed) return;
+      const previous = state;
+      saveAutomaticReviewOrder(enabled, options.storage);
+      if (state.enabled !== enabled) state = { ...state, enabled };
+      if (!enabled) clearInitial();
+      applyLive();
+      publish(previous);
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      clearTimeout(timer);
+      initial = null;
+      listeners.clear();
     },
   };
 }

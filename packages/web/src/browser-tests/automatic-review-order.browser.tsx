@@ -951,7 +951,7 @@ export async function testAutomaticReviewOrderInPlaceScopeInBrowser() {
         theme="vesper"
         reviewMode="full"
         displayedHeadSha={head}
-        onAvailableReviewOrder={(order) => {
+        onReviewOrderObservation={({ order }) => {
           if (order) received.push(order);
         }}
       />

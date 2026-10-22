@@ -14,7 +14,7 @@ import {
   batch,
 } from "solid-js";
 
-import type { PrStatus, PrInfo, PrDetail } from "@better-review/shared";
+import type { PrInfo } from "@better-review/shared";
 import type { ResolvedSource } from "@better-review/shared";
 
 import { ChatPanel } from "./ChatPanel";
@@ -44,19 +44,12 @@ import {
   DiffViewer,
   getFileElementId,
   type DiffCommentDraft,
-  type PRComment,
   type DiffSettings,
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
 import { SpinnerIcon } from "./icons/spinner-icon";
 import { type SelectedSource, type SelectionChatController } from "./lib/ask-ai-selection";
-import {
-  createAutomaticOrderTracker,
-  loadAutomaticReviewOrder,
-  saveAutomaticReviewOrder,
-  type AvailableReviewOrder,
-  type InitialReviewOrder,
-} from "./lib/automatic-review-order";
+import { createAutomaticReviewOrder } from "./lib/automatic-review-order";
 import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-settings";
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
 import {
@@ -81,21 +74,14 @@ import {
   prPageHref,
   type PrTab,
 } from "./lib/pr-navigation";
+import { createPrReadState } from "./lib/pr-read-state";
 import { preserveReviewPosition } from "./lib/preserve-review-position";
 import {
   queryKeys,
   api,
   queryClient,
   fetchPrCore,
-  fetchPrDetail,
-  retainPrDetailForDisplay,
-  refreshPrDetail,
-  fetchPrExtras,
-  getCachedPrExtras,
-  refreshPrExtras,
-  refreshPrListAfterReview,
-  type IssueComment,
-  type PrExtrasData,
+  prReadQueryAdapter,
   getReviewedFiles,
   toggleReviewedFile,
   getReviewOrder,
@@ -154,38 +140,25 @@ const AppContent: Component = () => {
   const activeTab = createMemo(() => resolvePrTab(searchParams));
   const changesActive = () => activeTab() === "changes";
   const [changesVisited, setChangesVisited] = createSignal(false);
-  const [detail, setDetail] = createSignal<PrDetail>();
-  const [detailView, setDetailView] = createSignal<PrDetail>();
-  const [detailStaleNotice, setDetailStaleNotice] = createSignal<string>();
-  const publishDetail = (data: PrDetail) => {
-    const view = retainPrDetailForDisplay(detailView(), data);
-    setDetail(data);
-    setDetailView(view.data);
-    setDetailStaleNotice(view.stale.length ? view.stale.join(" · ") : undefined);
-  };
+  const [prUrl, setPrUrl] = createSignal("");
+  const prReads = createPrReadState({ query: prReadQueryAdapter, requestedUrl: prUrl });
+  const [prRead, setPrRead] = createSignal(prReads.getState());
+  onCleanup(prReads.subscribe(() => setPrRead(prReads.getState())));
+  onCleanup(() => prReads.dispose());
+  const detail = createMemo(() => prRead().detail);
+  const detailView = createMemo(() => prRead().displayDetail);
+  const detailStaleNotice = createMemo(() => prRead().staleNotice);
   const displayMetadata = () => {
     const section = detailView()?.metadata;
     return section?.status === "available" ? section.data : undefined;
   };
-  const [detailError, setDetailError] = createSignal<string>();
-  const mergeDetail = createMemo<PrDetail | undefined>(() => {
-    const data = detail();
-    return data && detailError()
-      ? {
-          ...data,
-          mergeCapabilities: {
-            status: "unavailable",
-            message:
-              "Current merge permissions could not be refreshed. Refresh details before merging.",
-          },
-        }
-      : data;
-  });
-  const [refreshingDetail, setRefreshingDetail] = createSignal(false);
+  const detailError = createMemo(() => prRead().detailError);
+  const mergeDetail = createMemo(() => prRead().mergeDetail);
+  const refreshingDetail = createMemo(() => prRead().refreshingDetail);
   const [discussionSourceNotice, setDiscussionSourceNotice] = createSignal<string>();
-  const [commentsUnavailable, setCommentsUnavailable] = createSignal(false);
-  const [issueCommentsUnavailable, setIssueCommentsUnavailable] = createSignal(false);
-  const [reviewThreads, setReviewThreads] = createSignal<PrExtrasData["reviewThreads"]>();
+  const commentsUnavailable = createMemo(() => prRead().commentsUnavailable);
+  const issueCommentsUnavailable = createMemo(() => prRead().issueCommentsUnavailable);
+  const reviewThreads = createMemo(() => prRead().reviewThreads);
   let changesRoot: HTMLDivElement | undefined;
   let reviewFocus:
     | {
@@ -270,24 +243,23 @@ const AppContent: Component = () => {
       { defer: true },
     ),
   );
-  const [prUrl, setPrUrl] = createSignal("");
   const [switchingPr, setSwitchingPr] = createSignal(false);
   const [conversationOpen, setConversationOpen] = createSignal(false);
   const [loadedPrUrl, setLoadedPrUrl] = createSignal<string | null>(null);
   const [initialLoadTriggered, setInitialLoadTriggered] = createSignal(false);
   const [prQueue, setPrQueue] = createSignal<QueuedPr[]>([]);
   const [prInfo, setPrInfo] = createSignal<PrInfo | null>(null);
-  const [prStatus, setPrStatus] = createSignal<PrStatus | null>(null);
-  const [loadingStatus, setLoadingStatus] = createSignal(false);
+  const prStatus = createMemo(() => prRead().status);
+  const loadingStatus = createMemo(() => prRead().loadingStatus);
   const [loading, setLoading] = createSignal(false);
-  const [loadingComments, setLoadingComments] = createSignal(false);
+  const loadingComments = createMemo(() => prRead().loadingComments);
   const [diff, setDiff] = createSignal<string | null>(null);
   const [diffViewMode, setDiffViewMode] = createSignal<DiffViewMode>("original");
   const [readingDiffs, setReadingDiffs] = createSignal(new Map<string, ReadingDiffResult>());
   const [readingDiffLoadingKeys, setReadingDiffLoadingKeys] = createSignal(new Set<string>());
   const [readingDiffErrors, setReadingDiffErrors] = createSignal(new Map<string, string>());
   const [files, setFiles] = createSignal<FileDiffMetadata[]>([]);
-  const [comments, setComments] = createSignal<PRComment[]>([]);
+  const comments = createMemo(() => prRead().comments);
   const [outboxVersion, setOutboxVersion] = createSignal(0);
   const unsubscribeOutbox = githubWrites.subscribe(() => setOutboxVersion((value) => value + 1));
   onCleanup(unsubscribeOutbox);
@@ -297,7 +269,7 @@ const AppContent: Component = () => {
     const url = loadedPrUrl();
     return url ? githubWrites.getState(githubPrScope(url)).operations : [];
   });
-  const [issueComments, setIssueComments] = createSignal<IssueComment[]>([]);
+  const issueComments = createMemo(() => prRead().issueComments);
   const githubView = createMemo(() => {
     outboxVersion();
     const url = loadedPrUrl();
@@ -308,20 +280,21 @@ const AppContent: Component = () => {
 
   // Review state
   const [reviewOrder, setReviewOrder] = createSignal<string[] | null>(null);
-  const [automaticOrder, setAutomaticOrder] = createSignal(loadAutomaticReviewOrder());
-  const [availableOrder, setAvailableOrder] = createSignal<AvailableReviewOrder | null>(null);
-  const automaticOrderTracker = createAutomaticOrderTracker();
-  const [initialOrderPending, setInitialOrderPending] = createSignal(false);
-  let initialOrderLoad: { url: string; fallback: boolean } | null = null;
-  let initialOrderTimer: ReturnType<typeof setTimeout> | undefined;
-  onCleanup(() => clearTimeout(initialOrderTimer));
-  createEffect(() => {
-    if (!automaticOrder()) {
-      clearTimeout(initialOrderTimer);
-      initialOrderLoad = null;
-      setInitialOrderPending(false);
-    }
+  const automaticOrderController = createAutomaticReviewOrder({
+    apply: (order) => applyReviewOrder(order),
+    context: () => automaticOrderContext(),
   });
+  const [automaticOrderState, setAutomaticOrderState] = createSignal(
+    automaticOrderController.getState(),
+  );
+  onCleanup(
+    automaticOrderController.subscribe(() =>
+      setAutomaticOrderState(automaticOrderController.getState()),
+    ),
+  );
+  onCleanup(() => automaticOrderController.dispose());
+  const automaticOrder = createMemo(() => automaticOrderState().enabled);
+  const initialOrderPending = createMemo(() => automaticOrderState().initialPending);
   const [aiAnnotations, setAiAnnotations] = createSignal<Annotation[]>([]);
   const [reviewCommentsHidden, setReviewCommentsHidden] = createSignal(false);
   const [highlightedLine, setHighlightedLine] = createSignal<{
@@ -613,50 +586,17 @@ const AppContent: Component = () => {
     }
   };
 
-  const hydrateInitialOrder = (result: InitialReviewOrder) => {
-    const initial = initialOrderLoad;
-    if (
-      !initial ||
-      initial.url !== result.prUrl ||
-      result.prUrl !== loadedPrUrl() ||
-      result.prUrl !== prUrl() ||
-      result.mode !== reviewMode() ||
-      result.revision !==
-        (reviewMode() === "commit" ? currentCommitSha() : (diffRevision().headSha ?? null))
-    )
-      return;
-    batch(() => {
-      if (result.order && automaticOrder()) {
-        const next = automaticOrderTracker.take(result.order, fileNames());
-        if (next && !initial.fallback) applyReviewOrder(next);
-      }
-      // On failure/timeout, discard only the first late saved snapshot, not future live orders.
-      if (result.snapshotLoaded) initialOrderLoad = null;
-      else initial.fallback = true;
-      clearTimeout(initialOrderTimer);
-      setInitialOrderPending(false);
-    });
-  };
-
-  createEffect(() => {
-    const order = availableOrder();
-    const revision = reviewMode() === "commit" ? currentCommitSha() : diffRevision().headSha;
-    if (
-      !automaticOrder() ||
-      initialOrderPending() ||
-      !order ||
-      loading() ||
-      loadingCommits() ||
-      switchingPr() ||
-      loadedPrUrl() !== prUrl() ||
-      order.prUrl !== loadedPrUrl() ||
-      order.mode !== reviewMode() ||
-      order.revision !== revision
-    )
-      return;
-    const next = automaticOrderTracker.take(order, fileNames());
-    if (next) applyReviewOrder(next);
+  const automaticOrderContext = () => ({
+    requestedUrl: prUrl(),
+    loadedUrl: loadedPrUrl(),
+    mode: reviewMode(),
+    revision: reviewMode() === "commit" ? currentCommitSha() : (diffRevision().headSha ?? null),
+    paths: fileNames(),
+    loading: loading(),
+    loadingCommits: loadingCommits(),
+    switchingPr: switchingPr(),
   });
+  createEffect(() => automaticOrderController.updateContext(automaticOrderContext()));
 
   // Toggle file read status
   const toggleFileRead = (fileName: string) => {
@@ -907,7 +847,6 @@ const AppContent: Component = () => {
   });
 
   let prLoadGeneration = 0;
-  let detailReadGeneration = 0;
   onCleanup(() => prLoadGeneration++);
   const loadPr = async (e: Event, fromRoute = false) => {
     e.preventDefault();
@@ -926,24 +865,14 @@ const AppContent: Component = () => {
     const currentPrUrl = scope.url;
     setPrUrl(currentPrUrl);
     reviewFocus = undefined;
-    const generation = ++prLoadGeneration;
-    const detailGeneration = ++detailReadGeneration;
-    const isCurrentPr = () => generation === prLoadGeneration && prUrl() === currentPrUrl;
-    const cachedExtras = getCachedPrExtras(currentPrUrl);
-    clearTimeout(initialOrderTimer);
-    initialOrderLoad = null;
+    ++prLoadGeneration;
     batch(() => {
       setChangesVisited(false);
-      setInitialOrderPending(false);
+      automaticOrderController.cancelInitialLoad();
       setLoading(false);
       setError(null);
-      setDetailError(undefined);
-      setRefreshingDetail(false);
       setDiscussionSourceNotice(undefined);
-      const cachedDetail = queryClient.getQueryData<PrDetail>(queryKeys.pr.detail(currentPrUrl));
-      setDetail(cachedDetail);
-      setDetailView(cachedDetail);
-      setDetailStaleNotice(undefined);
+      prReads.select(currentPrUrl);
       setDiff(null);
       setDiffRevision({});
       setReviewMode("full");
@@ -956,55 +885,12 @@ const AppContent: Component = () => {
       ++commitDiffRequest;
       setLoadingCommits(false);
       setCommits([]);
-      setComments(cachedExtras?.comments ?? []);
-      setIssueComments(cachedExtras?.issueComments ?? []);
       setPrInfo({ owner: scope.owner, repo: scope.repo, number: String(scope.number) });
-      setPrStatus(cachedExtras?.status ?? null);
-      setLoadingStatus(!cachedExtras?.status);
-      setLoadingComments(!cachedExtras);
-      setCommentsUnavailable(!!cachedExtras && cachedExtras.comments === null);
-      setIssueCommentsUnavailable(!!cachedExtras && cachedExtras.issueComments === null);
-      setReviewThreads(cachedExtras?.reviewThreads);
       setLoadedPrUrl(currentPrUrl);
       setContextPrUrl(currentPrUrl);
       setSwitchingPr(false);
     });
     updatePrParams({ prUrl: currentPrUrl }, fromRoute);
-    void queryClient.cancelQueries({
-      predicate: (query) => query.queryKey[0] === "pr" && !query.queryKey.includes(currentPrUrl),
-    });
-    void fetchPrDetail(currentPrUrl)
-      .then((data) => {
-        if (isCurrentPr() && detailGeneration === detailReadGeneration) publishDetail(data);
-      })
-      .catch((cause) => {
-        if (isCurrentPr() && detailGeneration === detailReadGeneration)
-          setDetailError(
-            cause instanceof Error ? cause.message : "Pull request details unavailable",
-          );
-      });
-    void fetchPrExtras(currentPrUrl)
-      .then((data) => {
-        if (!isCurrentPr()) return;
-        setCommentsUnavailable(data.comments === null);
-        setIssueCommentsUnavailable(data.issueComments === null);
-        setReviewThreads(data.reviewThreads);
-        if (data.comments) setComments(data.comments);
-        if (data.issueComments) setIssueComments(data.issueComments);
-        if (data.status) setPrStatus(data.status);
-      })
-      .catch((err) => {
-        console.error("Failed to load PR comments and status:", err);
-        if (isCurrentPr()) {
-          setCommentsUnavailable(true);
-          setIssueCommentsUnavailable(true);
-        }
-      })
-      .finally(() => {
-        if (!isCurrentPr()) return;
-        setLoadingStatus(false);
-        setLoadingComments(false);
-      });
   };
 
   const loadChanges = async () => {
@@ -1015,17 +901,8 @@ const AppContent: Component = () => {
     batch(() => {
       setLoading(true);
       setChangesVisited(true);
-      initialOrderLoad = automaticOrder() ? { url: currentPrUrl, fallback: false } : null;
-      setInitialOrderPending(!!initialOrderLoad);
+      automaticOrderController.beginInitialLoad(currentPrUrl);
     });
-    if (initialOrderLoad) {
-      const initial = initialOrderLoad;
-      initialOrderTimer = setTimeout(() => {
-        if (initialOrderLoad !== initial) return;
-        initial.fallback = true;
-        setInitialOrderPending(false);
-      }, 10_000);
-    }
     try {
       // Respects cache - only fetches if data is stale or missing
       const data = await fetchPrCore(currentPrUrl);
@@ -1056,9 +933,7 @@ const AppContent: Component = () => {
     } catch (err) {
       if (isCurrentPr()) {
         setError(describePrLoadError(err));
-        clearTimeout(initialOrderTimer);
-        initialOrderLoad = null;
-        setInitialOrderPending(false);
+        automaticOrderController.cancelInitialLoad();
       }
     } finally {
       if (generation === prLoadGeneration) setLoading(false);
@@ -1069,83 +944,8 @@ const AppContent: Component = () => {
     if (changesActive() && loadedPrUrl() === prUrl() && !changesVisited()) void loadChanges();
   });
 
-  const refreshDetail = async (afterWrite = false) => {
-    const url = loadedPrUrl();
-    const generation = prLoadGeneration;
-    const detailGeneration = ++detailReadGeneration;
-    if (!url) return;
-    setRefreshingDetail(true);
-    const isCurrent = () =>
-      generation === prLoadGeneration &&
-      url === prUrl() &&
-      detailGeneration === detailReadGeneration;
-    try {
-      const data = await refreshPrDetail(url, { afterWrite });
-      if (isCurrent()) {
-        publishDetail(data);
-        setDetailError(undefined);
-      }
-    } catch (cause) {
-      if (isCurrent()) setDetailError(cause instanceof Error ? cause.message : String(cause));
-      throw cause;
-    } finally {
-      if (isCurrent()) setRefreshingDetail(false);
-    }
-  };
-
-  const refreshAfterMerge = async () => {
-    const url = loadedPrUrl();
-    const generation = prLoadGeneration;
-    if (!url) return;
-    await queryClient.cancelQueries({
-      predicate: (query) => query.queryKey[0] === "pr" && query.queryKey.includes(url),
-    });
-    await queryClient.invalidateQueries({
-      predicate: (query) => query.queryKey[0] === "pr" && query.queryKey.includes(url),
-      refetchType: "none",
-    });
-    const [extras] = await Promise.all([
-      refreshPrExtras(url),
-      refreshDetail(true),
-      refreshPrListAfterReview(),
-    ]);
-    if (generation !== prLoadGeneration || loadedPrUrl() !== url) return;
-    if (extras.status) setPrStatus(extras.status);
-    if (extras.comments) setComments(extras.comments);
-    if (extras.issueComments) setIssueComments(extras.issueComments);
-    setCommentsUnavailable(extras.comments === null);
-    setIssueCommentsUnavailable(extras.issueComments === null);
-    setReviewThreads(extras.reviewThreads);
-  };
-
-  // The app-shell completion watcher survives route changes and publishes shared
-  // read models. Observe only this PR's successful cache updates, without resetting review state.
-  onCleanup(
-    queryClient.getQueryCache().subscribe((event) => {
-      if (event.type !== "updated" || event.action.type !== "success") return;
-      const url = loadedPrUrl();
-      const key = event.query.queryKey;
-      if (!url || url !== prUrl() || key[0] !== "pr" || key[2] !== url) return;
-      if (key[1] === "detail") {
-        const data = queryClient.getQueryData<PrDetail>(queryKeys.pr.detail(url));
-        if (data) {
-          publishDetail(data);
-          setDetailError(undefined);
-        }
-      } else if (key[1] === "extras") {
-        const data = getCachedPrExtras(url);
-        if (!data) return;
-        if (data.comments) setComments(data.comments);
-        if (data.issueComments) setIssueComments(data.issueComments);
-        if (data.status) setPrStatus(data.status);
-        setCommentsUnavailable(data.comments === null);
-        setIssueCommentsUnavailable(data.issueComments === null);
-        setReviewThreads(data.reviewThreads);
-        setLoadingStatus(false);
-        setLoadingComments(false);
-      }
-    }),
-  );
+  const refreshDetail = () => prReads.refreshDetail();
+  const refreshAfterMerge = () => prReads.refreshAfterMerge();
 
   const navigateOverviewSource = (location: PrDiscussionLocation) => {
     selectTab("changes");
@@ -1330,10 +1130,7 @@ const AppContent: Component = () => {
           settings={
             <ReviewSettings
               automaticOrder={automaticOrder()}
-              onAutomaticOrderChange={(enabled) => {
-                saveAutomaticReviewOrder(enabled);
-                setAutomaticOrder(enabled);
-              }}
+              onAutomaticOrderChange={automaticOrderController.setEnabled}
             />
           }
           actions={
@@ -1750,8 +1547,7 @@ const AppContent: Component = () => {
               theme={settings().theme}
               aiAnnotations={aiAnnotations()}
               onApplyReviewOrder={applyReviewOrder}
-              onAvailableReviewOrder={setAvailableOrder}
-              onInitialReviewOrder={hydrateInitialOrder}
+              onReviewOrderObservation={automaticOrderController.observe}
               initialReviewOrderReady={!automaticOrder() || (!loading() && !loadingCommits())}
               onAnnotationsReceived={addNewAiAnnotations}
             />

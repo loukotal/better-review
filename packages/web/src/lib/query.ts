@@ -467,47 +467,6 @@ export async function fetchPrDetail(url: string) {
   return queryClient.getQueryData<PrDetail>(queryKeys.pr.detail(url)) ?? data;
 }
 
-/** Read-only presentation fallback. Never pass this merged view to mutation controls. */
-export function retainPrDetailForDisplay(
-  previous: PrDetail | undefined,
-  next: PrDetail,
-): { data: PrDetail; stale: string[] } {
-  if (!previous || previous.url !== next.url || previous.metadata.status !== "available")
-    return { data: next, stale: [] };
-  if (next.metadata.status === "unavailable")
-    return {
-      data: { ...previous, actor: next.actor, mergeCapabilities: next.mergeCapabilities },
-      stale: [next.metadata.message],
-    };
-  if (
-    previous.metadata.data.head.sha !== next.metadata.data.head.sha ||
-    previous.metadata.data.base.sha !== next.metadata.data.base.sha
-  )
-    return { data: next, stale: [] };
-  const data = { ...next },
-    stale: string[] = [];
-  if (next.checks.status === "unavailable" && previous.checks.status === "available") {
-    data.checks = previous.checks;
-    stale.push(next.checks.message);
-  }
-  if (next.labels.status === "unavailable" && previous.labels.status === "available") {
-    data.labels = previous.labels;
-    stale.push(next.labels.message);
-  }
-  if (next.reviews.status === "unavailable" && previous.reviews.status === "available") {
-    data.reviews = previous.reviews;
-    stale.push(next.reviews.message);
-  }
-  if (
-    next.reviewRequests.status === "unavailable" &&
-    previous.reviewRequests.status === "available"
-  ) {
-    data.reviewRequests = previous.reviewRequests;
-    stale.push(next.reviewRequests.message);
-  }
-  return { data: stale.length ? data : next, stale };
-}
-
 const detailRefreshGenerations = new Map<string, number>();
 type PrDetailData = Awaited<ReturnType<typeof trpc.prDetail.refresh.mutate>>;
 interface DetailRefreshFlight {
@@ -553,6 +512,41 @@ export function refreshPrDetail(
   }
   return flight.followup ?? flight.promise;
 }
+
+/** Concrete selected-PR read adapter. Keys, fencing, and shared flights stay here. */
+export const prReadQueryAdapter = {
+  cachedDetail: (url: string) => queryClient.getQueryData<PrDetail>(queryKeys.pr.detail(url)),
+  cachedExtras: getCachedPrExtras,
+  fetchDetail: fetchPrDetail,
+  fetchExtras: fetchPrExtras,
+  refreshDetail: refreshPrDetail,
+  refreshExtras: refreshPrExtras,
+  refreshList: refreshPrListAfterReview,
+  cancelOtherPrQueries: (url: string) =>
+    queryClient.cancelQueries({
+      predicate: (query) => query.queryKey[0] === "pr" && !query.queryKey.includes(url),
+    }),
+  cancelPrQueries: (url: string) =>
+    queryClient.cancelQueries({
+      predicate: (query) => query.queryKey[0] === "pr" && query.queryKey.includes(url),
+    }),
+  invalidatePrQueries: (url: string) =>
+    queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey[0] === "pr" && query.queryKey.includes(url),
+      refetchType: "none",
+    }),
+  subscribe: (listener: (event: { url: string; resource: "detail" | "extras" }) => void) =>
+    queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== "updated" || event.action.type !== "success") return;
+      const key = event.query.queryKey;
+      if (
+        key[0] === "pr" &&
+        typeof key[2] === "string" &&
+        (key[1] === "detail" || key[1] === "extras")
+      )
+        listener({ url: key[2], resource: key[1] });
+    }),
+};
 
 // Prefetch a full PR (user intent to open it)
 export async function prefetchPr(url: string): Promise<void> {

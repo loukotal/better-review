@@ -1357,6 +1357,575 @@ function transport(overrides: Partial<GithubOutboxTransport> = {}): GithubOutbox
   };
 }
 
+// Decision-owner contracts run through the same journal/transport seam as callers.
+async function decisionFixture(
+  overrides: Partial<GithubOutboxTransport> = {},
+  initial = operation(command(), "retry-failed", 3),
+) {
+  const journal = memoryJournal();
+  const remote = new Map([[initial.command.operationId, initial]]);
+  const reads: number[] = [];
+  const controls: import("@better-review/shared").GithubOutboxControl[] = [];
+  let uuids = 1000;
+  const wire = transport({
+    async snapshot(pr) {
+      reads.push(Date.now());
+      return {
+        scope: pr,
+        revision: 1000,
+        operations: [...remote.values()].filter((item) => item.command.scope.url === pr.url),
+      };
+    },
+    async control(request) {
+      controls.push(structuredClone(request));
+      const before = remote.get(request.operationId)!;
+      const next = {
+        ...before,
+        revision: before.revision + 1,
+        status: request.kind === "retry" ? ("queued" as const) : before.status,
+      };
+      remote.set(request.operationId, next);
+      return { outcome: "applied", operation: next };
+    },
+    async batchControl(request) {
+      return {
+        outcome: "applied",
+        requestId: request.requestId,
+        operations: [...remote.values()],
+        aliases: {},
+        requiresConfirmation: [],
+        skipped: [],
+      };
+    },
+    ...overrides,
+  });
+  const client = createGithubOutbox({ journal, transport: wire, uuid: () => id(++uuids) });
+  await client.snapshot(initial.command.scope);
+  reads.length = 0;
+  const decisions = client.createDecisions();
+  const captured = () =>
+    client
+      .getState(initial.command.scope)
+      .operations.find((item) => item.command.operationId === initial.command.operationId)!;
+  return { client, decisions, journal, remote, reads, controls, captured, wire };
+}
+const flushDecisions = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+for (const kind of ["retry", "reconcile"] as const) {
+  test(`decisions ${kind}: acknowledgement is not execution; exact sequential poll budget and late publication`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.parse("2026-01-01") });
+    const initial = {
+      ...operation(command(), kind === "retry" ? "retry-failed" : "uncertain", 3),
+      attempts: 2,
+    };
+    const f = await decisionFixture({}, initial);
+    t.after(() => f.client.close());
+    let finished = false;
+    const run = f.decisions
+      .run({ kind, scope, operation: f.captured(), timeoutMs: 60_000 })
+      .then((result) => {
+        finished = true;
+        return result;
+      });
+    assert.equal(f.decisions.getState().busyKind, kind, "busy captured before first await");
+    await flushDecisions();
+    assert.equal(finished, false);
+    assert.equal(f.reads.length, 1);
+    if (kind === "retry") assert.equal(f.decisions.getState().retries[id(1)].advanced, false);
+    else
+      assert.deepEqual(f.decisions.getState().deliveryChecks[id(1)], {
+        ackRevision: 4,
+        outcome: "pending",
+      });
+    let elapsed = 0;
+    for (const delay of [150, 300, 600, 1200, 2400]) {
+      t.mock.timers.tick(delay - 1);
+      await flushDecisions();
+      assert.equal(f.reads.length, [0, 150, 450, 1050, 2250, 4650].indexOf(elapsed) + 1);
+      t.mock.timers.tick(1);
+      elapsed += delay;
+      await flushDecisions();
+    }
+    assert.equal((await run).kind, "acknowledged");
+    assert.deepEqual(
+      f.reads.map((time) => time - f.reads[0]),
+      [0, 150, 450, 1050, 2250, 4650],
+    );
+    assert.equal(f.decisions.getState().busyKind, undefined);
+    f.remote.set(id(1), { ...initial, status: "synced", revision: 5, attempts: 3 });
+    await f.client.snapshot(scope);
+    if (kind === "retry") {
+      assert.equal(f.decisions.getState().retries[id(1)].advanced, true);
+      assert.equal(f.decisions.getState().retries[id(1)].status, "synced");
+    } else assert.equal(f.decisions.getState().deliveryChecks[id(1)].outcome, "confirmed");
+  });
+}
+
+test("decisions retry: early stop needs both attempt advancement and settlement", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = await decisionFixture();
+  t.after(() => f.client.close());
+  const run = f.decisions.run({ kind: "retry", scope, operation: f.captured() });
+  await flushDecisions();
+  const ack = f.remote.get(id(1))!;
+  f.remote.set(id(1), { ...ack, attempts: 1, revision: 5, status: "inflight" });
+  t.mock.timers.tick(150);
+  await flushDecisions();
+  assert.equal(f.reads.length, 2);
+  f.remote.set(id(1), {
+    ...ack,
+    attempts: 1,
+    revision: 6,
+    status: "retry-failed",
+    error: { code: "permission", message: "Denied", retryable: false, httpStatus: 403 },
+  });
+  t.mock.timers.tick(300);
+  await flushDecisions();
+  assert.equal((await run).kind, "acknowledged");
+  assert.equal(f.reads.length, 3);
+  assert.equal(f.decisions.getState().retries[id(1)].backendError?.httpStatus, 403);
+});
+
+for (const kind of ["retry", "reconcile"] as const) {
+  test(`decisions ${kind}: first read failure stops polling; acknowledged receipt retained`, async (t) => {
+    const f = await decisionFixture({}, operation(command(), "uncertain", 3));
+    t.after(() => f.client.close());
+    f.wire.snapshot = async () => {
+      throw new Error("offline");
+    };
+    const result = await f.decisions.run({ kind, scope, operation: f.captured() });
+    assert.equal(result.kind, "unavailable");
+    assert.ok(result.kind === "unavailable" && result.receipt?.outcome === "applied");
+    if (kind === "reconcile")
+      assert.equal(f.decisions.getState().deliveryChecks[id(1)].outcome, "failed");
+    f.wire.snapshot = async () => ({
+      scope,
+      revision: 1001,
+      operations: [{ ...operation(command(), "synced", 6), attempts: 2 }],
+    });
+    await f.client.snapshot(scope);
+    if (kind === "reconcile")
+      assert.equal(
+        f.decisions.getState().deliveryChecks[id(1)].outcome,
+        "failed",
+        "failed checks cannot revive",
+      );
+    else
+      assert.equal(
+        f.decisions.getState().retries[id(1)].status,
+        "synced",
+        "retry facts still observe late publications",
+      );
+  });
+}
+
+test("decisions reconcile: receipt publication uses supplied baseline before resetting to acknowledgement revision", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const initial = {
+    ...operation(command(), "uncertain", 3),
+    error: { code: "conflict" as const, message: "Unknown", retryable: false },
+  };
+  const f = await decisionFixture({}, initial);
+  t.after(() => f.client.close());
+  const seen: { ackRevision: number; outcome: string; at?: string }[] = [];
+  f.decisions.subscribe(() => {
+    const check = f.decisions.getState().deliveryChecks[id(1)];
+    if (check) seen.push(check);
+  });
+  const run = f.decisions.run({ kind: "reconcile", scope, operation: f.captured() });
+  await flushDecisions();
+  assert.ok(seen.some((check) => check.ackRevision === 3 && check.outcome === "unconfirmed"));
+  assert.deepEqual(f.decisions.getState().deliveryChecks[id(1)], {
+    ackRevision: 4,
+    outcome: "pending",
+  });
+  f.remote.set(id(1), { ...initial, revision: 5, nextAttemptAt: initial.updatedAt });
+  t.mock.timers.tick(150);
+  await flushDecisions();
+  assert.equal(
+    f.decisions.getState().deliveryChecks[id(1)].outcome,
+    "pending",
+    "a newer but still-due reconciliation is not complete",
+  );
+  f.remote.set(id(1), { ...initial, revision: 6 });
+  t.mock.timers.tick(300);
+  await flushDecisions();
+  assert.equal((await run).kind, "acknowledged");
+  assert.deepEqual(f.decisions.getState().deliveryChecks[id(1)], {
+    ackRevision: 4,
+    outcome: "unconfirmed",
+    at: initial.updatedAt,
+  });
+});
+
+for (const code of ["network", "auth", "permission", "identity-unknown"] as const) {
+  test(`decisions reconcile: settled ${code} is failed, never a successful check`, async (t) => {
+    const f = await decisionFixture({}, operation(command(), "uncertain", 3));
+    t.after(() => f.client.close());
+    f.wire.snapshot = async () => ({
+      scope,
+      revision: 1001,
+      operations: [
+        {
+          ...operation(command(), "uncertain", 5),
+          error: { code, message: "Read failed", retryable: true },
+        },
+      ],
+    });
+    assert.equal(
+      (await f.decisions.run({ kind: "reconcile", scope, operation: f.captured() })).kind,
+      "acknowledged",
+    );
+    assert.equal(f.decisions.getState().deliveryChecks[id(1)].outcome, "failed");
+  });
+}
+
+test("decisions: stale consent keeps captured revision/scope and never resends; rejection and lost ack stay distinct", async (t) => {
+  const f = await decisionFixture({}, operation(command(), "uncertain", 3));
+  t.after(() => f.client.close());
+  const captured = structuredClone(f.captured());
+  f.remote.set(id(1), operation(command(), "uncertain", 7));
+  await f.client.snapshot(scope);
+  let sends = 0;
+  f.wire.enqueue = async () => {
+    sends++;
+    throw new Error("must not send");
+  };
+  f.wire.control = async (request) => {
+    assert.equal(request.expectedRevision, 3);
+    assert.deepEqual(request, {
+      kind: "resolve-uncertainty",
+      resolution: { kind: "confirm-not-applied" },
+      requestId: request.requestId,
+      operationId: id(1),
+      expectedRevision: 3,
+    });
+    assert.deepEqual((await f.journal.controls(scope))[0], request);
+    return {
+      outcome: "rejected",
+      operationId: id(1),
+      error: { code: "conflict", message: "Stale revision", retryable: false },
+    };
+  };
+  assert.deepEqual(
+    await f.decisions.run({ kind: "allow-manual-retry", scope, operation: captured }),
+    { kind: "rejected", message: "Stale revision" },
+  );
+  f.wire.control = async () => {
+    throw new Error("lost acknowledgement");
+  };
+  const result = await f.decisions.run({ kind: "allow-manual-retry", scope, operation: captured });
+  assert.deepEqual(result, { kind: "unavailable", message: "lost acknowledgement" });
+  assert.equal((await f.journal.controls(scope)).length, 1, "lost-ack control remains durable");
+  assert.equal(sends, 0);
+  assert.equal(f.reads.length, 1, "manual retry consent never polls");
+});
+
+test("decisions: synchronous capture, busy reentry, independent owners, and disposed held transport", async (t) => {
+  let release!: (receipt: import("@better-review/shared").GithubOutboxControlReceipt) => void;
+  const f = await decisionFixture({
+    control: () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  });
+  t.after(() => f.client.close());
+  const captured = f.captured();
+  const capturedScope = { ...scope };
+  const run = f.decisions.run({ kind: "cancel", scope: capturedScope, operation: captured });
+  captured.operation!.revision = 999;
+  capturedScope.number = 2;
+  capturedScope.url = scope.url.replace(/1$/, "2");
+  assert.deepEqual(await f.decisions.run({ kind: "cancel", scope, operation: captured }), {
+    kind: "ignored",
+  });
+  const other = f.client.createDecisions();
+  assert.equal(other.getState().busyKind, undefined, "no new global mutex");
+  await flushDecisions();
+  const saved = (await f.journal.controls(scope))[0];
+  assert.equal(saved.expectedRevision, 3);
+  assert.deepEqual(
+    await f.journal.controls(capturedScope),
+    [],
+    "scope was captured before the caller changed it",
+  );
+  let publications = 0;
+  f.decisions.subscribe(() => publications++);
+  f.decisions.dispose();
+  assert.deepEqual(await run, { kind: "disposed" });
+  release({ outcome: "applied", operation: operation(command(), "cancelled", 4) });
+  await flushDecisions();
+  assert.equal(
+    f.client.getState(scope).operations[0].status,
+    "cancelled",
+    "started durable control completes after disposal",
+  );
+  assert.equal((await f.journal.controls(scope)).length, 0);
+  assert.equal(f.reads.length, 0);
+  assert.equal(publications, 0);
+  assert.deepEqual(await f.decisions.run({ kind: "clear-all" }), { kind: "disposed" });
+});
+
+test("decisions: disposal releases a held polling timer; outbox close disposes all owners", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = await decisionFixture();
+  const run = f.decisions.run({ kind: "retry", scope, operation: f.captured() });
+  await flushDecisions();
+  assert.equal(f.reads.length, 1);
+  f.decisions.dispose();
+  assert.deepEqual(await run, { kind: "disposed" });
+  t.mock.timers.tick(5000);
+  await flushDecisions();
+  assert.equal(f.reads.length, 1);
+  const other = f.client.createDecisions();
+  await f.client.close();
+  assert.deepEqual(await other.run({ kind: "clear-all" }), { kind: "disposed" });
+});
+
+test("decisions batch: concurrent partial read failure recovers, feedback filter differs from execution, blocked locals excluded", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = await decisionFixture();
+  t.after(() => f.client.close());
+  const secondScope = { ...scope, number: 2, url: scope.url.replace(/1$/, "2") };
+  const thirdScope = { ...scope, number: 3, url: scope.url.replace(/1$/, "3") };
+  const second = {
+    ...operation({ ...command(2), scope: secondScope }, "uncertain", 3),
+    sequence: 1,
+  };
+  f.remote.set(id(2), second);
+  await f.client.snapshot(secondScope);
+  const local = { ...command(3), scope: thirdScope };
+  await f.journal.admit(local);
+  const blocked = { ...command(4), scope: thirdScope, dependencies: [id(99)] };
+  f.remote.set(id(99), operation({ ...command(99), scope: thirdScope }, "cancelled", 3));
+  await f.client.snapshot(thirdScope);
+  await f.journal.admit(blocked);
+  await f.client.discoverSavedScopes();
+  f.reads.length = 0;
+  let batch!: import("@better-review/shared").GithubOutboxBatchControl;
+  f.wire.batchControl = async (request) => {
+    batch = request;
+    // Unknown root participates in execution but gets no retry baseline.
+    return {
+      outcome: "applied",
+      requestId: request.requestId,
+      operations: [operation(command(), "queued", 4), second],
+      aliases: {},
+      requiresConfirmation: [id(2)],
+      skipped: [],
+    };
+  };
+  const calls = new Map<string, number>();
+  f.wire.snapshot = async (pr) => {
+    const count = (calls.get(pr.url) ?? 0) + 1;
+    calls.set(pr.url, count);
+    if (pr.url === scope.url && count === 1) throw new Error("first read unavailable");
+    return {
+      scope: pr,
+      revision: 1001,
+      operations:
+        pr.url === scope.url
+          ? [{ ...operation(command(), "synced", 5), attempts: 1 }]
+          : pr.url === secondScope.url
+            ? [second]
+            : [],
+    };
+  };
+  const run = f.decisions.run({ kind: "retry-all", timeoutMs: 60_000 });
+  await flushDecisions();
+  assert.deepEqual(
+    batch.operations.map((item) => item.operationId),
+    [id(1), id(2)],
+  );
+  assert.deepEqual(
+    Object.keys(f.decisions.getState().retries).sort(),
+    [id(1), id(3)],
+    "unknown root and blocked local are not retry feedback targets",
+  );
+  assert.equal(f.decisions.getState().retries[id(3)].baselineAttempts, 0);
+  assert.equal(calls.size, 3, "all selected scopes read in the same round");
+  for (const delay of [150, 300, 600, 1200, 2400]) {
+    t.mock.timers.tick(delay);
+    await flushDecisions();
+  }
+  const result = await run;
+  assert.ok(result.kind === "acknowledged");
+  assert.equal(result.summary?.unavailableReads, 0, "later success clears per-scope read failure");
+  assert.equal(result.summary?.confirmed, 1);
+  assert.equal(result.summary?.pending, 1);
+  assert.equal(result.summary?.requiresConfirmation, 1);
+  assert.equal(calls.get(scope.url), 6);
+});
+
+for (const rejected of [true, false]) {
+  test(`decisions batch: ${rejected ? "rejected" : "lost ack"} removes initial baselines and marks unacknowledged`, async (t) => {
+    const f = await decisionFixture({
+      batchControl: async (request) => {
+        if (!rejected) throw new Error("offline");
+        return {
+          outcome: "rejected",
+          requestId: request.requestId,
+          error: { code: "conflict", message: "Stale batch", retryable: false },
+        };
+      },
+    });
+    t.after(() => f.client.close());
+    const result = await f.decisions.run({ kind: "retry-all", timeoutMs: 60_000 });
+    assert.equal(result.kind, rejected ? "rejected" : "unavailable");
+    const facts = f.decisions.getState().retries[id(1)];
+    assert.equal(facts.baselineAttempts, undefined);
+    assert.equal(facts.acknowledgementFailed, true);
+    f.remote.set(id(1), { ...operation(command(), "synced", 6), attempts: 1 });
+    await f.client.snapshot(scope);
+    assert.equal(f.decisions.getState().retries[id(1)].acknowledgementFailed, true);
+    assert.equal((await f.journal.batches!()).length, rejected ? 0 : 1);
+  });
+}
+
+test("decisions Clear: no polls, summary counts, clears tracking without mutating prior rendered facts", async (t) => {
+  const f = await decisionFixture();
+  t.after(() => f.client.close());
+  f.wire.snapshot = async () => ({
+    scope,
+    revision: 1001,
+    operations: [{ ...operation(command(), "retry-failed", 5), attempts: 1 }],
+  });
+  await f.decisions.run({ kind: "retry", scope, operation: f.captured() });
+  const rendered = f.decisions.getState().retries;
+  let reads = 0;
+  f.wire.snapshot = async () => {
+    reads++;
+    throw new Error("Clear must not poll");
+  };
+  f.wire.batchControl = async (request) => ({
+    outcome: "applied",
+    requestId: request.requestId,
+    operations: [
+      operation(command(), "cancelled", 6),
+      { ...operation(command(2), "uncertain", 6), archivedAt: "2026-01-01T00:00:00Z" },
+    ],
+    aliases: {},
+    requiresConfirmation: [],
+    skipped: [],
+  });
+  const result = await f.decisions.run({ kind: "clear-all" });
+  assert.ok(result.kind === "acknowledged");
+  assert.equal(result.summary?.cancelled, 1);
+  assert.equal(result.summary?.archived, 1);
+  assert.deepEqual(f.decisions.getState().retries, {});
+  assert.equal(rendered[id(1)].status, "retry-failed");
+  assert.equal(reads, 0);
+});
+
+test("decisions admission: delegates saved intent and selected timeout without snapshot/discovery", async (t) => {
+  const journal = memoryJournal();
+  const cmd = command();
+  await journal.admit(cmd);
+  await journal.admissionFailed(id(1), "Admission failed", undefined, false, true);
+  let received: import("@better-review/shared").GithubOutboxAdmissionCycle | undefined;
+  const client = createGithubOutbox({
+    journal,
+    transport: transport({
+      async enqueue(saved, cycle) {
+        assert.deepEqual(saved, cmd);
+        received = cycle;
+        return { outcome: "accepted", operation: operation(saved) };
+      },
+      async snapshot() {
+        throw new Error("No decision snapshot");
+      },
+      async listPending() {
+        throw new Error("No decision discovery");
+      },
+    }),
+  });
+  t.after(() => client.close());
+  await client.discoverSavedScopes();
+  const decisions = client.createDecisions();
+  assert.equal(
+    (await decisions.run({ kind: "retry-admission", scope, operationId: id(1), timeoutMs: 60_000 }))
+      .kind,
+    "acknowledged",
+  );
+  assert.equal(received?.queueTimeoutMs, 60_000);
+  assert.equal(client.getState(scope).operations[0].backendOwned, true);
+});
+
+test("decisions duplicate retry receipt still polls; settled receipt-only IDs use baseline fallback -1", async (t) => {
+  const f = await decisionFixture();
+  t.after(() => f.client.close());
+  f.wire.control = async () => ({
+    outcome: "duplicate",
+    operation: operation(command(), "queued", 4),
+  });
+  let reads = 0;
+  f.wire.snapshot = async () => {
+    reads++;
+    return {
+      scope,
+      revision: 1001,
+      operations: [{ ...operation(command(), "synced", 5), attempts: 1 }],
+    };
+  };
+  assert.equal(
+    (await f.decisions.run({ kind: "retry", scope, operation: f.captured() })).kind,
+    "acknowledged",
+  );
+  assert.equal(reads, 1);
+  const unknown = operation(command(2), "uncertain", 3);
+  f.remote.set(id(2), unknown);
+  f.wire.snapshot = async () => ({ scope, revision: 1002, operations: [unknown] });
+  await f.client.snapshot(scope);
+  f.wire.batchControl = async () => ({
+    outcome: "duplicate",
+    operations: [unknown],
+    aliases: {},
+    requiresConfirmation: [id(2)],
+    skipped: [id(2)],
+  });
+  reads = 0;
+  f.wire.snapshot = async () => {
+    reads++;
+    throw new Error("Unavailable snapshot");
+  };
+  const result = await f.decisions.run({ kind: "retry-all", timeoutMs: 60_000 });
+  assert.ok(result.kind === "acknowledged");
+  assert.equal(
+    reads,
+    1,
+    "uncertain receipt-only operation with zero attempts qualifies under baseline -1",
+  );
+  assert.equal(f.decisions.getState().retries[id(2)], undefined);
+  assert.equal(result.summary?.unavailableReads, 1);
+  assert.equal(result.summary?.requiresConfirmation, 1);
+  assert.equal(result.summary?.skipped, 1);
+});
+
+test("decisions reconcile: rejected request stays failed after later store publications", async (t) => {
+  const initial = operation(command(), "uncertain", 3);
+  const f = await decisionFixture(
+    {
+      control: async () => ({
+        outcome: "rejected",
+        operationId: id(1),
+        error: { code: "conflict", message: "Stale check", retryable: false },
+      }),
+    },
+    initial,
+  );
+  t.after(() => f.client.close());
+  const result = await f.decisions.run({ kind: "reconcile", scope, operation: f.captured() });
+  assert.deepEqual(result, { kind: "rejected", message: "Stale check" });
+  assert.deepEqual(f.decisions.getState().deliveryChecks[id(1)], {
+    ackRevision: 3,
+    outcome: "failed",
+  });
+  f.remote.set(id(1), operation(command(), "synced", 5));
+  await f.client.snapshot(scope);
+  assert.equal(f.decisions.getState().deliveryChecks[id(1)].outcome, "failed");
+  assert.equal(f.reads.length, 1, "only explicit later publication, no rejected-check polling");
+});
+
 test("approval cooldown survives client restart and requires an explicit retry of the same intent", async (t) => {
   let clock = Date.parse("2026-01-01T00:00:59Z"),
     calls = 0;

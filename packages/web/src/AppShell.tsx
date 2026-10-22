@@ -28,10 +28,16 @@ export const AppShell: ParentComponent = (props) => {
   const [states, setStates] = createSignal(githubWrites.getStates());
   const [error, setError] = createSignal<string>();
   const [recoveryError, setRecoveryError] = createSignal<string>();
-  const [batchBusy, setBatchBusy] = createSignal<"retry" | "clear">();
+  const decisions = githubWrites.createDecisions();
+  const [decisionState, setDecisionState] = createSignal(decisions.getState());
+  const batchBusy = () =>
+    decisionState().busyKind === "retry-all"
+      ? ("retry" as const)
+      : decisionState().busyKind === "clear-all"
+        ? ("clear" as const)
+        : undefined;
   const [batchFeedback, setBatchFeedback] = createSignal<string>();
   const [operationFeedback, setOperationFeedback] = createSignal<Record<string, string>>({});
-  const retries = new Map<string, number>();
   const selectedUrl = createMemo(() => {
     if (location.pathname !== "/review" || typeof params.prUrl !== "string") return;
     try {
@@ -62,41 +68,47 @@ export const AppShell: ParentComponent = (props) => {
     refreshDetail: (url) => read(() => refreshPrDetail(url, { afterWrite: true })),
     refreshList: () => read(refreshPrListAfterReview),
   });
-  const publish = () => {
-    const next = githubWrites.getStates();
+  const publishFeedback = () => {
     setOperationFeedback((previous) => {
       let result = previous;
-      for (const state of next)
-        for (const item of state.operations) {
-          const before = retries.get(item.command.operationId);
-          if (before === undefined) continue;
-          const message =
-            item.admissionTimedOut || item.operation?.timedOutAt
-              ? "Timed out"
-              : item.admissionError
-                ? "Admission needs attention"
-                : (item.operation?.attempts ?? 0) <= before
-                  ? "Retry requested"
-                  : item.status === "inflight" || item.status === "queued"
-                    ? "Retrying…"
-                    : item.status === "retry-failed"
-                      ? `Retry failed${item.operation?.error?.httpStatus ? ` · HTTP ${item.operation.error.httpStatus}` : ""}`
-                      : item.status === "uncertain"
-                        ? "Delivery unknown"
-                        : item.status === "synced"
-                          ? "Confirmed on GitHub"
-                          : "Retry state changed";
-          if (previous[item.command.operationId] !== message)
-            result = { ...result, [item.command.operationId]: message };
-        }
+      for (const [id, facts] of Object.entries(decisions.getState().retries)) {
+        const message = facts.acknowledgementFailed
+          ? "Retry not acknowledged"
+          : facts.timedOut
+            ? "Timed out"
+            : facts.admissionError
+              ? "Admission needs attention"
+              : !facts.advanced
+                ? "Retry requested"
+                : facts.status === "inflight" || facts.status === "queued"
+                  ? "Retrying…"
+                  : facts.status === "retry-failed"
+                    ? `Retry failed${facts.backendError?.httpStatus ? ` · HTTP ${facts.backendError.httpStatus}` : ""}`
+                    : facts.status === "uncertain"
+                      ? "Delivery unknown"
+                      : facts.status === "synced"
+                        ? "Confirmed on GitHub"
+                        : "Retry state changed";
+        if (previous[id] !== message) result = { ...result, [id]: message };
+      }
       return result;
     });
+  };
+  const publish = () => {
+    const next = githubWrites.getStates();
     setRecoveryError(githubWrites.getRecoveryError());
     // Observe synchronously: a pending journal load and its completion may share a UI batch.
     for (const state of next) coordinator.observe(state);
     setStates((previous) => replaceEqualDeep(previous, next));
   };
   publish();
+  onCleanup(
+    decisions.subscribe(() => {
+      setDecisionState(decisions.getState());
+      publishFeedback();
+    }),
+  );
+  onCleanup(() => decisions.dispose());
   onCleanup(githubWrites.subscribe(publish));
   onCleanup(() => coordinator.dispose());
   createEffect(() => githubWrites.activate(selectedScope()));
@@ -118,115 +130,38 @@ export const AppShell: ParentComponent = (props) => {
   };
   const batch = async (kind: "retry" | "clear") => {
     if (batchBusy()) return;
-    setBatchBusy(kind);
     setBatchFeedback(undefined);
-    const decisionIds = new Set<string>();
-    if (kind === "retry") {
-      githubWrites.setQueueTimeoutMs(getGithubSyncTimeoutMs());
-      for (const state of githubWrites.getStates()) {
-        const root = state.operations.find(
-          (item) =>
-            item.backendOwned &&
-            !item.operation?.archivedAt &&
-            !["synced", "cancelled"].includes(item.status),
-        );
-        if (root?.status === "retry-failed") {
-          retries.set(root.command.operationId, root.operation?.attempts ?? 0);
-          decisionIds.add(root.command.operationId);
-        }
-        for (const item of state.operations)
-          if (!item.backendOwned && !item.blockedByOperationId) {
-            retries.set(item.command.operationId, 0);
-            decisionIds.add(item.command.operationId);
-          }
-      }
-    }
-    try {
-      const receipt = await (kind === "retry" ? githubWrites.retryAll() : githubWrites.clearAll());
-      if (receipt.outcome === "rejected") throw new Error(receipt.error.message);
-      publish();
+    const result = await decisions.run(
+      kind === "retry"
+        ? { kind: "retry-all", timeoutMs: getGithubSyncTimeoutMs() }
+        : { kind: "clear-all" },
+    );
+    if (result.kind === "acknowledged" && result.summary) {
+      const summary = result.summary;
       if (kind === "clear") {
-        retries.clear();
-        const archived = receipt.operations.filter((item) => item.archivedAt).length;
-        const cancelled = receipt.operations.filter((item) => item.status === "cancelled").length;
         setBatchFeedback(
-          `Cleared ${cancelled}${archived ? ` · archived ${archived} with delivery unknown` : ""}. Content saved in Drafts & history.`,
+          `Cleared ${summary.cancelled}${summary.archived ? ` · archived ${summary.archived} with delivery unknown` : ""}. Content saved in Drafts & history.`,
         );
       } else {
-        const ids = new Set([
-          ...decisionIds,
-          ...receipt.operations.map((item) => item.command.operationId),
-        ]);
-        const scopes = [
-          ...new Map(
-            githubWrites
-              .getStates()
-              .flatMap((state) => state.operations)
-              .filter((item) => ids.has(item.command.operationId))
-              .map((item) => [item.command.scope.url, item.command.scope]),
-          ).values(),
-        ];
-        const unreadScopes = new Set<string>();
-        for (const delay of [0, 150, 300, 600, 1200, 2400]) {
-          if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-          const reads = await Promise.allSettled(
-            scopes.map((scope) => githubWrites.snapshot(scope)),
-          );
-          for (let index = 0; index < reads.length; index++) {
-            if (reads[index]?.status === "rejected") unreadScopes.add(scopes[index]!.url);
-            else unreadScopes.delete(scopes[index]!.url);
-          }
-          const pending = githubWrites
-            .getStates()
-            .flatMap((state) => state.operations)
-            .filter((item) => ids.has(item.command.operationId));
-          if (
-            pending.every(
-              (item) =>
-                (item.operation?.attempts ?? 0) > (retries.get(item.command.operationId) ?? -1) &&
-                !["queued", "inflight"].includes(item.status),
-            )
-          )
-            break;
-        }
-        publish();
-        const latest = githubWrites
-          .getStates()
-          .flatMap((state) => state.operations)
-          .filter((item) => ids.has(item.command.operationId));
-        const failed = latest.filter((item) => item.status === "retry-failed").length;
-        const confirmed = latest.filter((item) => item.status === "synced").length;
-        const waiting = latest.filter(
-          (item) =>
-            !item.admissionError && ["queued", "inflight", "local-pending"].includes(item.status),
-        ).length;
-        const admissions = latest.filter((item) => !!item.admissionError).length;
         const parts = [
-          confirmed ? `${confirmed} confirmed` : "",
-          failed ? `${failed} retry failed` : "",
-          waiting ? `${waiting} retry pending` : "",
-          admissions ? `${admissions} admission needs attention` : "",
-          unreadScopes.size ? `${unreadScopes.size} status reads unavailable` : "",
-          receipt.requiresConfirmation.length
-            ? `${receipt.requiresConfirmation.length} delivery unknown · confirmation required`
+          summary.confirmed ? `${summary.confirmed} confirmed` : "",
+          summary.retryFailed ? `${summary.retryFailed} retry failed` : "",
+          summary.pending ? `${summary.pending} retry pending` : "",
+          summary.admissionAttention
+            ? `${summary.admissionAttention} admission needs attention`
             : "",
-          receipt.skipped.length ? `${receipt.skipped.length} unchanged` : "",
+          summary.unavailableReads ? `${summary.unavailableReads} status reads unavailable` : "",
+          summary.requiresConfirmation
+            ? `${summary.requiresConfirmation} delivery unknown · confirmation required`
+            : "",
+          summary.skipped ? `${summary.skipped} unchanged` : "",
         ].filter(Boolean);
         setBatchFeedback(parts.join(" · ") || "No eligible failed actions to retry.");
       }
-    } catch (cause) {
-      if (kind === "retry") {
-        for (const id of decisionIds) retries.delete(id);
-        setOperationFeedback((previous) => ({
-          ...previous,
-          ...Object.fromEntries([...decisionIds].map((id) => [id, "Retry not acknowledged"])),
-        }));
-      }
+    } else if (result.kind === "rejected" || result.kind === "unavailable") {
       setBatchFeedback(
-        `${kind === "retry" ? "Retry" : "Clear"} not acknowledged: ${cause instanceof Error ? cause.message : "saved work retained"}`,
+        `${kind === "retry" ? "Retry" : "Clear"} not acknowledged: ${result.message ?? "saved work retained"}`,
       );
-    } finally {
-      setBatchBusy(undefined);
     }
   };
   return (

@@ -22,6 +22,7 @@ import {
   type GithubWriteAction,
 } from "@better-review/shared";
 
+import { createGithubDecisions, GithubDecisionRejected } from "./github-outbox-decisions";
 import { createGithubDependencyGraph } from "./github-outbox-dependencies";
 import {
   createIndexedDbGithubJournal,
@@ -132,6 +133,7 @@ export function createGithubOutbox(options: {
   const clientId = options.clientId ?? uuid();
   const states = new Map<string, ScopeState>();
   const listeners = new Set<() => void>();
+  const decisionOwners = new Set<{ dispose(): void }>();
   const flights = new Map<string, Promise<unknown>>();
   let closed = false;
   let active: GithubPrScope | undefined;
@@ -655,7 +657,7 @@ export function createGithubOutbox(options: {
         await journal.removeBatch?.(request.requestId);
         pendingBatchCache.delete(request.requestId);
         updateClearHolds();
-        throw new Error(receipt.error.message);
+        throw new GithubDecisionRejected(receipt.error.message);
       }
       for (const operation of receipt.operations) {
         const aliases = Object.entries(receipt.aliases)
@@ -948,6 +950,12 @@ export function createGithubOutbox(options: {
   }
 
   const api = {
+    createDecisions(): ReturnType<typeof createGithubDecisions> {
+      const owner = createGithubDecisions(api, uuid, () => decisionOwners.delete(owner));
+      decisionOwners.add(owner);
+      if (closed) owner.dispose();
+      return owner;
+    },
     journal,
     getState,
     getStates: () => [...states.values()].map((value) => getState(value.scope)),
@@ -1118,6 +1126,7 @@ export function createGithubOutbox(options: {
     async close() {
       if (closed) return;
       closed = true;
+      for (const owner of decisionOwners) owner.dispose();
       for (const cancel of cancelAdmissions) cancel();
       stopRecovery?.();
       clearInterval(heartbeatTimer);
