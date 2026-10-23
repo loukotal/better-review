@@ -1,6 +1,15 @@
 import { parsePatchFiles, SVGSpriteSheet, Virtualizer, type FileDiffMetadata } from "@pierre/diffs";
 import { WorkerPoolManager } from "@pierre/diffs/worker";
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+} from "solid-js";
 
 import { TextInput } from "./design-system";
 import { FileDiffView } from "./diff/FileDiffView";
@@ -87,6 +96,7 @@ export function DiffViewer(props: Props) {
   let viewerRef: HTMLDivElement | undefined;
   let searchInputRef: HTMLInputElement | undefined;
   let toolbarRef: HTMLDivElement | undefined;
+  let disposed = false;
   const virtualizer = new Virtualizer();
   // Share highlighting workers across files; render plain lines while they work.
   const workerPool = new WorkerPoolManager(
@@ -120,6 +130,7 @@ export function DiffViewer(props: Props) {
   });
 
   onCleanup(() => {
+    disposed = true;
     virtualizer.cleanUp();
     workerPool.terminate();
   });
@@ -148,6 +159,23 @@ export function DiffViewer(props: Props) {
       return aIdx - bIdx;
     });
   });
+
+  createEffect(
+    on(
+      files,
+      () => {
+        // Moving keyed files preserves editors but does not resize the viewer.
+        // Wait for DOM movement and the caller's scroll-anchor restoration, then
+        // refresh retained virtual offsets and the viewport before the next paint.
+        queueMicrotask(() =>
+          queueMicrotask(() => {
+            if (!disposed) virtualizer.refresh();
+          }),
+        );
+      },
+      { defer: true },
+    ),
+  );
 
   const commentsByFile = createMemo(() => {
     const map = new Map<string, PRComment[]>();

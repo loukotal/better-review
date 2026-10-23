@@ -170,7 +170,7 @@ export async function mountAppFixture(
   if (options.procedures?.["pr.core"])
     queryClient.removeQueries({ queryKey: queryKeys.pr.core(prUrl), exact: true });
   else queryClient.setQueryData(queryKeys.pr.core(prUrl), core);
-  if (options.searchParams?.mode === "commit")
+  if (options.searchParams?.mode === "commit" && !options.procedures?.["pr.commitDiff"])
     queryClient.setQueryData(queryKeys.pr.commitDiff(prUrl, base), options.diff ?? diff);
   queryClient.setQueryData(
     queryKeys.pr.extras(prUrl),

@@ -1,0 +1,48 @@
+diff --git a/dist/components/Virtualizer.d.ts b/dist/components/Virtualizer.d.ts
+index b40c9d622383b1d79bb1abf8472095b597d2afed..e939a2f2132d3e902b06cfad099ad34bead8f9ed 100644
+--- a/dist/components/Virtualizer.d.ts
++++ b/dist/components/Virtualizer.d.ts
+@@ -40,6 +40,8 @@ declare class Virtualizer {
+   constructor(config?: Partial<VirtualizerConfig>);
+   setup(root: HTMLElement | Document, contentContainer?: Element): void;
+   instanceChanged(instance: SubscribedInstance, domDirty: boolean): void;
++  /** Refresh positions and viewport after moving retained file containers. */
++  refresh(): void;
+   getWindowSpecs(): VirtualWindowSpecs;
+   isInstanceVisible(elementTop: number, elementHeight: number): boolean;
+   private handleContainerResize;
+diff --git a/dist/components/Virtualizer.js b/dist/components/Virtualizer.js
+index e6f786766fea2f16423d8a27e342ba17493a6187..b8869030f75c354bc44b820afcc721f8f52bda5a 100644
+--- a/dist/components/Virtualizer.js
++++ b/dist/components/Virtualizer.js
+@@ -82,6 +82,10 @@ var Virtualizer = class Virtualizer {
+ 		if (domDirty) this.markDOMDirty();
+ 		queueRender(this.computeRenderRangeAndEmit);
+ 	}
++	refresh() {
++		this.markDOMDirty();
++		this.computeRenderRangeAndEmit();
++	}
+ 	getWindowSpecs() {
+ 		if (this.windowSpecs.top === 0 && this.windowSpecs.bottom === 0) this.windowSpecs = createWindowFromScrollPosition({
+ 			scrollTop: this.getScrollTop(),
+@@ -218,7 +222,9 @@ var Virtualizer = class Virtualizer {
+ 		if (Virtualizer.__STOP) return;
+ 		const wrapperDirty = this.heightDirty || this.scrollHeightDirty;
+ 		if (!this.scrollDirty && !this.scrollHeightDirty && !this.heightDirty && this.renderedObservers === this.observers.size && !this.visibleInstancesDirty && this.instancesChanged.size === 0) return;
+-		if (this.instancesChanged.size === 0) {
++		// Reorders change both instance positions and the scroll anchor. Refresh
++		// the window before rendering changed instances, not on a later frame.
++		{
+ 			const windowSpecs = createWindowFromScrollPosition({
+ 				scrollTop: this.getScrollTop(),
+ 				height: this.getHeight(),
+@@ -225,7 +231,7 @@ var Virtualizer = class Virtualizer {
+ 				scrollHeight: this.getScrollHeight(),
+ 				overscrollSize: this.config.overscrollSize
+ 			});
+-			if (areVirtualWindowSpecsEqual(this.windowSpecs, windowSpecs) && this.renderedObservers === this.observers.size && !this.visibleInstancesDirty && this.instancesChanged.size === 0) return;
++			if (!wrapperDirty && areVirtualWindowSpecsEqual(this.windowSpecs, windowSpecs) && this.renderedObservers === this.observers.size && !this.visibleInstancesDirty && this.instancesChanged.size === 0) return;
+ 			this.windowSpecs = windowSpecs;
+ 		}
+ 		this.visibleInstancesDirty = false;

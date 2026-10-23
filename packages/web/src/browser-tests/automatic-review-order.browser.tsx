@@ -27,6 +27,145 @@ const rawDiff = paths
   )
   .join("");
 
+export async function testAutomaticOrderRetainedTabHydrationInBrowser() {
+  return heldAppOrderFixture("retained-hydration");
+}
+
+export async function testAutomaticOrderRetainedTabCompletionInBrowser() {
+  return heldAppOrderFixture("retained-completion");
+}
+
+export async function testAutomaticOrderDeferredCommitDiffInBrowser() {
+  return heldAppOrderFixture("commit");
+}
+
+async function heldAppOrderFixture(mode: "retained-hydration" | "retained-completion" | "commit") {
+  let passed = 0;
+  const check = (value: unknown, message: string) => {
+    if (!value) throw Error(message);
+    passed++;
+  };
+  const wait = async (predicate: () => boolean, message: string) => {
+    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
+    check(predicate(), message);
+  };
+  const tab = (name: string) => {
+    const button = [
+      ...document.querySelectorAll<HTMLButtonElement>('nav[aria-label="Pull request tabs"] button'),
+    ].find((element) => element.textContent?.trim() === name);
+    check(button, `Missing ${name} tab`);
+    button!.click();
+  };
+  const order = () =>
+    [...document.querySelectorAll<HTMLElement>('[id^="file-src"]')]
+      .map((element) => decodeURIComponent(element.id.slice(5)))
+      .join(",");
+  const ai = [...paths].reverse();
+  const revision = mode === "commit" ? "b".repeat(40) : head;
+  let running = mode === "retained-completion";
+  let requests = 0;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  localStorage.removeItem(AUTO_ORDER_PREFERENCE_KEY);
+  localStorage.removeItem("better-review:applied-review-orders");
+  const visible: string[] = [];
+  const observer = new MutationObserver(() => {
+    const value = order();
+    if (value) visible.push(value);
+  });
+  observer.observe(document.getElementById("root")!, { childList: true, subtree: true });
+  const dispose = await mountAppFixture({
+    diff: rawDiff,
+    defaultTab: mode === "commit" ? "changes" : "overview",
+    waitForFiles: false,
+    searchParams: mode === "commit" ? { mode: "commit", commit: revision.slice(0, 7) } : undefined,
+    procedures:
+      mode === "commit"
+        ? {
+            "pr.commitDiff": async () => {
+              requests++;
+              await held;
+              return { diff: rawDiff };
+            },
+            "prReview.getOrCreateSession": () => ({
+              session: { id: "bootstrap" },
+              sessions: [],
+              headSha: head,
+              sessionHeadSha: revision,
+              sessionScope: { mode: "commit", commitSha: revision },
+            }),
+          }
+        : undefined,
+    reviewSnapshot: async (sessionId) => {
+      if (mode !== "commit") requests++;
+      if (mode === "retained-hydration") await held;
+      return {
+        sessionId,
+        revision,
+        running,
+        compacting: false,
+        settlements: [],
+        messages: [
+          {
+            id: "held-order",
+            role: "assistant",
+            metadata: { timestamp: "2026-01-01", revision },
+            parts: [
+              { type: "text", text: `<<REVIEW_ORDER>>${JSON.stringify(ai)}<</REVIEW_ORDER>>` },
+            ],
+          },
+        ],
+      };
+    },
+  });
+  try {
+    if (mode !== "commit") {
+      await wait(() => !!document.querySelector("[data-pr-overview] h1"), "Overview did not mount");
+      check(requests === 0, "Overview eagerly hydrated Changes");
+      tab("Changes");
+    }
+    await wait(() => requests > 0, "Held request did not start");
+    if (mode === "retained-completion") {
+      await wait(() => order() === paths.join(","), "Running review did not release initial view");
+    } else {
+      for (let n = 0; n < 3; n++) await new Promise(requestAnimationFrame);
+      check(order() === "", "Files flashed before scoped data resolved");
+      check(document.body.textContent?.includes("Loading PR..."), "Loading state missing");
+    }
+    const nodes = [...document.querySelectorAll('[id^="file-src"]')];
+    if (mode !== "commit") {
+      tab("Overview");
+      await wait(
+        () => !!document.querySelector("[data-pr-overview] h1"),
+        "Overview lost while waiting",
+      );
+    }
+    running = false;
+    release();
+    await wait(() => order() === ai.join(","), "Completed scoped order never applied");
+    if (mode !== "commit") {
+      check(!!document.querySelector("[data-pr-overview] h1"), "Order disrupted visible Overview");
+      tab("Changes");
+    }
+    check(order() === ai.join(","), "Tab return lost automatic order");
+    check(
+      nodes.every((node) => node.isConnected),
+      "Completion remounted retained file nodes",
+    );
+    check(
+      visible[0] === (mode === "retained-completion" ? paths : ai).join(","),
+      `Wrong first rendered order: ${visible[0]}`,
+    );
+  } finally {
+    release();
+    observer.disconnect();
+    dispose();
+  }
+  return { passed };
+}
+
 export async function testInitialSavedOrderNoFlickerInBrowser() {
   return initialOrderFixture("completed");
 }
