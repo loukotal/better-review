@@ -24,6 +24,9 @@ function fixture() {
     queued: false,
     merged: false,
     permission: "WRITE",
+    viewerCanUpdate: true as boolean | undefined,
+    viewerDidAuthor: false as boolean | undefined,
+    databaseId: 42 as number | undefined,
     timeout: false,
     unknown: false,
     paginate: false,
@@ -56,7 +59,9 @@ function fixture() {
       );
     }
     if (query === "query{viewer{id login databaseId}}")
-      return Response.json({ data: { viewer: { id: state.actor, login: "me", databaseId: 42 } } });
+      return Response.json({
+        data: { viewer: { id: state.actor, login: "me", databaseId: state.databaseId } },
+      });
     if (query.includes("mergeCommitAllowed"))
       return Response.json(
         state.unknown
@@ -137,6 +142,8 @@ function fixture() {
         author: { login: "author" },
         state: state.merged ? "MERGED" : "OPEN",
         isDraft: false,
+        viewerCanUpdate: state.viewerCanUpdate,
+        viewerDidAuthor: state.viewerDidAuthor,
         headRefName: "feature",
         headRefOid: state.head,
         baseRefName: "main",
@@ -159,6 +166,54 @@ function fixture() {
   };
   return { state, fetcher };
 }
+test("stage capability is author OR repository write, numeric identity required, independent of merge policy", async () => {
+  for (const [permission, author, canUpdate, databaseId, merged, allowed] of [
+    ["READ", true, true, 42, false, true],
+    ["WRITE", false, true, 42, false, true],
+    ["MAINTAIN", false, true, 42, false, true],
+    ["ADMIN", false, true, 42, false, true],
+    ["READ", false, true, 42, false, false],
+    ["TRIAGE", false, true, 42, false, false],
+    ["UNKNOWN", false, true, 42, false, false],
+    ["WRITE", true, false, 42, false, false],
+    ["WRITE", true, undefined, 42, false, false],
+    ["WRITE", true, true, undefined, false, false],
+    ["WRITE", true, true, 42, true, false],
+  ] as const) {
+    const f = fixture();
+    Object.assign(f.state, {
+      permission,
+      viewerDidAuthor: author,
+      viewerCanUpdate: canUpdate,
+      databaseId,
+      merged,
+      rulesDenied: true,
+      checkConclusion: "FAILURE",
+      mergeState: "BLOCKED",
+    });
+    const detail = await createPrDetailClient({
+      fetch: f.fetcher,
+      token: async () => "fixture",
+    }).get(url);
+    assert.equal(
+      detail.stageCapabilities?.status === "available" && detail.stageCapabilities.data.canSetDraft,
+      allowed,
+      JSON.stringify({ permission, author, canUpdate, databaseId, merged }),
+    );
+  }
+  const f = fixture();
+  Object.assign(f.state, { permission: "READ", viewerDidAuthor: true, unknown: true });
+  const detail = await createPrDetailClient({ fetch: f.fetcher, token: async () => "fixture" }).get(
+    url,
+  );
+  assert.equal(detail.mergeCapabilities.status, "unavailable");
+  assert.equal(
+    detail.stageCapabilities?.status === "available" && detail.stageCapabilities.data.canSetDraft,
+    true,
+    "Author does not need repository write or merge evidence",
+  );
+});
+
 function intent(action: PrMergeAction = { kind: "merge", method: "squash" }): PrMergeInput {
   return {
     url,

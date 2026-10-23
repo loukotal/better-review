@@ -96,6 +96,7 @@ export interface PrDetail {
   reviews: PrDetailSection<PrDetailReview[]>;
   reviewRequests: PrDetailSection<PrDetailReviewRequest[]>;
   mergeCapabilities: PrDetailSection<PrMergeCapabilities>;
+  stageCapabilities?: PrDetailSection<{ canSetDraft: boolean; reason: string | null }>;
 }
 /** Uncertain attempts can only be reconciled, never dispatched again. Observation is not attribution. */
 export interface PrMergeAttempt {

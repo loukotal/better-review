@@ -48,6 +48,13 @@ export function matches(
     return false;
   const a = op.command.action;
   switch (a.kind) {
+    case "set-draft":
+      return (
+        result.kind === "pull-request-draft" &&
+        result.nodeId === a.pullRequestId &&
+        result.url === op.command.scope.url &&
+        result.draft === a.draft
+      );
     case "issue-comment":
       return result.kind === "issue-comment" && result.body === a.body;
     case "inline-comment":

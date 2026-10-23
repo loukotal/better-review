@@ -16,6 +16,8 @@ const scope = {
 function action(kind: GithubWriteAction["kind"]): GithubWriteAction {
   const target = { source: "remote", kind: "issue-comment", id: 1 } as const;
   switch (kind) {
+    case "set-draft":
+      return { kind, pullRequestId: "PR1", draft: true };
     case "approve":
       return { kind, expectedHeadSha: "a".repeat(40), body: "" };
     case "request-changes":
@@ -74,6 +76,42 @@ function clock() {
     hasWork: () => !!pending,
   };
 }
+
+test("stage completion refreshes detail/extras/list globally once, never from history or uncertain evidence", async () => {
+  const timer = clock();
+  let extras = 0,
+    details = 0,
+    lists = 0,
+    fences = 0;
+  const refresh = createGithubSyncRefreshCoordinator({
+    global: true,
+    schedule: timer.schedule,
+    refreshPr: async () => {
+      extras++;
+    },
+    refreshDetail: async () => {
+      details++;
+    },
+    refreshList: async () => {
+      lists++;
+    },
+    onReviewCompletion: () => {
+      fences++;
+    },
+  });
+  refresh.observe(state("synced", ["set-draft"]));
+  assert.equal(timer.hasWork(), false, "History cannot invalidate current metadata");
+  refresh.observe(state("queued", ["set-draft"]));
+  refresh.observe(state("uncertain", ["set-draft"]));
+  refresh.observe(undefined);
+  assert.equal(timer.hasWork(), false);
+  refresh.observe(state("synced", ["set-draft"]));
+  refresh.observe(state("synced", ["set-draft"]));
+  assert.equal(fences, 1);
+  await timer.flush();
+  assert.deepEqual([extras, details, lists], [1, 1, 1]);
+  refresh.dispose();
+});
 
 test("global observer retains pending evidence across navigation, fences review reads once and batches scopes", async () => {
   const timer = clock();

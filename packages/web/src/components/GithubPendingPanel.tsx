@@ -5,6 +5,7 @@ import { useGithubQueue } from "../context/GithubQueueContext";
 import { Popover, Button } from "../design-system";
 import { GitHubIcon } from "../icons/github-icon";
 import { WarningIcon } from "../icons/warning-icon";
+import { githubActionLabel } from "../lib/github-action-label";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
 import type { GithubDraft } from "../lib/github-outbox-journal";
 import { revealGithubQueueContent } from "../lib/github-queue-layout";
@@ -20,18 +21,6 @@ import { legacyGithubDraftRecovery } from "../lib/recoverable-drafts";
 import { GithubOperationDetails } from "./GithubOperationDetails";
 import { GithubSyncStatus, githubSyncState, githubOperationSyncState } from "./GithubSyncStatus";
 
-const actionLabels: Record<BrowserGithubOperation["command"]["action"]["kind"], string> = {
-  approve: "Approve",
-  "request-changes": "Request changes",
-  "review-comment": "Review comment",
-  "issue-comment": "Comment",
-  "inline-comment": "Inline comment",
-  reply: "Reply",
-  "edit-comment": "Edit comment",
-  "delete-comment": "Delete comment",
-  "resolve-thread": "Resolve thread",
-  "unresolve-thread": "Reopen thread",
-};
 function shortStatus(item: BrowserGithubOperation) {
   switch (githubOperationSyncState(item)) {
     case "timed-out":
@@ -334,7 +323,7 @@ export function GithubPendingPanel() {
                                     status={githubOperationSyncState(item())}
                                     iconOnly
                                   />
-                                  <span>{actionLabels[item().command.action.kind]}</span>
+                                  <span>{githubActionLabel(item().command.action)}</span>
                                   <span class="text-text-muted">
                                     {githubOperationSyncState(item()) === "timed-out"
                                       ? "Timed out"
@@ -417,7 +406,7 @@ export function GithubPendingPanel() {
                                     >
                                       Delivery unknown ·{" "}
                                     </Show>
-                                    {actionLabels[item().command.action.kind]} ·{" "}
+                                    {githubActionLabel(item().command.action)} ·{" "}
                                     <GithubSyncStatus
                                       status={githubOperationSyncState(item())}
                                       showSynced

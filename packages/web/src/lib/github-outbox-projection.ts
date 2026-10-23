@@ -242,6 +242,7 @@ export function createGithubOutboxProjection(
         return !remote.comments.some(
           (item) => item.ref.kind === result.target.kind && item.ref.id === result.target.id,
         );
+      if (result.kind === "pull-request-draft") return false;
       return remote.threads.some(
         (item) => item.ref.nodeId === result.nodeId && item.resolved === result.resolved,
       );

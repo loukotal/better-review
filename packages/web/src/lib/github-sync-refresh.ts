@@ -97,9 +97,10 @@ export function createGithubSyncRefreshCoordinator(options: {
           item.command.action.kind === "approve" ||
           item.command.action.kind === "request-changes" ||
           item.command.action.kind === "review-comment";
-        approval ||= review;
-        if (review) options.onReviewCompletion?.();
-        if (review) reviewDetails.add(state.scope.url);
+        const stage = item.command.action.kind === "set-draft";
+        approval ||= review || stage;
+        if (review || stage) options.onReviewCompletion?.();
+        if (review || stage) reviewDetails.add(state.scope.url);
         changed = true;
       }
       if (changed) arm();

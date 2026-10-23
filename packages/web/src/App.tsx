@@ -29,6 +29,7 @@ import { InlineFindingComment } from "./components/InlineFindingComment";
 import { InlineSourceView } from "./components/InlineSourceView";
 import { PrChecks } from "./components/PrChecks";
 import { PrCommentsPanel } from "./components/PrCommentsPanel";
+import { PrDraftControl } from "./components/PrDraftControl";
 import { PrMergePanel } from "./components/PrMergePanel";
 import { PrOverview, type PrDiscussionLocation } from "./components/PrOverview";
 import { PrReviewActions } from "./components/PrReviewActions";
@@ -47,6 +48,7 @@ import {
   type DiffSettings,
 } from "./DiffViewer";
 import { FileTreePanel } from "./FileTreePanel";
+import { ExternalLinkIcon } from "./icons/external-link-icon";
 import { SpinnerIcon } from "./icons/spinner-icon";
 import { type SelectedSource, type SelectionChatController } from "./lib/ask-ai-selection";
 import { createAutomaticReviewOrder } from "./lib/automatic-review-order";
@@ -1478,6 +1480,21 @@ const AppContent: Component = () => {
                 onDeleteComment={deleteIssueComment}
               />
               <div class="flex flex-wrap items-start gap-3">
+                <PrDraftControl
+                  url={loadedPrUrl()!}
+                  detail={detail()}
+                  canSubmit={!detailError() && loadedPrUrl() === prUrl()}
+                  operations={outboxOperations()}
+                />
+                <a
+                  href={loadedPrUrl()!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex items-center gap-1 text-xs text-text-muted hover:text-text"
+                  aria-label="Open on GitHub"
+                >
+                  Open on GitHub <ExternalLinkIcon size={12} />
+                </a>
                 <ApproveButton
                   expectedHeadSha={detailHead()}
                   canSubmit={!detailError() && detailMetadata()?.state === "OPEN"}

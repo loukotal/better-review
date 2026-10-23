@@ -34,6 +34,8 @@ const metadata = z.object({
   author: identity,
   state: z.enum(["OPEN", "CLOSED", "MERGED"]),
   isDraft: z.boolean(),
+  viewerCanUpdate: z.boolean().optional(),
+  viewerDidAuthor: z.boolean().optional(),
   headRefName: z.string(),
   headRefOid: z.string(),
   baseRefName: z.string(),
@@ -87,6 +89,7 @@ export function createPrDetailClient(options: PrDetailHttpOptions = {}) {
       reviews: unavailable(),
       reviewRequests: unavailable(),
       mergeCapabilities: unavailable(),
+      stageCapabilities: unavailable(),
     };
     let token: string;
     try {
@@ -149,6 +152,7 @@ export function createPrDetailClient(options: PrDetailHttpOptions = {}) {
         return unavailable();
       }
     }
+    let stagePermission: unknown;
     const [viewer, meta, labels, reviews, reviewRequests, caps] = await Promise.all([
       section(async () =>
         actor.parse((await graphql("query{viewer{id login databaseId}}")).viewer),
@@ -156,7 +160,7 @@ export function createPrDetailClient(options: PrDetailHttpOptions = {}) {
       section(async () => {
         const m = metadata.parse(
           await pr(
-            "id number url title body author{login} state isDraft headRefName headRefOid baseRefName baseRefOid mergedAt mergedBy{login} mergeCommit{oid}",
+            "id number url title body author{login} state isDraft viewerCanUpdate viewerDidAuthor headRefName headRefOid baseRefName baseRefOid mergedAt mergedBy{login} mergeCommit{oid}",
           ),
         );
         return {
@@ -168,6 +172,8 @@ export function createPrDetailClient(options: PrDetailHttpOptions = {}) {
           author: m.author?.login ?? null,
           state: m.state,
           draft: m.isDraft,
+          viewerCanUpdate: m.viewerCanUpdate,
+          viewerDidAuthor: m.viewerDidAuthor,
           head: { name: m.headRefName, sha: m.headRefOid },
           base: { name: m.baseRefName, sha: m.baseRefOid },
           mergedAt: m.mergedAt,
@@ -211,46 +217,62 @@ export function createPrDetailClient(options: PrDetailHttpOptions = {}) {
             : { kind: "team" as const, name: r.slug };
         },
       ),
-      section(async () =>
-        capability.parse(
-          (
-            await graphql(`
-              query ($owner: String!, $repo: String!, $number: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  mergeCommitAllowed
-                  squashMergeAllowed
-                  rebaseMergeAllowed
-                  viewerPermission
-                  pullRequest(number: $number) {
-                    headRefOid
-                    baseRefOid
-                    baseRefName
-                    state
-                    isDraft
-                    viewerCanMergeAsAdmin
-                    mergeable
-                    mergeStateStatus
-                    reviewDecision
-                    mergeQueueEntry {
-                      id
-                      position
-                    }
-                    autoMergeRequest {
-                      enabledAt
-                    }
-                  }
+      section(async () => {
+        const data = await graphql(`
+          query ($owner: String!, $repo: String!, $number: Int!) {
+            repository(owner: $owner, name: $repo) {
+              mergeCommitAllowed
+              squashMergeAllowed
+              rebaseMergeAllowed
+              viewerPermission
+              pullRequest(number: $number) {
+                headRefOid
+                baseRefOid
+                baseRefName
+                state
+                isDraft
+                viewerCanMergeAsAdmin
+                mergeable
+                mergeStateStatus
+                reviewDecision
+                mergeQueueEntry {
+                  id
+                  position
+                }
+                autoMergeRequest {
+                  enabledAt
                 }
               }
-            `)
-          ).repository,
-        ),
-      ),
+            }
+          }
+        `);
+        const repository = z
+          .object({ viewerPermission: z.unknown().optional() })
+          .parse(data.repository);
+        stagePermission = repository.viewerPermission;
+        return capability.parse(data.repository);
+      }),
     ]);
     empty.actor = viewer;
     empty.metadata = meta;
     empty.labels = labels;
     empty.reviews = reviews;
     empty.reviewRequests = reviewRequests;
+    if (meta.status === "available" && viewer.status === "available" && viewer.data.databaseId) {
+      const canSetDraft =
+        meta.data.url.toLowerCase() === scope.url.toLowerCase() &&
+        meta.data.state === "OPEN" &&
+        meta.data.viewerCanUpdate === true &&
+        (meta.data.viewerDidAuthor === true ||
+          (typeof stagePermission === "string" &&
+            ["WRITE", "MAINTAIN", "ADMIN"].includes(stagePermission)));
+      empty.stageCapabilities = available({
+        canSetDraft,
+        reason: canSetDraft
+          ? null
+          : "GitHub has not verified permission to change this pull request's draft status.",
+      });
+    }
     if (meta.status === "available") {
       empty.checks = await (async () => {
         try {
@@ -539,6 +561,7 @@ export function createPrDetailClient(options: PrDetailHttpOptions = {}) {
           "Pull request head or base changed during the read, or could not be rechecked. Refresh required.",
         );
         empty.metadata = stale;
+        empty.stageCapabilities = stale;
         empty.checks = stale;
         empty.mergeCapabilities = stale;
         empty.reviews = stale;

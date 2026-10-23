@@ -4,6 +4,7 @@ import type { GithubPrScope } from "@better-review/shared";
 
 import { useGithubQueue } from "../context/GithubQueueContext";
 import { Button } from "../design-system";
+import { githubActionLabel } from "../lib/github-action-label";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
 import { revealGithubQueueContent } from "../lib/github-queue-layout";
 import { getGithubSyncTimeoutMs } from "../lib/github-queue-settings";
@@ -123,7 +124,7 @@ export function GithubOperationDetails(props: {
             >
               <Show when={!props.compact}>
                 <p class="flex items-center gap-2">
-                  <span>{item.command.action.kind}</span>
+                  <span>{githubActionLabel(item.command.action)}</span>
                   <GithubSyncStatus status={githubOperationSyncState(item)} iconOnly />
                 </p>
               </Show>

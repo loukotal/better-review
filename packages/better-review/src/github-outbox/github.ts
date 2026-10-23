@@ -572,6 +572,72 @@ export function createGithubOutboxAdapter(
     return { kind: "thread" as const, nodeId, resolved: node.isResolved };
   }
 
+  function stageResult(ctx: Ctx, node: unknown) {
+    const action = ctx.command.action;
+    if (
+      action.kind !== "set-draft" ||
+      !object(node) ||
+      node.id !== action.pullRequestId ||
+      !text(node.url) ||
+      node.url.toLowerCase() !== ctx.command.scope.url
+    )
+      throw new Failure(error("target-changed", "The pull request identity does not match."));
+    if (node.state !== "OPEN")
+      throw new Failure(error("target-changed", "The pull request is no longer open."));
+    if (typeof node.isDraft !== "boolean") throw invalid();
+    return {
+      kind: "pull-request-draft" as const,
+      nodeId: action.pullRequestId,
+      url: ctx.command.scope.url,
+      draft: node.isDraft,
+    };
+  }
+
+  async function stage(ctx: Ctx) {
+    const data = await graphql(
+      `
+        query ($owner: String!, $repo: String!, $number: Int!) {
+          viewer {
+            databaseId
+          }
+          repository(owner: $owner, name: $repo) {
+            viewerPermission
+            pullRequest(number: $number) {
+              id
+              url
+              state
+              isDraft
+              viewerCanUpdate
+              viewerDidAuthor
+            }
+          }
+        }
+      `,
+      {
+        owner: ctx.command.scope.owner,
+        repo: ctx.command.scope.repo,
+        number: ctx.command.scope.number,
+      },
+    );
+    if (!object(data.viewer) || data.viewer.databaseId !== ctx.command.expectedActor.id)
+      throw new Failure(error("identity-mismatch", "The active GitHub account has changed."));
+    if (!object(data.repository)) throw invalid();
+    const node = data.repository.pullRequest;
+    const result = stageResult(ctx, node);
+    if (
+      !object(node) ||
+      node.viewerCanUpdate !== true ||
+      !(
+        node.viewerDidAuthor === true ||
+        ["WRITE", "MAINTAIN", "ADMIN"].includes(String(data.repository.viewerPermission))
+      )
+    )
+      throw new Failure(
+        error("permission", "GitHub has not verified permission to change draft status."),
+      );
+    return result;
+  }
+
   async function enrich(
     result: GithubRemoteResult,
     ctx: Ctx,
@@ -672,6 +738,21 @@ export function createGithubOutboxAdapter(
       const ctx = context(operation);
       await verify(ctx.command.expectedActor);
       const action = ctx.command.action;
+      if (action.kind === "set-draft") {
+        const before = await stage(ctx);
+        if (before.draft === action.draft) return { outcome: "accepted", result: before };
+        const field = action.draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview";
+        const data = await graphql(
+          `mutation($id:ID!){${field}(input:{pullRequestId:$id}){pullRequest{id url state isDraft}}}`,
+          { id: action.pullRequestId },
+          true,
+        );
+        mutated = true;
+        const payload = data[field];
+        const result = stageResult(ctx, object(payload) ? payload.pullRequest : undefined);
+        if (result.draft !== action.draft) throw invalid();
+        return { outcome: "accepted", result };
+      }
       if (action.kind === "resolve-thread" || action.kind === "unresolve-thread") {
         if (action.target.source !== "remote") throw invalid();
         const before = await thread(ctx, action.target.nodeId);
@@ -800,6 +881,19 @@ export function createGithubOutboxAdapter(
       const ctx = context(operation);
       if (!verified) await verify(ctx.command.expectedActor);
       const action = ctx.command.action;
+      if (action.kind === "set-draft") {
+        const result = await stage(ctx);
+        // Desired state is confirmed, not proof that this operation caused it.
+        return result.draft === action.draft
+          ? { outcome: "matched", result }
+          : {
+              outcome: "conflict",
+              error: error(
+                "target-changed",
+                "The pull request is not in the requested draft state.",
+              ),
+            };
+      }
       // Synced delivery is already durable. Enrich its immutable remote identity even
       // after a later edit changed its clean body; uncertain writes still use strict
       // marker + original-body reconciliation below.
@@ -922,6 +1016,16 @@ export function createGithubOutboxAdapter(
       if (!isGithubRemoteResult(candidate)) throw invalid();
       await verify(ctx.command.expectedActor);
       const action = ctx.command.action;
+      if (action.kind === "set-draft") {
+        if (
+          candidate.kind !== "pull-request-draft" ||
+          candidate.nodeId !== action.pullRequestId ||
+          candidate.url !== ctx.command.scope.url ||
+          candidate.draft !== action.draft
+        )
+          throw invalid();
+        return reconcile(operation, true);
+      }
       if (action.kind === "delete-comment") {
         if (
           candidate.kind !== "deleted" ||

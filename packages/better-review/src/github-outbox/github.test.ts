@@ -8,6 +8,7 @@ import type {
 } from "@better-review/shared";
 
 import { createGithubOutboxAdapter, type GithubOutboxAdapterOptions } from "./github";
+import { matches } from "./validation";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const sha = "a".repeat(40);
@@ -120,6 +121,275 @@ function fixture(steps: Step[], options: GithubOutboxAdapterOptions = {}) {
   };
 }
 const user = (): Step => ({ path: "/user", data: actor });
+
+function draftRead(
+  draft: boolean,
+  patch: Record<string, unknown> = {},
+  permission: unknown = "WRITE",
+  viewerId = actor.id,
+): Step {
+  return {
+    path: "/graphql",
+    method: "POST",
+    data: {
+      data: {
+        viewer: { databaseId: viewerId },
+        repository: {
+          viewerPermission: permission,
+          pullRequest: {
+            id: "PR1",
+            url: scope.url,
+            state: "OPEN",
+            isDraft: draft,
+            viewerCanUpdate: true,
+            viewerDidAuthor: false,
+            ...patch,
+          },
+        },
+      },
+    },
+  };
+}
+
+test("draft backend evidence matches exact node, PR URL and desired boolean", () => {
+  for (const draft of [true, false]) {
+    const op = operation({ kind: "set-draft", pullRequestId: "PR1", draft });
+    const result = { kind: "pull-request-draft" as const, nodeId: "PR1", url: scope.url, draft };
+    assert.equal(matches(op, result), true);
+    for (const patch of [{ nodeId: "OTHER" }, { url: `${scope.url}0` }, { draft: !draft }])
+      assert.equal(matches(op, { ...result, ...patch }), false);
+  }
+});
+
+test("draft dispatch pins desired direction and PR identity; already desired never mutates", async () => {
+  for (const draft of [true, false]) {
+    const op = operation({ kind: "set-draft", pullRequestId: "PR1", draft });
+    const field = draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview";
+    let fence = 0;
+    const f = fixture([
+      user(),
+      draftRead(!draft),
+      {
+        path: "/graphql",
+        method: "POST",
+        check: (init) => {
+          const payload = JSON.parse(String(init.body));
+          assert.ok(payload.query.includes(field));
+          assert.deepEqual(payload.variables, { id: "PR1" });
+          assert.ok(!payload.query.includes("head"));
+        },
+        data: {
+          data: {
+            [field]: { pullRequest: { id: "PR1", url: scope.url, state: "OPEN", isDraft: draft } },
+          },
+        },
+      },
+    ]);
+    const outcome = await f.adapter.dispatch(op, {
+      beforeMutation: () => {
+        fence++;
+      },
+    });
+    assert.deepEqual(outcome, {
+      outcome: "accepted",
+      result: { kind: "pull-request-draft", nodeId: "PR1", url: scope.url, draft },
+    });
+    assert.ok(fence > 0);
+    f.done();
+    const noWrite = fixture([user(), draftRead(draft)]);
+    assert.equal((await noWrite.adapter.dispatch(op)).outcome, "accepted");
+    assert.equal(
+      noWrite.calls.filter((call) => String(call.init.body).includes("mutation")).length,
+      0,
+    );
+    noWrite.done();
+  }
+});
+
+test("draft preflight author OR write permissions, verified numeric viewer, open canonical target", async () => {
+  const op = operation({ kind: "set-draft", pullRequestId: "PR1", draft: true });
+  for (const [patch, permission, viewerId, allowed] of [
+    [{ viewerDidAuthor: true }, "READ", 7, true],
+    [{}, "MAINTAIN", 7, true],
+    [{}, "ADMIN", 7, true],
+    [{}, "READ", 7, false],
+    [{}, "TRIAGE", 7, false],
+    [{}, null, 7, false],
+    [{}, "NEW_PERMISSION", 7, false],
+    [{ viewerCanUpdate: false, viewerDidAuthor: true }, "WRITE", 7, false],
+    [{ viewerCanUpdate: undefined }, "WRITE", 7, false],
+    [{ state: "CLOSED" }, "WRITE", 7, false],
+    [{ state: "MERGED" }, "WRITE", 7, false],
+    [{ id: "OTHER" }, "WRITE", 7, false],
+    [{ url: `${scope.url}0` }, "WRITE", 7, false],
+    [{}, "WRITE", 8, false],
+    [{}, "WRITE", undefined, false],
+  ] as const) {
+    const step = draftRead(true, patch, permission, viewerId as number);
+    if (viewerId === undefined) (step.data as { data: { viewer: object } }).data.viewer = {};
+    const f = fixture([user(), step]);
+    assert.equal(
+      (await f.adapter.dispatch(op)).outcome,
+      allowed ? "accepted" : "rejected",
+      JSON.stringify({ patch, permission, viewerId }),
+    );
+    f.done();
+  }
+});
+
+test("draft mutation errors, bad evidence and lost acknowledgements remain uncertain", async () => {
+  const op = operation({ kind: "set-draft", pullRequestId: "PR1", draft: true });
+  for (const mutation of [
+    { data: { errors: [{ message: "denied" }] } },
+    {
+      data: {
+        data: {
+          convertPullRequestToDraft: {
+            pullRequest: { id: "PR1", url: scope.url, state: "OPEN", isDraft: false },
+          },
+        },
+      },
+    },
+    {
+      data: {
+        data: {
+          convertPullRequestToDraft: {
+            pullRequest: { id: "OTHER", url: scope.url, state: "OPEN", isDraft: true },
+          },
+        },
+      },
+    },
+    {
+      data: {
+        data: {
+          convertPullRequestToDraft: {
+            pullRequest: { id: "PR1", url: scope.url, state: "CLOSED", isDraft: true },
+          },
+        },
+      },
+    },
+    { fail: true },
+    { hang: true },
+  ]) {
+    const f = fixture(
+      [user(), draftRead(false), { path: "/graphql", method: "POST", ...mutation }],
+      { timeoutMs: 30 },
+    );
+    assert.equal((await f.adapter.dispatch(op)).outcome, "uncertain");
+    f.done();
+  }
+});
+
+test("draft canonicalizes GitHub URL case, pins credentials and honors the pre-mutation fence", async () => {
+  const op = operation({ kind: "set-draft", pullRequestId: "PR1", draft: true });
+  let tokens = 0;
+  const f = fixture(
+    [
+      user(),
+      draftRead(false, { url: "https://github.com/Acme/Repo/pull/3" }),
+      {
+        path: "/graphql",
+        method: "POST",
+        data: {
+          data: {
+            convertPullRequestToDraft: {
+              pullRequest: {
+                id: "PR1",
+                url: "https://github.com/Acme/Repo/pull/3",
+                state: "OPEN",
+                isDraft: true,
+              },
+            },
+          },
+        },
+      },
+    ],
+    { token: async () => `pinned-${++tokens}` },
+  );
+  const result = await f.adapter.dispatch(op);
+  assert.equal(result.outcome, "accepted");
+  if (result.outcome === "accepted")
+    assert.equal("url" in result.result && result.result.url, scope.url);
+  assert.equal(tokens, 1);
+  for (const call of f.calls)
+    assert.equal(new Headers(call.init.headers).get("Authorization"), "Bearer pinned-1");
+  f.done();
+  const fenced = fixture([user(), draftRead(false)]);
+  assert.equal(
+    (
+      await fenced.adapter.dispatch(op, {
+        beforeMutation: () => {
+          if (fenced.calls.length >= 2) throw new Error("Owner lost");
+        },
+      })
+    ).outcome,
+    "rejected",
+  );
+  assert.equal(
+    fenced.calls.some((call) => String(call.init.body).includes("mutation")),
+    false,
+  );
+  fenced.done();
+});
+
+test("draft preflight GraphQL errors and auth failures cannot mutate; reconcile auth never proves absence", async () => {
+  const op = operation({ kind: "set-draft", pullRequestId: "PR1", draft: true });
+  const incomplete = fixture([
+    user(),
+    { path: "/graphql", method: "POST", data: { errors: [{ message: "permission" }] } },
+  ]);
+  assert.equal((await incomplete.adapter.dispatch(op)).outcome, "rejected");
+  incomplete.done();
+  const mismatch = fixture([{ path: "/user", data: { id: 99, login: "other" } }]);
+  assert.equal((await mismatch.adapter.dispatch(op)).outcome, "rejected");
+  mismatch.done();
+  for (const status of [401, 403]) {
+    const f = fixture([
+      user(),
+      draftRead(false),
+      { path: "/graphql", method: "POST", status, data: {} },
+    ]);
+    assert.equal((await f.adapter.dispatch(op)).outcome, "rejected");
+    f.done();
+    const read = fixture([user(), { path: "/graphql", method: "POST", status, data: {} }]);
+    assert.equal((await read.adapter.reconcile(op)).outcome, "auth");
+    read.done();
+  }
+  const denied = fixture([user(), draftRead(true, { viewerCanUpdate: false })]);
+  assert.equal((await denied.adapter.reconcile(op)).outcome, "auth");
+  denied.done();
+});
+
+test("draft reconciliation and candidate verification only read; opposite or closed never absent", async () => {
+  for (const draft of [true, false]) {
+    const op = operation({ kind: "set-draft", pullRequestId: "PR1", draft });
+    for (const mode of ["reconcile", "verifyApplied"] as const) {
+      for (const [remote, state, outcome] of [
+        [draft, "OPEN", "matched"],
+        [!draft, "OPEN", "conflict"],
+        [draft, "CLOSED", "conflict"],
+        [draft, "MERGED", "conflict"],
+      ] as const) {
+        const f = fixture([user(), draftRead(remote, { state })]);
+        const result =
+          mode === "reconcile"
+            ? await f.adapter.reconcile(op)
+            : await f.adapter.verifyApplied(op, {
+                kind: "pull-request-draft",
+                nodeId: "PR1",
+                url: scope.url,
+                draft,
+              });
+        assert.equal(result.outcome, outcome);
+        assert.equal(
+          f.calls.some((call) => String(call.init.body).includes("mutation")),
+          false,
+        );
+        f.done();
+      }
+    }
+  }
+});
 const head = (value = sha): Step => ({
   path: "/repos/acme/repo/pulls/3",
   data: { head: { sha: value } },

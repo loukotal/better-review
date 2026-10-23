@@ -424,6 +424,192 @@ async function operation(f: Awaited<ReturnType<typeof fixture>>, id: string, pr 
   return op;
 }
 
+test("stage dedup preserves UUID replay, pending aliases, alternating intents and cross-actor intervening writes", async (t) => {
+  const f = await fixture(t);
+  f.adapter.available = false;
+  const draft = (value: boolean, expectedActor = actor) =>
+    command({ action: { kind: "set-draft", pullRequestId: "PR1", draft: value }, expectedActor });
+  const first = draft(true);
+  assert.equal((await f.box.enqueue(first)).outcome, "accepted");
+  const alias = draft(true);
+  assert.equal((await f.box.enqueue(alias)).outcome, "duplicate");
+  assert.equal((await f.box.enqueue(draft(false))).outcome, "accepted");
+  assert.equal((await f.box.enqueue(draft(true))).outcome, "accepted");
+  assert.equal(
+    (await f.box.enqueue(alias)).outcome,
+    "duplicate",
+    "UUID alias remains replayable after intervening changes",
+  );
+  // Same PR target, another actor's desired state also breaks pending equivalence.
+  const dir = await mkdtemp(join(tmpdir(), "stage-semantic-"));
+  const store = await OutboxDatabase.open(join(dir, "outbox.sqlite"));
+  t.after(async () => {
+    await store.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const make = (cmd: GithubOutboxCommand, sequence: number): GithubOutboxOperation => ({
+    command: cmd,
+    revision: 1,
+    sequence,
+    status: "queued",
+    retryMode: "automatic",
+    attempts: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  store.transaction(() => {
+    store.db.prepare("INSERT INTO scopes(scope,revision,sequence) VALUES (?,1,2)").run(scope.url);
+    for (const op of [make(first, 1), make(draft(false, { id: 99, login: "other" }), 2)])
+      store.db
+        .prepare(
+          "INSERT INTO operations(id,scope,sequence,fingerprint,data,content_key) VALUES (?,?,?,?,?,?)",
+        )
+        .run(
+          op.command.operationId,
+          scope.url,
+          op.sequence,
+          "fixture",
+          JSON.stringify(op),
+          store.semantic(op.command).key,
+        );
+  });
+  assert.equal(store.contentDuplicate(draft(true), Date.now()), undefined);
+});
+
+test("uncertain stage blocks PR FIFO; Clear archives uncertainty and cancels the queued reverse intent", async (t) => {
+  const f = await fixture(t);
+  f.adapter.send = async () => ({
+    outcome: "uncertain",
+    error: { code: "network", message: "Lost response", retryable: true },
+  });
+  f.adapter.check = async () => ({
+    outcome: "conflict",
+    error: { code: "target-changed", message: "Opposite state", retryable: false },
+  });
+  const first = command({ action: { kind: "set-draft", pullRequestId: "PR1", draft: true } });
+  await f.box.enqueue(first);
+  await until(async () => (await operation(f, first.operationId)).status === "uncertain");
+  const reverse = command({ action: { kind: "set-draft", pullRequestId: "PR1", draft: false } });
+  await f.box.enqueue(reverse);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(f.adapter.posts.length, 1);
+  const items = (await f.box.snapshot(scope)).operations;
+  await f.box.batchControl({
+    kind: "clear",
+    requestId: randomUUID(),
+    operations: items.map((item) => ({
+      operationId: item.command.operationId,
+      expectedRevision: item.revision,
+    })),
+  });
+  assert.equal((await operation(f, reverse.operationId)).status, "cancelled");
+  assert.equal((await operation(f, first.operationId)).status, "uncertain");
+  assert.ok((await operation(f, first.operationId)).archivedAt);
+  assert.equal(f.adapter.posts.length, 1);
+});
+
+test("stage synced history never aliases a new command; restart reconciliation never resends uncertain state", async (t) => {
+  const f = await fixture(t);
+  const cmd = command({ action: { kind: "set-draft", pullRequestId: "PR1", draft: false } });
+  f.adapter.send = async () => ({
+    outcome: "accepted",
+    result: { kind: "pull-request-draft", nodeId: "PR1", url: scope.url, draft: false },
+  });
+  await f.box.enqueue(cmd);
+  await until(async () => (await operation(f, cmd.operationId)).status === "synced");
+  const next = { ...cmd, operationId: randomUUID() };
+  f.adapter.send = async () => ({
+    outcome: "uncertain",
+    error: { code: "network", message: "Lost acknowledgement", retryable: true },
+  });
+  f.adapter.check = async () => ({
+    outcome: "conflict",
+    error: { code: "target-changed", message: "Opposite state", retryable: false },
+  });
+  assert.equal((await f.box.enqueue(next)).outcome, "accepted");
+  await until(async () => (await operation(f, next.operationId)).status === "uncertain");
+  assert.equal(f.adapter.posts.length, 2);
+  await f.reopen();
+  await until(() => f.adapter.reads.length > 0);
+  assert.equal(f.adapter.posts.length, 2, "Reconcile must never resend an uncertain stage write");
+  f.adapter.check = async () => ({
+    outcome: "matched",
+    result: { kind: "pull-request-draft", nodeId: "PR1", url: scope.url, draft: false },
+  });
+  const uncertain = await operation(f, next.operationId);
+  await f.box.control({
+    kind: "reconcile",
+    requestId: randomUUID(),
+    operationId: next.operationId,
+    expectedRevision: uncertain.revision,
+  });
+  await until(async () => (await operation(f, next.operationId)).status === "synced");
+  assert.equal(f.adapter.posts.length, 2);
+});
+
+test("real stage adapter lost acknowledgement reconciles across restart in both directions without resend", async (t) => {
+  for (const draft of [true, false])
+    await t.test(String(draft), async (t) => {
+      let remoteDraft = !draft,
+        writes = 0,
+        allowReconcile = false;
+      const adapter = createGithubOutboxAdapter({
+        token: async () => "offline-fixture",
+        fetch: async (input, init) => {
+          const url = new URL(String(input));
+          assert.equal(url.origin, "https://api.github.com");
+          if (url.pathname === "/user") return Response.json(actor);
+          assert.equal(url.pathname, "/graphql");
+          const body = JSON.parse(String(init?.body));
+          if (body.query.startsWith("mutation")) {
+            assert.equal(body.variables.id, "PR1");
+            assert.ok(
+              body.query.includes(
+                draft ? "convertPullRequestToDraft" : "markPullRequestReadyForReview",
+              ),
+            );
+            writes++;
+            remoteDraft = draft;
+            throw new Error("Lost mutation acknowledgement");
+          }
+          if (writes && !allowReconcile) throw new Error("Offline read");
+          return Response.json({
+            data: {
+              viewer: { databaseId: actor.id },
+              repository: {
+                viewerPermission: "WRITE",
+                pullRequest: {
+                  id: "PR1",
+                  url: scope.url,
+                  state: "OPEN",
+                  isDraft: remoteDraft,
+                  viewerCanUpdate: true,
+                  viewerDidAuthor: false,
+                },
+              },
+            },
+          });
+        },
+      });
+      const f = await fixture(t, { adapter });
+      const cmd = command({ action: { kind: "set-draft", pullRequestId: "PR1", draft } });
+      await f.box.enqueue(cmd);
+      await until(async () => (await operation(f, cmd.operationId)).status === "uncertain");
+      assert.equal(writes, 1);
+      allowReconcile = true;
+      f.advance(60_000);
+      await f.reopen();
+      await until(async () => (await operation(f, cmd.operationId)).status === "synced");
+      assert.deepEqual((await operation(f, cmd.operationId)).result, {
+        kind: "pull-request-draft",
+        nodeId: "PR1",
+        url: scope.url,
+        draft,
+      });
+      assert.equal(writes, 1);
+    });
+});
+
 test("failed edits retain only safe HTTP status and guidance across restart; explicit retry keeps original intent", async (t) => {
   const f = await fixture(t);
   f.adapter.send = async () => ({

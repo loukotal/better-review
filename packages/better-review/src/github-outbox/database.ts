@@ -200,6 +200,9 @@ export class OutboxDatabase {
         : undefined;
     const semanticAction = {
       kind: action.kind,
+      ...(action.kind === "set-draft"
+        ? { pullRequestId: action.pullRequestId, draft: action.draft }
+        : {}),
       ...("body" in action ? { body: action.body } : {}),
       ...("expectedBody" in action ? { expectedBody: action.expectedBody } : {}),
       ...("expectedHeadSha" in action ? { expectedHeadSha: action.expectedHeadSha } : {}),
@@ -216,7 +219,12 @@ export class OutboxDatabase {
         : {}),
       ...(targetRef ? { target: targetRef } : {}),
     };
-    const target = targetRef ? canonical(targetRef) : undefined;
+    const target =
+      action.kind === "set-draft"
+        ? "pull-request-stage"
+        : targetRef
+          ? canonical(targetRef)
+          : undefined;
     const key = createHash("sha256")
       .update(
         canonical({
@@ -256,6 +264,8 @@ export class OutboxDatabase {
     for (const row of rows) {
       const op = this.decode(row.data as string);
       if (op.status === "cancelled") continue;
+      // Stage can change outside this app at any time. Only pending intents alias.
+      if (command.action.kind === "set-draft" && op.status === "synced") continue;
       // Old synced rows have no trustworthy first-synced timestamp. Do not infer
       // one from updatedAt, which may reflect much later metadata enrichment.
       if (

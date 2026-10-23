@@ -43,6 +43,7 @@ export interface GithubInlineAnchor {
 }
 
 export type GithubWriteAction =
+  | { kind: "set-draft"; pullRequestId: string; draft: boolean }
   | { kind: "approve"; expectedHeadSha: string; body: string }
   | { kind: "request-changes"; expectedHeadSha: string; body: string }
   | { kind: "review-comment"; expectedHeadSha: string; body: string }
@@ -116,6 +117,7 @@ interface GithubConfirmedComment {
 }
 
 export type GithubRemoteResult =
+  | { kind: "pull-request-draft"; nodeId: string; url: string; draft: boolean }
   | (GithubConfirmedComment & { kind: "issue-comment" })
   | (GithubConfirmedComment & {
       kind: "review-comment";
@@ -328,6 +330,8 @@ export function isGithubInlineAnchor(value: unknown): value is GithubInlineAncho
 export function isGithubWriteAction(value: unknown): value is GithubWriteAction {
   if (!record(value)) return false;
   switch (value.kind) {
+    case "set-draft":
+      return nonempty(value.pullRequestId) && typeof value.draft === "boolean";
     case "approve":
       return sha(value.expectedHeadSha) && text(value.body);
     case "request-changes":
@@ -400,6 +404,23 @@ export function isGithubOutboxAdmissionInput(value: unknown): value is GithubOut
 export function isGithubRemoteResult(value: unknown): value is GithubRemoteResult {
   if (!record(value)) return false;
   switch (value.kind) {
+    case "pull-request-draft": {
+      const parts = text(value.url)
+        ? /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/([1-9]\d*)$/.exec(value.url)
+        : null;
+      return (
+        nonempty(value.nodeId) &&
+        !!parts &&
+        isGithubPrScope({
+          host: "github.com",
+          owner: parts[1],
+          repo: parts[2],
+          number: Number(parts[3]),
+          url: value.url,
+        }) &&
+        typeof value.draft === "boolean"
+      );
+    }
     case "issue-comment":
     case "review-comment":
       return (
