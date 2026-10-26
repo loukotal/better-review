@@ -56,7 +56,7 @@ import { applyDiffAccent, loadDiffSettings, saveDiffSettings } from "./lib/diff-
 import { describePrLoadError, type PrLoadError } from "./lib/errors";
 import {
   projectGithubComments,
-  githubApprovalState,
+  githubConfirmationState,
   subscribeGithubComments,
   githubCommentLocation,
   githubLocationInPatch,
@@ -189,22 +189,28 @@ const AppContent: Component = () => {
     return section?.status === "available" ? section.data : undefined;
   };
   const detailHead = () => detailMetadata()?.head.sha;
-  const overviewApprovalOperations = () =>
-    outboxOperations().filter(
-      (item) =>
-        item.command.action.kind === "approve" &&
-        item.command.expectedActor.id === currentGithubActor()?.id &&
-        item.command.action.expectedHeadSha === detailHead() &&
-        item.status !== "cancelled",
-    );
-  const approvalState = (head: string | null | undefined) => {
+  const approval = (head: string | null | undefined) => {
     outboxVersion();
     const url = loadedPrUrl();
-    return url && url === prUrl() && (!detailHead() || detailHead() === head)
-      ? githubApprovalState(url, head, currentGithubActor(), prStatus())
-      : undefined;
+    const selected = url
+      ? githubConfirmationState.approval({
+          url,
+          head,
+          actor: currentGithubActor(),
+          status: prStatus(),
+          operations: outboxOperations(),
+        })
+      : { operations: [], state: undefined };
+    // Saved intents remain accessible for the displayed head even when fresh
+    // detail has moved ahead. Only the approval badge needs current-read authority.
+    return {
+      ...selected,
+      state:
+        url && url === prUrl() && (!detailHead() || detailHead() === head)
+          ? selected.state
+          : undefined,
+    };
   };
-  const overviewApprovalState = () => approvalState(detailHead());
   const selectTab = (tab: PrTab) => {
     updatePrParams({ tab });
   };
@@ -272,6 +278,7 @@ const AppContent: Component = () => {
     const url = loadedPrUrl();
     return url ? githubWrites.getState(githubPrScope(url)).operations : [];
   });
+  const overviewApproval = createMemo(() => approval(detailHead()));
   const issueComments = createMemo(() => prRead().issueComments);
   const githubView = createMemo(() => {
     outboxVersion();
@@ -312,15 +319,7 @@ const AppContent: Component = () => {
     headSha?: string | null;
     comparisonBaseSha?: string | null;
   }>({});
-  const ownApprovalOperations = createMemo(() =>
-    outboxOperations().filter(
-      (item) =>
-        item.command.action.kind === "approve" &&
-        item.command.expectedActor.id === currentGithubActor()?.id &&
-        item.command.action.expectedHeadSha === diffRevision().headSha &&
-        item.status !== "cancelled",
-    ),
-  );
+  const reviewApproval = createMemo(() => approval(diffRevision().headSha));
   let diffScrollRef: HTMLDivElement | undefined;
 
   // Panel visibility
@@ -1316,10 +1315,10 @@ const AppContent: Component = () => {
                   </Button>
                 </SettingsPanel>
                 <ApproveButton
-                  approvalOperations={ownApprovalOperations()}
+                  approvalOperations={reviewApproval().operations}
                   expectedHeadSha={diffRevision().headSha}
                   canSubmit={loadedPrUrl() === prUrl()}
-                  approvalState={approvalState(diffRevision().headSha)}
+                  approvalState={reviewApproval().state}
                 />
               </div>
             </div>
@@ -1498,8 +1497,8 @@ const AppContent: Component = () => {
                 <ApproveButton
                   expectedHeadSha={detailHead()}
                   canSubmit={!detailError() && detailMetadata()?.state === "OPEN"}
-                  approvalOperations={overviewApprovalOperations()}
-                  approvalState={overviewApprovalState()}
+                  approvalOperations={overviewApproval().operations}
+                  approvalState={overviewApproval().state}
                 />
                 <PrReviewActions
                   url={loadedPrUrl()!}

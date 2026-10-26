@@ -5,6 +5,7 @@ import { ChatPanel } from "../ChatPanel";
 import { ModelSelector } from "../components/ModelSelector";
 import type { SelectionChatController } from "../lib/ask-ai-selection";
 import "../index.css";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 const key = "better-review:selected-model";
@@ -29,14 +30,6 @@ const snapshot = {
   compacting: false,
 };
 
-function check(value: unknown, message: string): asserts value {
-  if (!value) throw new Error(message);
-}
-async function wait(predicate: () => boolean, message: string) {
-  const until = performance.now() + 5000;
-  while (!predicate() && performance.now() < until) await new Promise(requestAnimationFrame);
-  check(predicate(), message);
-}
 function held() {
   let release!: () => void;
   const promise = new Promise<void>((resolve) => {
@@ -139,7 +132,8 @@ function mount(
   };
 }
 
-async function restoreFailurePreservesIntent() {
+export async function testModelRestoreFailurePreservesIntentInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let currentCalls = 0,
     restoreCalls = 0,
     reject = true;
@@ -179,9 +173,11 @@ async function restoreFailurePreservesIntent() {
   } finally {
     fixture.close();
   }
+  return result();
 }
 
-async function backendWinsOverStaleBrowser() {
+export async function testModelBackendWinsOverStaleBrowserInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let writes = 0;
   const query = held();
   const fixture = mount(async (name) => {
@@ -206,9 +202,11 @@ async function backendWinsOverStaleBrowser() {
     query.release();
     fixture.close();
   }
+  return result();
 }
 
-async function queryFailurePreservesIntent() {
+export async function testModelQueryFailurePreservesIntentInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let requests = 0;
   const fixture = mount(async (name) => {
     requests++;
@@ -222,9 +220,11 @@ async function queryFailurePreservesIntent() {
   } finally {
     fixture.close();
   }
+  return result();
 }
 
-async function rapidReviewWaitsForHydration() {
+export async function testModelRapidReviewWaitsForHydrationInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const query = held(),
     restore = held();
   let queried = false,
@@ -328,9 +328,11 @@ async function rapidReviewWaitsForHydration() {
     restore.release();
     fixture.close();
   }
+  return result();
 }
 
-async function questionKeepsModelThroughSessionCreation() {
+export async function testModelQuestionKeepsModelThroughSessionCreationInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const originalSet = Storage.prototype.setItem;
   const creation = held();
   let creating = false;
@@ -393,9 +395,11 @@ async function questionKeepsModelThroughSessionCreation() {
     Storage.prototype.setItem = originalSet;
     fixture.close();
   }
+  return result();
 }
 
-async function browserCacheFailureDoesNotBlockBackendSelection() {
+export async function testModelBrowserCacheFailureDoesNotBlockBackendSelectionInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let failQuery = true;
   const originalSet = Storage.prototype.setItem;
   const fixture = mount(async (name) => {
@@ -445,9 +449,21 @@ async function browserCacheFailureDoesNotBlockBackendSelection() {
     Storage.prototype.setItem = originalSet;
     fixture.close();
   }
+  return result();
 }
 
-async function listReviewWaitsForLegacyMigration() {
+export async function testModelListReviewWaitsForLegacyMigrationInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
+  const originalFetch = window.fetch;
+  window.fetch = async (input, init) => {
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+      location.href,
+    );
+    if (url.pathname.startsWith("/api/"))
+      throw new Error(`Unexpected offline request: ${init?.method ?? "GET"} ${url.pathname}`);
+    return originalFetch(input, init);
+  };
   localStorage.setItem(key, saved);
   const query = held(),
     migration = held();
@@ -528,27 +544,7 @@ async function listReviewWaitsForLegacyMigration() {
     query.release();
     migration.release();
     dispose();
+    window.fetch = originalFetch;
   }
+  return result();
 }
-
-declare global {
-  interface Window {
-    runModelSelectionTests: () => Promise<string[]>;
-  }
-}
-window.runModelSelectionTests = async () => {
-  const passed: string[] = [];
-  for (const test of [
-    restoreFailurePreservesIntent,
-    backendWinsOverStaleBrowser,
-    queryFailurePreservesIntent,
-    rapidReviewWaitsForHydration,
-    questionKeepsModelThroughSessionCreation,
-    browserCacheFailureDoesNotBlockBackendSelection,
-    listReviewWaitsForLegacyMigration,
-  ]) {
-    await test();
-    passed.push(test.name);
-  }
-  return passed;
-};

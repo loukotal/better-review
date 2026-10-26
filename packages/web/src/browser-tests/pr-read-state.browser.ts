@@ -2,20 +2,14 @@ import type { PrDetail } from "@better-review/shared";
 
 import { createPrReadState } from "../lib/pr-read-state";
 import { prReadQueryAdapter, queryClient, queryKeys, refreshPrDetail } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
 const url = "https://github.com/browser-fixture/isolated/pull/1";
-function check(value: unknown, message: string) {
-  if (!value) throw new Error(message);
-}
-async function wait(predicate: () => boolean, message: string) {
-  const until = performance.now() + 5000;
-  while (!predicate() && performance.now() < until) await new Promise(requestAnimationFrame);
-  check(predicate(), message);
-}
 
 export async function testPrReadOwnerConcreteCacheAdapterFiltersEventsWithoutRefetchInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let reads = 0,
     extras = 0,
     requested = url;
@@ -81,7 +75,7 @@ export async function testPrReadOwnerConcreteCacheAdapterFiltersEventsWithoutRef
       reads === 1 && extras === 0,
       `Cache observation or cached owner initialization added HTTP requests: detail=${reads}, extras=${extras}`,
     );
-    return { passed: 4 };
+    return result();
   } finally {
     owner.dispose();
     dispose();
@@ -89,6 +83,7 @@ export async function testPrReadOwnerConcreteCacheAdapterFiltersEventsWithoutRef
 }
 
 export async function testPrReadOwnersShareExactlyOneAfterWriteSuccessorAndDisposeWithoutCancellingInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let reads = 0;
   let release!: (detail: PrDetail) => void;
   const held = new Promise<PrDetail>((resolve) => {
@@ -129,7 +124,7 @@ export async function testPrReadOwnersShareExactlyOneAfterWriteSuccessorAndDispo
     );
     const cached = queryClient.getQueryData<PrDetail>(queryKeys.pr.detail(url));
     check(cached === detail, "Disposal cancelled or prevented shared cache publication");
-    return { passed: 4 };
+    return result();
   } finally {
     first.dispose();
     second.dispose();

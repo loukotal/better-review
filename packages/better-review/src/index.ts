@@ -20,6 +20,7 @@ import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff"
 import { GhService, type PrStatus } from "./gh/gh";
 import { createGithubOutboxAdapter } from "./github-outbox/github";
 import { startGithubOutboxRuntime, stopGithubOutboxRuntime } from "./github-outbox/runtime";
+import { manualSourceResponse } from "./manual-source-route";
 import { PrCheckoutService } from "./pr-checkout";
 import { getErrorMessage } from "./response";
 import { createReviewApp, startReviewRuntime, stopReviewRuntime } from "./review/runtime";
@@ -439,66 +440,6 @@ function parseOptionalPositiveInt(value: string | null): number | undefined {
   return n;
 }
 
-async function gitShowFile(
-  repoRoot: string,
-  ref: string,
-  filePath: string,
-): Promise<string | null> {
-  if (!isSafeRepoRelativePath(filePath)) return null;
-  const { stdout, exitCode } = await runCommand("git", [
-    "-C",
-    repoRoot,
-    "show",
-    `${ref}:${filePath}`,
-  ]);
-  return exitCode === 0 ? stdout : null;
-}
-
-async function gitShowIndexFile(repoRoot: string, filePath: string): Promise<string | null> {
-  if (!isSafeRepoRelativePath(filePath)) return null;
-  const { stdout, exitCode } = await runCommand("git", ["-C", repoRoot, "show", `:${filePath}`]);
-  return exitCode === 0 ? stdout : null;
-}
-
-function parseCommitRangeVariantId(
-  variantId: string | undefined,
-): { baseSha: string; headSha: string } | null {
-  if (!variantId?.startsWith("commit-range:")) return null;
-  const [, baseSha, headSha] = variantId.split(":");
-  if (!baseSha || !headSha) return null;
-  if (!/^[0-9a-fA-F]{7,40}$/.test(baseSha) || !/^[0-9a-fA-F]{7,40}$/.test(headSha)) return null;
-  return { baseSha, headSha };
-}
-
-async function readWorkingTreeFile(repoRoot: string, filePath: string): Promise<string | null> {
-  const resolved = resolveRepoFilePath(repoRoot, filePath);
-  if (!resolved) return null;
-  try {
-    return await readFile(resolved, "utf8");
-  } catch (error) {
-    if (error && typeof error === "object" && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-
-function isSafeRepoRelativePath(filePath: string): boolean {
-  if (!filePath || filePath.includes("\0") || path.isAbsolute(filePath)) return false;
-  const normalized = path.posix.normalize(filePath.replaceAll("\\", "/"));
-  if (normalized === "." || normalized.startsWith("../") || normalized === "..") return false;
-  return true;
-}
-
-function resolveRepoFilePath(repoRoot: string, filePath: string): string | null {
-  if (!isSafeRepoRelativePath(filePath)) return null;
-  const root = path.resolve(repoRoot);
-  const resolved = path.resolve(root, filePath);
-  const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
-  if (resolved !== root && !resolved.startsWith(rootWithSep)) return null;
-  return resolved;
-}
-
 type RouteServices = {
   gh: GhService;
   diffCache: DiffCacheService;
@@ -901,130 +842,19 @@ ${fileStats.join("\n")}`;
         }
 
         if (resource === "file-content") {
-          const filePath = url.searchParams.get("path");
-          const prevPath = url.searchParams.get("prevPath") ?? undefined;
-          const variantId = url.searchParams.get("variantId") ?? undefined;
-
-          if (!filePath) {
-            return Response.json({ error: "Missing path" }, { status: 400 });
-          }
-
-          const session = await runtime.runPromise(reviewSessions.getSession(sessionId));
-          if (!session) {
-            return Response.json({ error: "Session not found" }, { status: 404 });
-          }
-
-          const prUrl = await runtime.runPromise(prContext.getPrUrlBySessionId(sessionId));
-          const repoRoot = session.repoRoot ?? session.cwd;
-          const sessionScope = await runtime.runPromise(prContext.getSessionScope(sessionId));
-
-          const selectedVariant =
-            session.payload.kind === "diff"
-              ? (session.payload.variants ?? []).find((variant) => variant.id === variantId)
-              : undefined;
-          const rangeVariant = parseCommitRangeVariantId(variantId);
-          const contentSource =
-            selectedVariant?.contentSource ??
-            (rangeVariant ? { kind: "git-refs" as const, ...rangeVariant } : undefined);
-
-          if (repoRoot && contentSource) {
-            if (contentSource.kind === "working-tree") {
-              const [oldContent, newContent] = await Promise.all([
-                gitShowFile(repoRoot, contentSource.baseSha, prevPath ?? filePath),
-                readWorkingTreeFile(repoRoot, filePath),
-              ]);
-              if (oldContent !== null || newContent !== null) {
-                return Response.json({ oldContent, newContent, source: "local-working-tree" });
-              }
-            }
-            if (contentSource.kind === "unstaged") {
-              const [oldContent, newContent] = await Promise.all([
-                gitShowIndexFile(repoRoot, prevPath ?? filePath),
-                readWorkingTreeFile(repoRoot, filePath),
-              ]);
-              if (oldContent !== null || newContent !== null) {
-                return Response.json({ oldContent, newContent, source: "local-unstaged" });
-              }
-            }
-
-            if (contentSource.kind === "staged") {
-              const headSha = contentSource.headSha;
-              const [oldContent, newContent] = await Promise.all([
-                headSha
-                  ? gitShowFile(repoRoot, headSha, prevPath ?? filePath)
-                  : Promise.resolve(null),
-                gitShowIndexFile(repoRoot, filePath),
-              ]);
-              if (oldContent !== null || newContent !== null) {
-                return Response.json({ oldContent, newContent, source: "local-staged" });
-              }
-            }
-
-            if (contentSource.kind === "commit" || contentSource.kind === "git-refs") {
-              const [oldContent, newContent] = await Promise.all([
-                gitShowFile(repoRoot, contentSource.baseSha, prevPath ?? filePath),
-                gitShowFile(repoRoot, contentSource.headSha, filePath),
-              ]);
-              if (oldContent !== null || newContent !== null) {
-                return Response.json({ oldContent, newContent, source: "local-git" });
-              }
-            }
-          }
-
-          let oldRef: string | null = null;
-          let newRef: string | null = null;
-
-          if (
-            contentSource &&
-            (contentSource.kind === "commit" || contentSource.kind === "git-refs")
-          ) {
-            oldRef = contentSource.baseSha;
-            newRef = contentSource.headSha;
-          } else if (sessionScope.mode === "commit" && sessionScope.commitSha) {
-            oldRef = `${sessionScope.commitSha}^`;
-            newRef = sessionScope.commitSha;
-          } else if (prUrl) {
-            [oldRef, newRef] = await runtime.runPromise(
-              Effect.all([gh.getBaseSha(prUrl), gh.getHeadSha(prUrl)], { concurrency: 2 }),
-            );
-          }
-
-          if (repoRoot && oldRef && newRef) {
-            const [oldContent, newContent] = await Promise.all([
-              gitShowFile(repoRoot, oldRef, prevPath ?? filePath),
-              gitShowFile(repoRoot, newRef, filePath),
-            ]);
-
-            if (oldContent !== null || newContent !== null) {
-              return Response.json({ oldContent, newContent, source: "local" });
-            }
-          }
-
-          if (prUrl && oldRef && newRef) {
-            const { owner, repo } = await runtime.runPromise(gh.getPrInfo(prUrl));
-            const oldPath = prevPath ?? filePath;
-
-            const [oldContent, newContent] = await runtime.runPromise(
-              Effect.all(
-                [
-                  gh
-                    .getFileContent({ owner, repo, path: oldPath, ref: oldRef })
-                    .pipe(Effect.catch(() => Effect.succeed(null))),
-                  gh
-                    .getFileContent({ owner, repo, path: filePath, ref: newRef })
-                    .pipe(Effect.catch(() => Effect.succeed(null))),
-                ],
-                { concurrency: 2 },
+          return manualSourceResponse(url.searchParams, sessionId, {
+            session: (id) => runtime.runPromise(reviewSessions.getSession(id)),
+            prUrl: (id) => runtime.runPromise(prContext.getPrUrlBySessionId(id)),
+            sessionScope: (id) => runtime.runPromise(prContext.getSessionScope(id)),
+            git: (args) => runCommand("git", args),
+            readFile: (absolutePath) => readFile(absolutePath, "utf8"),
+            prRefs: (prUrl) =>
+              runtime.runPromise(
+                Effect.all([gh.getBaseSha(prUrl), gh.getHeadSha(prUrl)], { concurrency: 2 }),
               ),
-            );
-
-            return Response.json({ oldContent, newContent, source: "github" });
-          }
-
-          return Response.json(
-            { error: "Unable to resolve file contents for this session" },
-            { status: 404 },
-          );
+            prInfo: (prUrl) => runtime.runPromise(gh.getPrInfo(prUrl)),
+            remoteContent: (input) => runtime.runPromise(gh.getFileContent(input)),
+          });
         }
 
         if (resource) {

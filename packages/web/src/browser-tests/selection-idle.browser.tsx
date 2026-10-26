@@ -1,14 +1,11 @@
 import { githubPrScope, githubWrites } from "../lib/github-writes";
 import { api, type PrExtrasData } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 /** Real App, outbox polling, Pierre source DOM and anchored editor; all HTTP is fixtured. */
 export async function testAppDelayedSelectionInBrowser(activate?: () => Promise<void>) {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, wait, result } = createAssertions(6000);
   const settle = async () => {
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
@@ -32,7 +29,7 @@ export async function testAppDelayedSelectionInBrowser(activate?: () => Promise<
     document
       .querySelector("diffs-container")
       ?.shadowRoot?.querySelector('[data-additions] [data-line="9"]');
-  for (let frame = 0; frame < 180 && !findRow(); frame++) await settle();
+  await wait(() => !!findRow(), "Actual diff selection row did not render");
   const row = findRow()!;
   const range = document.createRange();
   const text = document.createTreeWalker(row, NodeFilter.SHOW_TEXT).nextNode()!;
@@ -97,15 +94,11 @@ export async function testAppDelayedSelectionInBrowser(activate?: () => Promise<
     editor!.querySelector(`p[title="${"a".repeat(40)}"]`),
     "Delayed editor must retain original revision",
   );
-  return { passed };
+  return result();
 }
 
 export async function testSourceDelayedSelectionInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, wait, result } = createAssertions(6000);
   const settle = async () => {
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
@@ -133,7 +126,7 @@ export async function testSourceDelayedSelectionInBrowser() {
   );
   try {
     const row = () => document.querySelector('dialog code[data-source-line="1"]');
-    for (let frame = 0; frame < 180 && !row(); frame++) await settle();
+    await wait(() => !!row(), "Historical source selection row did not render");
     await settle();
     const select = (end = 8) => {
       const range = document.createRange();
@@ -182,7 +175,7 @@ export async function testSourceDelayedSelectionInBrowser() {
     row()!.replaceChildren(document.createTextNode("different source text"));
     await settle();
     check(!bubble(), "Changed source text must invalidate the captured anchor");
-    return { passed };
+    return result();
   } finally {
     dispose();
     host.remove();

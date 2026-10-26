@@ -8,6 +8,7 @@ import {
 import { beginGithubCommentRead, acceptGithubDetailRead } from "../lib/github-comment-views";
 import { githubPrScope, githubWrites, refreshGithubActor } from "../lib/github-writes";
 import { queryClient, queryKeys } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
@@ -28,16 +29,8 @@ function button(name: string) {
     (value) => value.textContent?.trim() === name,
   );
 }
-function check(value: unknown, message: string) {
-  if (!value) throw new Error(message);
-}
-async function wait(predicate: () => boolean, message: string) {
-  const deadline = performance.now() + 5000;
-  while (!predicate() && performance.now() < deadline) await new Promise(requestAnimationFrame);
-  check(predicate(), message);
-}
-
 export async function testOverviewDraftDesiredStateAndGithubLinkInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const scope = githubPrScope(url);
   const operations: GithubOutboxOperation[] = [];
   const refreshes: Array<(value: PrDetail) => void> = [];
@@ -184,10 +177,11 @@ export async function testOverviewDraftDesiredStateAndGithubLinkInBrowser() {
   );
   check(operations.length === 2, "Reads/navigation must never enqueue another write");
   dispose();
-  return { passed: 23 };
+  return result();
 }
 
 export async function testOverviewDraftRequiresFreshActorCapabilityInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const initial = detail(false);
   const dispose = await mountAppFixture({
     defaultTab: "overview",
@@ -231,10 +225,11 @@ export async function testOverviewDraftRequiresFreshActorCapabilityInBrowser() {
   await new Promise(requestAnimationFrame);
   check(button("Convert to draft")?.disabled, "Retained display metadata must not authorize stage");
   dispose();
-  return { passed: 6 };
+  return result();
 }
 
 export async function testOverviewDraftHydratesPendingAndIgnoresSyncedHistoryInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const scope = githubPrScope(url);
   const operation: GithubOutboxOperation = {
     command: {
@@ -300,10 +295,11 @@ export async function testOverviewDraftHydratesPendingAndIgnoresSyncedHistoryInB
   );
   check(enqueues === 0, "Hydration must never recreate a write");
   dispose();
-  return { passed: 5 };
+  return result();
 }
 
 export async function testOverviewDraftClearArchivesUnknownAndAllowsFreshReverseInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const scope = githubPrScope(url);
   const operations: GithubOutboxOperation[] = [];
   const submittedIds: string[] = [];
@@ -431,5 +427,5 @@ export async function testOverviewDraftClearArchivesUnknownAndAllowsFreshReverse
     "Refresh and reverse must never blindly resend or clear the original uncertain operation",
   );
   dispose();
-  return { passed: 14 };
+  return result();
 }

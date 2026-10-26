@@ -2,11 +2,13 @@
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { formatSelectionQuestion } from "../lib/ask-ai-selection";
 import type { SelectionSourceContext } from "../lib/selection-question-message";
 import { SelectionQuestionMessage } from "./SelectionQuestionMessage";
 
 export async function testSelectionQuestionMessageInBrowser() {
+  const { check, result } = createAssertions(3000);
   const source = {
     file: "packages/very/long/path/with/components/SelectedCode.tsx",
     side: "LEFT" as const,
@@ -33,11 +35,6 @@ export async function testSelectionQuestionMessageInBrowser() {
     ),
     host,
   );
-  let passed = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
   try {
     await new Promise(requestAnimationFrame);
     check(!host.querySelector("img,script"), "source and question must remain inert text");
@@ -95,7 +92,7 @@ export async function testSelectionQuestionMessageInBrowser() {
       host.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded") === "false",
       "new message resets expansion",
     );
-    return { passed, navigation: calls };
+    return { ...result(), navigation: calls };
   } finally {
     dispose();
     host.remove();

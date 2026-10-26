@@ -12,18 +12,11 @@ import {
   queueGithubWrite,
   refreshGithubActor,
 } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 export async function testGithubSyncTimeoutSettingsAvailableAcrossListAndReviewReloadInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 180 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(3000);
   localStorage.removeItem(GITHUB_QUEUE_SETTINGS_KEY);
   let dispose = await mountAppFixture({ initialPath: "/", waitForFiles: false });
   const open = async () => {
@@ -83,19 +76,11 @@ export async function testGithubSyncTimeoutSettingsAvailableAcrossListAndReviewR
   await mountAppFixture({ defaultTab: "overview", waitForFiles: false });
   select = await open();
   check(select.value === "900000", "Overview lacks saved timeout setting");
-  return { passed };
+  return result();
 }
 
 export async function testNewIntentAndExplicitRetryFreezeTheirOwnConfiguredDeadlineInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 180 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(3000);
   const url = "https://github.com/browser-fixture/isolated/pull/1",
     scope = githubPrScope(url);
   const operations: GithubOutboxOperation[] = [];
@@ -219,5 +204,5 @@ export async function testNewIntentAndExplicitRetryFreezeTheirOwnConfiguredDeadl
       Date.parse(next.command.queueDeadlineAt) <= Date.now() + 300000,
     "Next new intent failed to use latest preference",
   );
-  return { passed };
+  return result();
 }

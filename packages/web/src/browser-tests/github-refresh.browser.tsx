@@ -7,25 +7,18 @@ import {
   queueGithubWrite,
   refreshGithubActor,
 } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 /** Actual App refresh effects, including historical hydration and per-operation snapshot emissions. */
 export async function testAppGithubSyncRefreshBatchingInBrowser() {
-  let passed = 0,
-    extras = 0,
+  const { check, wait, result } = createAssertions(3000);
+  let extras = 0,
     lists = 0,
     admissions = 0,
     revision = 1;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
   const frames = async () => {
     for (let n = 0; n < 10; n++) await new Promise(requestAnimationFrame);
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 180 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
   };
   const scope = githubPrScope("https://github.com/browser-fixture/isolated/pull/1"),
     head = "a".repeat(40),
@@ -151,5 +144,5 @@ export async function testAppGithubSyncRefreshBatchingInBrowser() {
     githubWrites.getState(scope).operations.every((item) => item.status === "synced"),
     "Read refresh failure changed write outcomes",
   );
-  return { passed };
+  return result();
 }

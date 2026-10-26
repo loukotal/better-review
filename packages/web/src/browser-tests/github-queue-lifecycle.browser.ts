@@ -6,14 +6,11 @@ import type {
 
 import { createGithubOutbox, type GithubOutboxTransport } from "../lib/github-outbox";
 import { createIndexedDbGithubJournal } from "../lib/github-outbox-journal";
+import { createAssertions } from "./assertions";
 
 /** Isolated IndexedDB + transport fixture. No GitHub, API or model requests. */
 export async function testQueueTimeoutRetryAndDurableClearInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, result } = createAssertions(2000);
   const scope = {
     host: "github.com",
     owner: "test",
@@ -169,7 +166,7 @@ export async function testQueueTimeoutRetryAndDurableClearInBrowser() {
       () => {
         throw new Error("Offline Clear unexpectedly succeeded");
       },
-      () => {},
+      () => check(true, "Offline Clear unexpectedly succeeded"),
     );
     const callsBeforeClear = calls;
     await client.close();
@@ -191,22 +188,11 @@ export async function testQueueTimeoutRetryAndDurableClearInBrowser() {
       request.onerror = () => reject(request.error);
     });
   }
-  return { passed };
+  return result();
 }
 
 export async function testDependentAdmissionClearFenceAcrossConnectionsInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (condition: () => boolean) => {
-    const deadline = Date.now() + 2_000;
-    while (!condition()) {
-      if (Date.now() > deadline) throw new Error("Fence interleaving did not complete");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-  };
+  const { check, wait, result } = createAssertions(2000);
   for (const clearAckFirst of [false, true]) {
     const name = `queue-clear-fence-${crypto.randomUUID()}`;
     const journal = createIndexedDbGithubJournal(name);
@@ -307,11 +293,11 @@ export async function testDependentAdmissionClearFenceAcrossConnectionsInBrowser
         dependencies: [parent.operationId],
         action: { kind: "issue-comment", body: "Child fixture" },
       });
-      await wait(() => parentHeld);
+      await wait(() => parentHeld, "Fence interleaving did not complete");
       decision = clearingClient.clearAll();
       // Attach now: the lost-ack variant closes this client while its HTTP waits.
       void decision.catch(() => {});
-      await wait(() => clearHeld);
+      await wait(() => clearHeld, "Fence interleaving did not complete");
       check(
         (await otherJournal.batches!()).length === 1,
         "Clear was not committed before parent release",
@@ -320,7 +306,10 @@ export async function testDependentAdmissionClearFenceAcrossConnectionsInBrowser
         releaseClear();
         await decision;
         releaseParent();
-        await wait(() => client.getState(scope).operations.every((item) => item.backendOwned));
+        await wait(
+          () => client.getState(scope).operations.every((item) => item.backendOwned),
+          "Fence interleaving did not complete",
+        );
         const state = client.getState(scope);
         check(
           state.operations.every((item) => item.status === "cancelled"),
@@ -344,7 +333,7 @@ export async function testDependentAdmissionClearFenceAcrossConnectionsInBrowser
         await reloaded.recover(scope);
         check(childCalls === 0, "Reload lost the unacknowledged Clear fence");
         releaseClear();
-        await wait(() => clearApplied);
+        await wait(() => clearApplied, "Fence interleaving did not complete");
         await reloaded.recoverAll();
         check(
           clearIds.length === 2 && clearIds[0] === clearIds[1],
@@ -376,5 +365,5 @@ export async function testDependentAdmissionClearFenceAcrossConnectionsInBrowser
       });
     }
   }
-  return { passed };
+  return result();
 }

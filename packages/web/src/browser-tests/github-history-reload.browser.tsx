@@ -2,18 +2,11 @@ import type { GithubOutboxCommand, GithubOutboxOperation } from "@better-review/
 
 import { createIndexedDbGithubJournal } from "../lib/github-outbox-journal";
 import { githubPrScope, githubWrites } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 export async function testPersistedDraftAndTerminalHistoryDiscoverOnDirectListReloadInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
   check(!githubWrites.getStates().length, "Reload fixture already has in-memory scopes");
   const draftScope = githubPrScope("https://github.com/fixture/draft-only/pull/11");
   const historyScope = githubPrScope("https://github.com/fixture/history-only/pull/12");
@@ -111,5 +104,5 @@ export async function testPersistedDraftAndTerminalHistoryDiscoverOnDirectListRe
     snapshots === 0 && heartbeats === 0 && writes === 0 && listRefreshes === 0,
     `Local history caused I/O/replay: snapshots=${snapshots}, heartbeat=${heartbeats}, writes=${writes}, listRefresh=${listRefreshes}`,
   );
-  return { passed };
+  return result();
 }

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { tsImport } from "tsx/esm/api";
 
 import { createBrowserGithubActions } from "./browser-github-actions.mjs";
+import { createBrowserGithubHttp } from "./browser-github-http.mjs";
 import { createBrowserNestedReplies } from "./browser-nested-replies.mjs";
 import config from "./browser-vite.config.mjs";
 
@@ -41,6 +42,8 @@ for (const signal of ["SIGINT", "SIGTERM"])
   });
 
 async function open() {
+  let githubHttp;
+  const githubHttpReceipts = [];
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     deviceScaleFactor: 1,
@@ -53,12 +56,31 @@ async function open() {
   await context.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (githubHttp && url.origin === origin && url.pathname.startsWith("/api/trpc/githubOutbox.")) {
+      const backend = await githubHttp;
+      const response = await route.fetch({
+        url: `${backend.origin}${url.pathname}${url.search}`,
+        maxRedirects: 0,
+        timeout: 10_000,
+      });
+      if (url.pathname === "/api/trpc/githubOutbox.enqueue")
+        githubHttpReceipts.push({ status: response.status(), body: await response.text() });
+      // Reverse proxy exact HTTP bytes. No procedure decoding or response reconstruction.
+      return route.fulfill({ response });
+    }
     if (url.origin === origin && !url.pathname.startsWith("/api/") && request.method() === "GET")
       return route.continue();
     violations.push(`${request.method()} ${url.href}`);
     await route.abort("blockedbyclient");
   });
   const page = await context.newPage();
+  await page.exposeFunction("copyBrowserFeedback", async () => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+    await page.getByRole("button", { name: "Review actions", exact: true }).click();
+    await page.getByText("Copy feedback", { exact: true }).click();
+    await page.getByText("Feedback copied.", { exact: true }).waitFor();
+    return page.evaluate(() => navigator.clipboard.readText());
+  });
   await page.exposeFunction("setBrowserMotionPreference", async (reducedMotion) => {
     await page.emulateMedia({ reducedMotion });
   });
@@ -107,6 +129,18 @@ async function open() {
   await page.exposeFunction("browserGithubActions", async (request) => {
     githubActions ??= createBrowserGithubActions();
     return (await githubActions).invoke(request);
+  });
+  await page.exposeFunction("browserGithubHttp", async ({ kind }) => {
+    if (kind === "start") {
+      githubHttp ??= createBrowserGithubHttp();
+      const backend = await githubHttp;
+      return { token: backend.token, pid: backend.pid };
+    }
+    if (!githubHttp) throw new Error("HTTP composition fixture has not started");
+    const backend = await githubHttp;
+    if (kind === "close") return backend.close();
+    const value = await backend.invoke(kind);
+    return kind === "inspect" ? { ...value, httpReceipts: githubHttpReceipts } : value;
   });
   context.on("close", () => {
     void githubActions?.then((actions) => actions.close());
@@ -170,7 +204,15 @@ async function open() {
   page.on("pageerror", (error) => errors.push(error.stack || error.message));
   await page.goto(`${origin}/browser-tests.html`);
   await page.waitForFunction(() => !!window.browserTests);
-  return { context, page, violations, errors };
+  return {
+    context,
+    page,
+    violations,
+    errors,
+    closeGithubHttp: async () => {
+      if (githubHttp) await (await githubHttp).close();
+    },
+  };
 }
 let origin;
 async function trustedDismissal(page) {
@@ -198,20 +240,33 @@ async function trustedDismissal(page) {
   return { passed };
 }
 async function durableDraftReload(page, test) {
+  if (test.name === "testAppDurableGithubHttpCompositionInBrowser") {
+    let passed = 0;
+    let latest;
+    for (const mode of ["before", "resume", "after"]) {
+      if (mode !== "before") await reloadFixturePage(page);
+      latest = await page.evaluate((test) => window.browserTests.run(test), { ...test, mode });
+      passed += latest.passed;
+    }
+    return { ...latest, passed };
+  }
   const first = await page.evaluate(
     (test) => window.browserTests.run({ ...test, mode: "before" }),
     test,
   );
-  // The mounted Router changed history to /review. Reload the fixture document,
-  // not the live app entrypoint (whose requests must never escape the fixture).
-  await page.evaluate(() => history.replaceState(null, "", "/browser-tests.html"));
-  await page.reload();
-  await page.waitForFunction(() => !!window.browserTests);
+  await reloadFixturePage(page);
   const second = await page.evaluate(
     (test) => window.browserTests.run({ ...test, mode: "after" }),
     test,
   );
-  return { passed: first.passed + second.passed };
+  return { ...second, passed: first.passed + second.passed };
+}
+async function reloadFixturePage(page) {
+  // Reload the fixture document, not the live app entrypoint. Retain the same
+  // context's IndexedDB/localStorage/sessionStorage and any fixture backend.
+  await page.evaluate(() => history.replaceState(null, "", "/browser-tests.html"));
+  await page.reload();
+  await page.waitForFunction(() => !!window.browserTests);
 }
 try {
   server = await createServer({ ...config, configFile: false });
@@ -219,7 +274,22 @@ try {
   origin = server.resolvedUrls.local[0].replace(/\/$/, "");
   browser = await chromium.launch({ headless: true });
   const discovery = await open();
-  const tests = (await discovery.page.evaluate(() => window.browserTests.list())).filter(
+  const discovered = await discovery.page.evaluate(() => window.browserTests.list());
+  for (const name of [
+    "testModelRestoreFailurePreservesIntentInBrowser",
+    "testModelBackendWinsOverStaleBrowserInBrowser",
+    "testModelQueryFailurePreservesIntentInBrowser",
+    "testModelRapidReviewWaitsForHydrationInBrowser",
+    "testModelQuestionKeepsModelThroughSessionCreationInBrowser",
+    "testModelBrowserCacheFailureDoesNotBlockBackendSelectionInBrowser",
+    "testModelListReviewWaitsForLegacyMigrationInBrowser",
+  ]) {
+    const matches = discovered.filter((test) => test.name === name);
+    assert.equal(matches.length, 1, `${name} must be discovered exactly once`);
+    assert.equal(matches[0].file, "./model-selection.browser.tsx");
+  }
+  console.log(`Discovered ${discovered.length} browser cases; all seven model cases registered`);
+  const tests = discovered.filter(
     (test) =>
       !process.env.BROWSER_TEST_FILTER ||
       `${test.file}#${test.name}`.includes(process.env.BROWSER_TEST_FILTER),
@@ -241,6 +311,7 @@ try {
                 "testAutomaticReviewOrderReloadInBrowser",
                 "testPrDetailMergeReloadInBrowser",
                 "testAppNestedReviewRepliesInBrowser",
+                "testAppDurableGithubHttpCompositionInBrowser",
               ].includes(test.name)
             ? durableDraftReload(fixture.page, test)
             : fixture.page.evaluate((test) => window.browserTests.run(test), test),
@@ -252,6 +323,7 @@ try {
       if (fixture.violations.length || fixture.errors.length)
         throw new Error([...fixture.violations, ...fixture.errors].join("\n"));
       console.log(`PASS ${label} (${result.passed} assertions)`);
+      if (result.evidence) console.log(`Composition evidence: ${JSON.stringify(result.evidence)}`);
       results.push({ label, status: "passed", result });
     } catch (error) {
       console.error(`FAIL ${label}\n${error.stack || error}`);
@@ -268,6 +340,7 @@ try {
     } finally {
       clearTimeout(timer);
       await fixture?.context.close();
+      await fixture?.closeGithubHttp();
     }
   }
   const failures = results.filter((r) => r.status === "failed").length;

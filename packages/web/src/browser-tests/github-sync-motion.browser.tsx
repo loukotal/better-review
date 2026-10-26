@@ -7,20 +7,12 @@ import {
   queueGithubWrite,
   refreshGithubActor,
 } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 /** Real App, IndexedDB and computed CSS; all backend/GitHub traffic stays in fixtures. */
 export async function testImmediateGithubSyncMotionInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let frame = 0; frame < 180 && !predicate(); frame++)
-      await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(3000);
   const gate = () => {
     let release!: () => void;
     return {
@@ -279,7 +271,7 @@ export async function testImmediateGithubSyncMotionInBrowser() {
     await window.setBrowserMotionPreference("reduce");
     await new Promise(requestAnimationFrame);
     spin(global(), "queued", "mixed warning aggregate with reduced motion");
-    return { passed };
+    return result();
   } finally {
     admission.release();
     snapshotGate?.release();
@@ -294,17 +286,8 @@ export async function testImmediateGithubSyncMotionInBrowser() {
 
 /** Exercise the real Pierre annotation, not a discussion copy or standalone status. */
 export async function testPierreInlineGithubSyncRotationInBrowser() {
-  let passed = 0;
+  const { check, wait, result } = createAssertions(3000);
   const evidence: Record<string, unknown>[] = [];
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let frame = 0; frame < 180 && !predicate(); frame++)
-      await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
   const scope = githubPrScope("https://github.com/browser-fixture/isolated/pull/1");
   const records: GithubOutboxOperation[] = [];
   let revision = 0;
@@ -650,7 +633,7 @@ export async function testPierreInlineGithubSyncRotationInBrowser() {
         `${preference}: history-only aggregate falsely spins`,
       );
     }
-    return { passed, evidence };
+    return { ...result(), evidence };
   } finally {
     release();
     releaseDeletion();

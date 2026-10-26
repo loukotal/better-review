@@ -1,18 +1,11 @@
 import type { GithubOutboxCommand, GithubOutboxSnapshot } from "@better-review/shared";
 
 import { githubPrScope, githubWrites } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 export async function testExplicitFailedRetryWaitsForActualWorkerAttemptInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
   const scope = githubPrScope("https://github.com/browser-fixture/isolated/pull/1");
   const rpc = (kind: string, input?: unknown) => window.browserGithubActions({ kind, input });
   const snapshot = async () => (await rpc("snapshot", scope)) as GithubOutboxSnapshot;
@@ -97,7 +90,7 @@ export async function testExplicitFailedRetryWaitsForActualWorkerAttemptInBrowse
       row().textContent?.includes("Preserved failed approval"),
       "Retry failure discarded original content",
     );
-    return { passed };
+    return result();
   } finally {
     await rpc("release-approval");
   }

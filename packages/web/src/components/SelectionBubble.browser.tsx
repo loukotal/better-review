@@ -2,10 +2,12 @@
 import { createSignal, Show } from "solid-js";
 import { render } from "solid-js/web";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { textSelectionAnchor } from "../lib/selection-bubble";
 import { SelectionBubble } from "./SelectionBubble";
 
 export async function testSelectionBubbleInactiveReviewInBrowser() {
+  const { check, result } = createAssertions(3000);
   const shell = document.createElement("div");
   const source = document.createElement("div");
   shell.append(source);
@@ -34,25 +36,26 @@ export async function testSelectionBubbleInactiveReviewInBrowser() {
   };
   try {
     await settle();
-    if (!mount.querySelector(":popover-open")) throw new Error("Selection editor did not open");
+    check(mount.querySelector(":popover-open"), "Selection editor did not open");
     shell.inert = true;
     await settle();
-    if (mount.querySelector(":popover-open"))
-      throw new Error("Inactive Changes leaked top-layer selection editor");
+    check(
+      !mount.querySelector(":popover-open"),
+      "Inactive Changes leaked top-layer selection editor",
+    );
     const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     document.dispatchEvent(event);
-    if (event.defaultPrevented || dismissed)
-      throw new Error("Inactive selection editor intercepted keyboard");
+    check(!(event.defaultPrevented || dismissed), "Inactive selection editor intercepted keyboard");
     shell.inert = false;
     await settle();
-    if (
-      !mount.querySelector(":popover-open") ||
-      mount.querySelector("textarea")?.value !== "Retained question"
-    )
-      throw new Error(
-        `Reactivated editor lost question draft: open=${!!mount.querySelector(":popover-open")} value=${mount.querySelector("textarea")?.value} inert=${shell.inert}`,
-      );
-    return { passed: 4 };
+    check(
+      !(
+        !mount.querySelector(":popover-open") ||
+        mount.querySelector("textarea")?.value !== "Retained question"
+      ),
+      `Reactivated editor lost question draft: open=${!!mount.querySelector(":popover-open")} value=${mount.querySelector("textarea")?.value} inert=${shell.inert}`,
+    );
+    return result();
   } finally {
     dispose();
     shell.remove();
@@ -61,11 +64,7 @@ export async function testSelectionBubbleInactiveReviewInBrowser() {
 }
 
 export async function testSelectionBubbleInBrowser() {
-  let passed = 0;
-  const check = (condition: boolean, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
+  const { check, result } = createAssertions(3000);
   const settle = async () => {
     await new Promise(requestAnimationFrame);
     await new Promise(requestAnimationFrame);
@@ -246,7 +245,7 @@ export async function testSelectionBubbleInBrowser() {
     dispose();
     await settle();
     check(!bubble(), "unmount removes the popover and its lifecycle");
-    return { passed };
+    return result();
   } finally {
     dispose();
     getSelection()?.removeAllRanges();

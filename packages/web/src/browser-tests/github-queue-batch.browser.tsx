@@ -6,6 +6,7 @@ import {
   queueGithubWrite,
   refreshGithubActor,
 } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 declare global {
@@ -16,6 +17,7 @@ declare global {
 const url = "https://github.com/browser-fixture/isolated/pull/1",
   scope = githubPrScope(url);
 async function fixture(overrides: Record<string, (input: unknown) => unknown> = {}) {
+  const { check, wait, result } = createAssertions(4000);
   let batches = 0;
   const rpc = (kind: string, input?: unknown) => window.browserGithubActions({ kind, input });
   await mountAppFixture({
@@ -40,10 +42,6 @@ async function fixture(overrides: Record<string, (input: unknown) => unknown> = 
     ((await rpc("state")) as { calls: { method: string }[] }).calls.filter(
       (call) => call.method === "POST",
     ).length;
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    if (!predicate()) throw new Error(message);
-  };
   const settle = async (operationId: string, status: string) => {
     let data = await snapshot();
     for (
@@ -55,8 +53,10 @@ async function fixture(overrides: Record<string, (input: unknown) => unknown> = 
       await new Promise(requestAnimationFrame);
       data = await snapshot();
     }
-    if (data.operations.find((item) => item.command.operationId === operationId)?.status !== status)
-      throw new Error(`Worker did not reach ${status}`);
+    check(
+      data.operations.find((item) => item.command.operationId === operationId)?.status === status,
+      `Worker did not reach ${status}`,
+    );
     await githubWrites.snapshot(scope);
   };
   const open = async () => {
@@ -66,7 +66,7 @@ async function fixture(overrides: Record<string, (input: unknown) => unknown> = 
       "Primary Retry/Clear toolbar missing",
     );
   };
-  return { rpc, snapshot, posts, wait, settle, open, batches: () => batches };
+  return { rpc, snapshot, posts, check, wait, result, settle, open, batches: () => batches };
 }
 
 export async function testGlobalRetryActuallySendsOneExplicitAttemptAndReportsItsResultInBrowser() {
@@ -97,19 +97,22 @@ export async function testGlobalRetryActuallySendsOneExplicitAttemptAndReportsIt
         !!document.querySelector("[data-github-queue-action]")?.textContent?.includes("Retrying"),
       "Retry did not await the worker's actual attempt",
     );
-    if ((await f.posts()) !== baseline + 1 || f.batches() !== 1)
-      throw new Error("Global Retry dispatched more than one explicit request");
+    f.check(
+      (await f.posts()) === baseline + 1 && f.batches() === 1,
+      "Global Retry dispatched more than one explicit request",
+    );
     await f.rpc("release-approval");
     await f.wait(
       () =>
         !!document.querySelector("[popover]:popover-open")?.textContent?.includes("1 retry failed"),
       "Global Retry looked unchanged after a rejected attempt",
     );
-    if (!document.querySelector("[data-github-queue-action]")?.textContent?.includes("HTTP 422"))
-      throw new Error("Retry result hid the authoritative GitHub status");
-    if ((await f.posts()) !== baseline + 1)
-      throw new Error("Retry failure dispatched automatically again");
-    return { passed: 6 };
+    f.check(
+      document.querySelector("[data-github-queue-action]")?.textContent?.includes("HTTP 422"),
+      "Retry result hid the authoritative GitHub status",
+    );
+    f.check((await f.posts()) === baseline + 1, "Retry failure dispatched automatically again");
+    return f.result();
   } finally {
     await f.rpc("release-approval");
   }
@@ -141,15 +144,17 @@ export async function testGlobalClearCancelsFailedRootAndQueuedFollowerAtomicall
     "Clear did not clear the active queue",
   );
   const data = await f.snapshot();
-  if (
-    [root.operationId, child.operationId].some(
+  f.check(
+    ![root.operationId, child.operationId].some(
       (id) =>
         data.operations.find((item) => item.command.operationId === id)?.status !== "cancelled",
-    )
-  )
-    throw new Error("Clear did not atomically cancel root and follower");
-  if ((await f.posts()) !== baseline || f.batches() !== 1)
-    throw new Error("Clear released follower into a GitHub POST");
+    ),
+    "Clear did not atomically cancel root and follower",
+  );
+  f.check(
+    (await f.posts()) === baseline && f.batches() === 1,
+    "Clear released follower into a GitHub POST",
+  );
   [...document.querySelectorAll<HTMLButtonElement>("[popover]:popover-open button")]
     .find((button) => button.textContent?.trim() === "Drafts & history")!
     .click();
@@ -163,7 +168,7 @@ export async function testGlobalClearCancelsFailedRootAndQueuedFollowerAtomicall
         ?.textContent?.includes("Follower original recovery text"),
     "Clear discarded recoverable original content",
   );
-  return { passed: 4 };
+  return f.result();
 }
 
 export async function testGlobalRetrySkipsUnknownDeliveryAndClearArchivesItWithoutClaimingCancellationInBrowser() {
@@ -190,8 +195,7 @@ export async function testGlobalRetrySkipsUnknownDeliveryAndClearArchivesItWitho
         ?.textContent?.includes("confirmation required"),
     "Unknown delivery was mislabeled as retried",
   );
-  if ((await f.posts()) !== baseline)
-    throw new Error("Global Retry blindly resent an uncertain action");
+  f.check((await f.posts()) === baseline, "Global Retry blindly resent an uncertain action");
   await window.clickBrowserQueueBatch("clear");
   await f.wait(
     () =>
@@ -202,15 +206,17 @@ export async function testGlobalRetrySkipsUnknownDeliveryAndClearArchivesItWitho
   );
   const data = await f.snapshot(),
     archived = data.operations.find((item) => item.command.operationId === root.operationId)!;
-  if (
-    !archived.archivedAt ||
-    archived.status !== "uncertain" ||
-    data.operations.find((item) => item.command.operationId === child.operationId)?.status !==
-      "cancelled"
-  )
-    throw new Error("Clear lost uncertainty or failed to cancel its follower atomically");
-  if ((await f.posts()) !== baseline)
-    throw new Error("Clear resent uncertain work or released its queued follower");
+  f.check(
+    archived.archivedAt &&
+      archived.status === "uncertain" &&
+      data.operations.find((item) => item.command.operationId === child.operationId)?.status ===
+        "cancelled",
+    "Clear lost uncertainty or failed to cancel its follower atomically",
+  );
+  f.check(
+    (await f.posts()) === baseline,
+    "Clear resent uncertain work or released its queued follower",
+  );
   [...document.querySelectorAll<HTMLButtonElement>("[popover]:popover-open button")]
     .find((button) => button.textContent?.trim() === "Drafts & history")!
     .click();
@@ -221,7 +227,7 @@ export async function testGlobalRetrySkipsUnknownDeliveryAndClearArchivesItWitho
         ?.textContent?.includes("Unknown archived review original"),
     "Archived uncertainty lost its original content",
   );
-  return { passed: 5 };
+  return f.result();
 }
 
 export async function testGlobalClearFencesLostAdmissionBeforeLateAcknowledgementInBrowser() {
@@ -258,8 +264,10 @@ export async function testGlobalClearFencesLostAdmissionBeforeLateAcknowledgemen
     const operation = (await f.snapshot()).operations.find(
       (item) => item.command.operationId === local.operationId,
     );
-    if (operation?.status !== "cancelled" || (await f.posts()) !== 0)
-      throw new Error("Late enqueue acknowledgement resurrected or sent a cleared intent");
+    f.check(
+      operation?.status === "cancelled" && (await f.posts()) === 0,
+      "Late enqueue acknowledgement resurrected or sent a cleared intent",
+    );
     [...document.querySelectorAll<HTMLButtonElement>("[popover]:popover-open button")]
       .find((button) => button.textContent?.trim() === "Drafts & history")!
       .click();
@@ -270,7 +278,7 @@ export async function testGlobalClearFencesLostAdmissionBeforeLateAcknowledgemen
           ?.textContent?.includes("Clear before acknowledgement retained body"),
       "Clear lost original local body",
     );
-    return { passed: 4 };
+    return f.result();
   } finally {
     release();
   }

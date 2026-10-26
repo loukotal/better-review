@@ -7,19 +7,12 @@ import type {
 
 import { createIndexedDbGithubJournal } from "../lib/github-outbox-journal";
 import { githubPrScope, githubWrites, refreshGithubActor } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 /** Real App → IndexedDB → SQLite admission/worker → production adapter with local HTTP only. */
 export async function testRenewedApprovalCooldownInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let i = 0; i < 240 && !predicate(); i++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
   const url = "https://github.com/browser-fixture/isolated/pull/1",
     scope = githubPrScope(url),
     head = "a".repeat(40);
@@ -211,5 +204,5 @@ export async function testRenewedApprovalCooldownInBrowser() {
   );
   dispose();
   Date.now = realNow;
-  return { passed };
+  return result();
 }

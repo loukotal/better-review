@@ -2,9 +2,11 @@
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { ReviewSessionToolbar } from "./ReviewSessionToolbar";
 
 export async function testReviewSessionToolbarInBrowser() {
+  const { check, result } = createAssertions(3000);
   const host = document.createElement("div");
   host.style.cssText =
     "position:fixed;top:10px;left:10px;padding:12px;box-sizing:border-box;background:var(--color-bg)";
@@ -32,11 +34,6 @@ export async function testReviewSessionToolbarInBrowser() {
     ),
     host,
   );
-  const check = (condition: boolean, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
-  let passed = 0;
   try {
     const session = host.querySelector<HTMLButtonElement>('[aria-label="Session 1"]')!;
     const fresh = host.querySelector<HTMLButtonElement>('button[title^="Start a fresh"]')!;
@@ -98,7 +95,7 @@ export async function testReviewSessionToolbarInBrowser() {
       fresh.textContent?.includes("Creating") ?? false,
       "creation feedback must remain visible",
     );
-    return { passed, widths: [240, 320, 370, 600], calls };
+    return { ...result(), widths: [240, 320, 370, 600], calls };
   } finally {
     dispose();
     host.remove();

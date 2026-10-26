@@ -2,6 +2,7 @@
 import { createSignal, Show } from "solid-js";
 import { render } from "solid-js/web";
 
+import { createAssertions } from "../browser-tests/assertions";
 import {
   createSelectionDraft,
   createSelectionSender,
@@ -13,11 +14,7 @@ import { createSelectionQuestionState } from "./AskSelectionComposer";
 import { SelectionBubble } from "./SelectionBubble";
 
 export async function testAnchoredSelectionEditorInBrowser() {
-  let passed = 0;
-  const check = (condition: boolean, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
+  const { check, result } = createAssertions(3000);
   const settle = async () => {
     for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame);
   };
@@ -249,7 +246,7 @@ export async function testAnchoredSelectionEditorInBrowser() {
         context.text === selection.text,
       "UI wording must not change exact internal side/revision/source context",
     );
-    return { passed };
+    return result();
   } finally {
     dispose();
     getSelection()?.removeAllRanges();

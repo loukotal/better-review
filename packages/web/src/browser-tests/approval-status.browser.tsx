@@ -13,6 +13,7 @@ import {
   refreshGithubActor,
 } from "../lib/github-writes";
 import { fetchPrExtras, queryClient, queryKeys } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
@@ -56,17 +57,8 @@ const pr = (reviewDecision: ReviewDecision): SearchedPr => ({
 });
 const badge = () =>
   document.querySelector('span[title="GitHub\'s current overall review decision is Approved."]');
-async function wait(predicate: () => boolean, message: string) {
-  for (let i = 0; i < 180 && !predicate(); i++) await new Promise(requestAnimationFrame);
-  if (!predicate()) throw new Error(message);
-}
-
 export async function testRemoteApprovalInActualAppAndListInBrowser() {
-  let passed = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
+  const { check, wait, result } = createAssertions(3000);
   let decision: ReviewDecision = "APPROVED";
   const list = () => ({ prs: [pr(decision)], fetchedAt: Date.now() });
   await mountAppFixture({
@@ -95,7 +87,6 @@ export async function testRemoteApprovalInActualAppAndListInBrowser() {
       () => !!badge() === (next === "APPROVED"),
       `List retained incorrect approval for ${next}`,
     );
-    passed++;
   }
   // Historical own approval must not turn a non-approved aggregate into Approved.
   queryClient.setQueryData(queryKeys.prs.list, {
@@ -103,10 +94,11 @@ export async function testRemoteApprovalInActualAppAndListInBrowser() {
     fetchedAt: Date.now(),
   });
   await wait(() => !badge(), "Historical own approval mislabeled aggregate decision");
-  return { passed: passed + 1 };
+  return result();
 }
 
 export async function testApprovalHeaderDoesNotLeakAcrossCachedPrNavigationInBrowser() {
+  const { wait, result } = createAssertions(3000);
   const nextUrl = url.replace("/1", "/2");
   await mountAppFixture({
     extras: { status: status("APPROVED"), comments: [], issueComments: [] },
@@ -130,10 +122,11 @@ export async function testApprovalHeaderDoesNotLeakAcrossCachedPrNavigationInBro
   document.querySelector<HTMLAnchorElement>('a[title^="Next:"]')!.click();
   await wait(() => location.search.includes("%2F2"), "Second PR did not load");
   await wait(() => !badge(), "Previous PR approval leaked into cached PR without status");
-  return { passed: 2 };
+  return result();
 }
 
 export async function testPendingAndRefreshedApprovalDecisionsInBrowser() {
+  const { check, wait, result } = createAssertions(3000);
   const scope = githubPrScope(url),
     head = "a".repeat(40);
   let revision = 0;
@@ -225,7 +218,7 @@ export async function testPendingAndRefreshedApprovalDecisionsInBrowser() {
       !!document.querySelector('button[aria-label="Approval pending"] [data-github-sync-status]'),
     "Queued approval lacks pending spinner",
   );
-  if (badge()) throw new Error("Queued approval falsely shown as aggregate Approved");
+  check(!badge(), "Queued approval falsely shown as aggregate Approved");
   const complete = async (operationId: string) => {
     const operation = operations.find((item) => item.command.operationId === operationId)!;
     operation.status = "synced";
@@ -261,12 +254,13 @@ export async function testPendingAndRefreshedApprovalDecisionsInBrowser() {
   releaseOldRead!();
   await olderRead;
   for (let i = 0; i < 10; i++) await new Promise(requestAnimationFrame);
-  if (
+  check(
     queryClient.getQueryData<{ status: PrStatus }>(queryKeys.pr.extras(url))?.status
-      .reviewDecision !== "APPROVED" ||
-    queryClient.getQueryData<PrStatus>(queryKeys.pr.status(url))?.viewerApproval?.commitSha !== head
-  )
-    throw new Error("Older extras read rolled back confirmed shared approval caches");
+      .reviewDecision === "APPROVED" &&
+      queryClient.getQueryData<PrStatus>(queryKeys.pr.status(url))?.viewerApproval?.commitSha ===
+        head,
+    "Older extras read rolled back confirmed shared approval caches",
+  );
   const core = queryClient.getQueryData(queryKeys.pr.core(url))!;
   queryClient.setQueryData(queryKeys.pr.core(nextUrl), core);
   queryClient.setQueryData(queryKeys.pr.extras(nextUrl), {
@@ -283,8 +277,10 @@ export async function testPendingAndRefreshedApprovalDecisionsInBrowser() {
     () => !!badge() && !!document.querySelector('button[aria-label="You approved"]:disabled'),
     "Returning to cached PR lost confirmed own/aggregate approval",
   );
-  if (extrasReads !== 2 || listReads !== 1)
-    throw new Error(`Approval batch repeated reads: extras=${extrasReads}, lists=${listReads}`);
+  check(
+    extrasReads === 2 && listReads === 1,
+    `Approval batch repeated reads: extras=${extrasReads}, lists=${listReads}`,
+  );
   for (const next of ["APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED", null] as const) {
     remoteStatus = status(next);
     const refresh = await queueGithubWrite(url, { kind: "issue-comment", body: "refresh" });
@@ -298,19 +294,20 @@ export async function testPendingAndRefreshedApprovalDecisionsInBrowser() {
       () => !!badge() === (next === "APPROVED"),
       `Refreshed detail decision incorrect for ${next}`,
     );
-    if (
-      next !== "APPROVED" &&
-      [...document.querySelectorAll("button")].some(
-        (button) => button.textContent?.trim() === "You approved",
-      )
-    )
-      throw new Error("Dismissed own review persisted after authoritative refresh");
+    if (next !== "APPROVED")
+      check(
+        ![...document.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "You approved",
+        ),
+        "Dismissed own review persisted after authoritative refresh",
+      );
   }
-  if (listReads !== 1) throw new Error("Comment refreshes triggered extra PR list refreshes");
-  return { passed: 12 };
+  check(listReads === 1, "Comment refreshes triggered extra PR list refreshes");
+  return result();
 }
 
 export async function testRequestedAgainApprovalEligibilityInBrowser() {
+  const { check, wait, result } = createAssertions(3000);
   const head = "a".repeat(40);
   const decode = async (reviewRequests: unknown, state = "APPROVED", commitSha = head) => ({
     ...status("APPROVED"),
@@ -347,7 +344,6 @@ export async function testRequestedAgainApprovalEligibilityInBrowser() {
     "Current-head approval without renewed request should disable duplicate approval",
   );
   dispose();
-  let passed = 1;
   const direct = {
     ...empty,
     nodes: [{ requestedReviewer: { __typename: "User", login: "browser-fixture" } }],
@@ -370,10 +366,11 @@ export async function testRequestedAgainApprovalEligibilityInBrowser() {
       () => !!document.querySelector('button[aria-label="Approve PR"]:not(:disabled)'),
       "Renewed/dismissed/stale/unknown request state prevented another approval",
     );
-    if (!badge() || document.querySelector('button[aria-label="You approved"]'))
-      throw new Error("Eligibility changed aggregate approval or claimed historical own approval");
-    passed++;
+    check(
+      !!badge() && !document.querySelector('button[aria-label="You approved"]'),
+      "Eligibility changed aggregate approval or claimed historical own approval",
+    );
     dispose();
   }
-  return { passed };
+  return result();
 }

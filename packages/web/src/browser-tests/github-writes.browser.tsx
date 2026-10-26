@@ -11,19 +11,11 @@ import { PendingCommentForm } from "../components/CommentView";
 import { createGithubOutbox } from "../lib/github-outbox";
 import { createIndexedDbGithubJournal } from "../lib/github-outbox-journal";
 import { githubPrScope } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 
 /** Real IndexedDB + real editor + browser admission/reload lifecycle, no GitHub/model calls. */
 export async function testDurableGithubEditorIntegrationInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const settle = async (predicate: () => boolean) => {
-    for (let frame = 0; frame < 180 && !predicate(); frame++)
-      await new Promise(requestAnimationFrame);
-    check(predicate(), "Browser condition did not settle");
-  };
+  const { check, wait, result } = createAssertions(3000);
   const scope = githubPrScope("https://github.com/MyZenbase/Repo/pull/9");
   const other = githubPrScope("https://github.com/other/repo/pull/10");
   check(scope.url === "https://github.com/myzenbase/repo/pull/9", "Scope was not canonicalized");
@@ -121,7 +113,7 @@ export async function testDurableGithubEditorIntegrationInBrowser() {
       .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   try {
     submitEditor();
-    await settle(() => !!host.querySelector('[role="alert"]'));
+    await wait(() => !!host.querySelector('[role="alert"]'), "Browser condition did not settle");
     check(
       host.querySelector("textarea")?.value === "recoverable inline body",
       "Unknown identity discarded draft",
@@ -132,7 +124,7 @@ export async function testDurableGithubEditorIntegrationInBrowser() {
     );
     unknownActor = false;
     submitEditor();
-    await settle(() => !editorOpen());
+    await wait(() => !editorOpen(), "Browser condition did not settle");
     check(
       client.getState(scope).operations[0]?.status === "local-pending",
       "Offline submission not saved locally",
@@ -184,9 +176,15 @@ export async function testDurableGithubEditorIntegrationInBrowser() {
       client.getState(other).operations.length === 0,
       "Navigation leaked another PR's pending comment",
     );
-    await settle(() => heartbeats.some((value) => value.scope.url === scope.url && !value.visible));
+    await wait(
+      () => heartbeats.some((value) => value.scope.url === scope.url && !value.visible),
+      "Browser condition did not settle",
+    );
     client.setVisible(false);
-    await settle(() => heartbeats.some((value) => value.scope.url === other.url && !value.visible));
+    await wait(
+      () => heartbeats.some((value) => value.scope.url === other.url && !value.visible),
+      "Browser condition did not settle",
+    );
     check(
       client.getState(scope).operations[0]?.status === "uncertain",
       "Navigation discarded uncertain content",
@@ -197,5 +195,5 @@ export async function testDurableGithubEditorIntegrationInBrowser() {
     await client.close();
     indexedDB.deleteDatabase(name);
   }
-  return { passed };
+  return result();
 }

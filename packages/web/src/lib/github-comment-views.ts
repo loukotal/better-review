@@ -7,8 +7,8 @@ import type {
   PrDetail,
   PrStatus,
 } from "@better-review/shared";
-import { viewerApprovalForReview } from "@better-review/shared";
 
+import { createGithubConfirmationState } from "./github-confirmation-state";
 import type { BrowserGithubOperation } from "./github-outbox";
 import {
   createGithubOutboxProjection,
@@ -25,92 +25,11 @@ const reads = new Map<string, { comments: PRComment[]; issueComments: IssueComme
 const reviewReads = new Map<string, GithubRemoteReview[]>();
 const commentReadSerials = new Map<string, number>();
 const reviewReadSerials = new Map<string, number>();
-const approvalReads = new Map<string, { token: GithubReadToken; approved: boolean }>();
-const approvalStatusReads = new Map<string, { token: GithubReadToken; approved: boolean }>();
-const approvalReadKey = (url: string, actorId: number, head: string) =>
-  JSON.stringify([url, actorId, head]);
-// First-seen synced rows are history, not a new approval of the current review state.
-const observedPendingApprovals = new Set<string>();
-const observedPendingStages = new Set<string>();
-const retiredStageConfirmations = new Map<string, number>();
-const stageDetailReads = new Map<string, { token: GithubReadToken; detail: PrDetail }>();
-function stageEvidence(detail: PrDetail) {
-  const metadata = detail.metadata;
-  return JSON.stringify({
-    fetchedAt: detail.fetchedAt,
-    metadata:
-      metadata.status === "available"
-        ? {
-            id: metadata.data.id,
-            url: metadata.data.url,
-            state: metadata.data.state,
-            draft: metadata.data.draft,
-            complete: metadata.complete,
-          }
-        : metadata,
-    actor: detail.actor,
-    capabilities: detail.stageCapabilities,
-  });
-}
-const observedApprovalIntents = (item: BrowserGithubOperation) =>
-  [item.command.operationId, ...(item.submittedOperationIds ?? [])].filter((id) =>
-    observedPendingApprovals.has(id),
-  );
+// One production owner survives App/tab/PR remounts; the factory itself is isolated.
+export const githubConfirmationState = createGithubConfirmationState();
 githubWrites.subscribe(() => {
-  for (const state of githubWrites.getStates())
-    for (const item of state.operations) {
-      if (
-        item.command.action.kind === "set-draft" &&
-        item.status !== "synced" &&
-        item.status !== "cancelled"
-      )
-        observedPendingStages.add(item.command.operationId);
-      if (
-        item.command.action.kind === "approve" &&
-        item.status !== "synced" &&
-        item.status !== "cancelled"
-      )
-        observedPendingApprovals.add(item.command.operationId);
-    }
+  for (const state of githubWrites.getStates()) githubConfirmationState.observe(state.operations);
 });
-
-/** Receipt bridge survives tab/PR navigation. First-seen synced history has no authority. */
-export function githubDraftConfirmation(
-  url: string,
-  detail: PrDetail | undefined,
-  operations: readonly BrowserGithubOperation[],
-) {
-  const latest = operations
-    .filter(
-      (item) =>
-        item.command.scope.url === url &&
-        item.command.action.kind === "set-draft" &&
-        item.status === "synced" &&
-        [item.command.operationId, ...(item.submittedOperationIds ?? [])].some((id) =>
-          observedPendingStages.has(id),
-        ),
-    )
-    .at(-1);
-  if (!latest || latest.operation?.result?.kind !== "pull-request-draft") return;
-  if (retiredStageConfirmations.get(latest.command.operationId) === latest.operation.revision)
-    return;
-  const read = stageDetailReads.get(url);
-  // Query caching may structurally share the response. Match its evidence, not object identity.
-  if (
-    read &&
-    detail &&
-    stageEvidence(read.detail) === stageEvidence(detail) &&
-    detail.metadata.status === "available" &&
-    detail.metadata.complete &&
-    detail.stageCapabilities?.status === "available" &&
-    detail.stageCapabilities.complete &&
-    read.token.confirmed.get(latest.command.operationId) === latest.operation.revision
-  ) {
-    retiredStageConfirmations.set(latest.command.operationId, latest.operation.revision);
-    return;
-  }
-  return latest.operation.result;
-}
 const listeners = new Set<() => void>();
 export function subscribeGithubComments(listener: () => void) {
   listeners.add(listener);
@@ -120,15 +39,11 @@ export function subscribeGithubComments(listener: () => void) {
 }
 export function beginGithubCommentRead(url: string) {
   const state = githubWrites.getState(githubPrScope(url));
-  return {
-    ...projection.beginRead(state),
-    approvalActor: currentGithubActor(),
-    approvalBridges: new Map(
-      state.operations
-        .filter((item) => item.status === "synced" && observedApprovalIntents(item).length > 0)
-        .map((item) => [item.command.operationId, new Set(observedApprovalIntents(item))]),
-    ),
-  };
+  return githubConfirmationState.captureRead(
+    projection.beginRead(state),
+    currentGithubActor(),
+    state.operations,
+  );
 }
 function normalize(data: {
   comments: PRComment[];
@@ -166,11 +81,7 @@ function normalize(data: {
 
 /** Canonical GitHub review URLs carry the REST identity used by durable write results. */
 export function acceptGithubDetailRead(token: GithubReadToken, detail: PrDetail) {
-  if (
-    detail.url.toLowerCase() === token.scope.url &&
-    token.serial >= (stageDetailReads.get(token.scope.url)?.token.serial ?? 0)
-  )
-    stageDetailReads.set(token.scope.url, { token, detail });
+  githubConfirmationState.acceptDetail(token, detail);
   if (detail.reviews.status !== "available") return false;
   if (token.serial < (reviewReadSerials.get(token.scope.url) ?? 0)) return false;
   const reviews: GithubRemoteReview[] = detail.reviews.data.flatMap((review) => {
@@ -229,45 +140,6 @@ export function acceptGithubDetailRead(token: GithubReadToken, detail: PrDetail)
     return false;
   reviewReadSerials.set(token.scope.url, token.serial);
   reviewReads.set(token.scope.url, reviews);
-  if (
-    token.approvalActor &&
-    detail.url === token.scope.url &&
-    detail.reviews.complete &&
-    detail.metadata.status === "available" &&
-    detail.metadata.complete &&
-    detail.actor.status === "available" &&
-    detail.actor.complete &&
-    detail.actor.data?.databaseId === token.approvalActor.id &&
-    detail.actor.data?.login === token.approvalActor?.login
-  ) {
-    const ownReviews = detail.reviews.data
-      .filter((review) => review.author === token.approvalActor!.login)
-      .toSorted((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
-    const latest = ownReviews[0];
-    // Timestamp ties/unknown ordering cannot prove a positive latest state.
-    const ambiguous =
-      ownReviews.length > 1 &&
-      ownReviews.some(
-        (review) =>
-          (!review.submittedAt || review.submittedAt === latest?.submittedAt) &&
-          (review.state !== latest?.state || review.commitSha !== latest?.commitSha),
-      );
-    approvalReads.set(
-      approvalReadKey(token.scope.url, token.approvalActor.id, detail.metadata.data.head.sha),
-      {
-        token,
-        approved: !!viewerApprovalForReview({
-          login: token.approvalActor.login,
-          headSha: detail.metadata.data.head.sha,
-          latest: ambiguous ? undefined : latest,
-          requests:
-            detail.reviewRequests.status === "available"
-              ? { complete: detail.reviewRequests.complete, items: detail.reviewRequests.data }
-              : undefined,
-        }),
-      },
-    );
-  }
   for (const listener of listeners) listener();
   return true;
 }
@@ -311,26 +183,7 @@ export function acceptGithubCommentRead(
   )
     return false;
   commentReadSerials.set(token.scope.url, token.serial);
-  if (
-    data.status?.reviewContext &&
-    token.approvalActor &&
-    data.status.url === token.scope.url &&
-    data.status.reviewContext.actor.id === token.approvalActor.id &&
-    data.status.reviewContext.actor.login === token.approvalActor.login
-  )
-    approvalStatusReads.set(
-      approvalReadKey(
-        token.scope.url,
-        data.status.reviewContext.actor.id,
-        data.status.reviewContext.headSha,
-      ),
-      {
-        token,
-        approved:
-          data.status.viewerApproval?.login === data.status.reviewContext.actor.login &&
-          data.status.viewerApproval?.commitSha === data.status.reviewContext.headSha,
-      },
-    );
+  githubConfirmationState.acceptStatus(token, data.status);
   reads.set(token.scope.url, next);
   for (const listener of listeners) listener();
   return true;
@@ -360,53 +213,13 @@ export function githubApprovalState(
   status: PrStatus | null,
 ): "pending" | "synced" | undefined {
   if (!head || !actor) return;
-  const scope = githubPrScope(url);
-  const operations = githubWrites
-    .getState(scope)
-    .operations.filter(
-      (item) =>
-        item.command.scope.url === scope.url &&
-        item.command.expectedActor.id === actor.id &&
-        item.command.action.kind === "approve" &&
-        item.command.action.expectedHeadSha === head &&
-        item.status !== "cancelled",
-    );
-  if (operations.some((item) => item.status !== "synced")) return "pending";
-  const confirmed = operations.filter(
-    (item) =>
-      observedApprovalIntents(item).length > 0 &&
-      item.operation?.result?.kind === "approval" &&
-      item.operation.result.commitSha === head,
-  );
-  if (confirmed.length) {
-    // A new acknowledged alias is a new intent generation even if its canonical
-    // result was already superseded. Reads must cover every observed acknowledged
-    // submission ID. Polling and result metadata revisions do not change that set.
-    const coversIntents = (token: GithubReadToken, item: BrowserGithubOperation) =>
-      token.confirmed.has(item.command.operationId) &&
-      observedApprovalIntents(item).every((id) =>
-        token.approvalBridges?.get(item.command.operationId)?.has(id),
-      );
-    const read = approvalReads.get(approvalReadKey(scope.url, actor.id, head));
-    const candidate = approvalStatusReads.get(approvalReadKey(scope.url, actor.id, head));
-    const statusRead =
-      candidate?.token.approvalActor?.id === actor.id &&
-      confirmed.every((item) => coversIntents(candidate.token, item))
-        ? candidate
-        : undefined;
-    if (
-      read &&
-      read.token.approvalActor?.id === actor.id &&
-      (!statusRead || read.token.serial > statusRead.token.serial) &&
-      confirmed.every((item) => coversIntents(read.token, item))
-    )
-      return read.approved ? "synced" : undefined;
-    if (statusRead) return statusRead.approved ? "synced" : undefined;
-    return "synced";
-  }
-  return status?.viewerApproval?.commitSha === head && status.viewerApproval.login === actor.login
-    ? "synced"
-    : undefined;
+  return githubConfirmationState.approval({
+    url,
+    head,
+    actor,
+    status,
+    operations: githubWrites.getState(githubPrScope(url)).operations,
+  }).state;
 }
 
 const object = (value: unknown): value is Record<string, unknown> =>

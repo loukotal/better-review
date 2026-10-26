@@ -3,6 +3,7 @@ import type { GithubOutboxCommand, GithubOutboxOperation } from "@better-review/
 
 import { createIndexedDbGithubJournal } from "../lib/github-outbox-journal";
 import { githubPrScope, githubWrites } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
@@ -34,26 +35,18 @@ const procedures = {
   "prs.ciStatusBatch": () => ({ statuses: { [url]: { state: "FAILURE", passed: 0, total: 1 } } }),
   "prReview.automaticStatuses": () => ({}),
 };
-function check(value: unknown, message: string) {
-  if (!value) throw new Error(message);
-}
-async function wait(test: () => boolean, message: string) {
-  const until = performance.now() + 5000;
-  while (!test() && performance.now() < until) await new Promise(requestAnimationFrame);
-  check(test(), message);
-}
-function button(label: string) {
+function button(assertions: Pick<ReturnType<typeof createAssertions>, "check">, label: string) {
   const value = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (entry) => entry.textContent?.trim() === label,
   );
-  if (!value) throw new Error(`Missing ${label}`);
-  return value;
+  assertions.check(value, `Missing ${label}`);
+  return value!;
 }
 const here = () => location.pathname + location.search + location.hash;
 const back = () =>
   document.querySelector<HTMLAnchorElement>('a[aria-label="Back to pull requests"]')!;
-async function mountedList() {
-  await wait(
+async function mountedList(assertions: Pick<ReturnType<typeof createAssertions>, "wait">) {
+  await assertions.wait(
     () =>
       location.pathname === "/" && !!document.querySelector('[aria-label="Filter pull requests"]'),
     "List not mounted",
@@ -61,6 +54,8 @@ async function mountedList() {
 }
 
 export async function testQueuePrLinkReturnsToFreshListScrollAndFiltersInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   const scope = githubPrScope(url);
   const journal = createIndexedDbGithubJournal();
   const command: GithubOutboxCommand = {
@@ -92,7 +87,7 @@ export async function testQueuePrLinkReturnsToFreshListScrollAndFiltersInBrowser
       "githubOutbox.snapshot": () => ({ scope, revision: 1, operations: [operation] }),
     },
   });
-  await mountedList();
+  await mountedList(assertions);
   await githubWrites.recoverAll();
   await wait(
     () => document.querySelector("main")!.scrollTop === 11,
@@ -116,16 +111,18 @@ export async function testQueuePrLinkReturnsToFreshListScrollAndFiltersInBrowser
     "Queue link dropped list filters",
   );
   back().click();
-  await mountedList();
+  await mountedList(assertions);
   check(here() === list, "Queue Back lost exact filter URL");
   await wait(
     () => document.querySelector("main")!.scrollTop === 570,
     `Queue Back restored stale scroll (${document.querySelector("main")!.scrollTop}), not departure offset`,
   );
-  return { passed: 4 };
+  return result();
 }
 
 export async function testPrListCiLinkHasOneHistoryEntryAndReturnsInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   let sessions = 0,
     core = 0;
   const detail = prDetailFixture(url);
@@ -180,7 +177,7 @@ export async function testPrListCiLinkHasOneHistoryEntryAndReturnsInBrowser() {
     "CI link implicitly entered review",
   );
   back().click();
-  await mountedList();
+  await mountedList(assertions);
   check(
     here() === list && history.length === length + 1,
     "UI Back pushed a new list entry instead of returning",
@@ -193,19 +190,21 @@ export async function testPrListCiLinkHasOneHistoryEntryAndReturnsInBrowser() {
     "Forward did not restore original Checks entry",
   );
   history.back();
-  await mountedList();
+  await mountedList(assertions);
   check(here() === list, "Browser Back looped through a redirect or duplicate entry");
-  return { passed: 7 };
+  return result();
 }
 
 export async function testPrDetailBackSkipsTabsWithoutPushingLoopInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   await mountAppFixture({ initialPath: list, waitForFiles: false, procedures });
-  await mountedList();
+  await mountedList(assertions);
   await wait(() => !!document.querySelector('a[aria-label="PR details"]'), "Details link missing");
   document.querySelector<HTMLAnchorElement>('a[aria-label="PR details"]')!.click();
   await wait(() => !!document.querySelector("[data-pr-overview]"), "Detail not mounted");
   const overviewUrl = here();
-  button("Checks").click();
+  button(assertions, "Checks").click();
   await wait(
     () => new URLSearchParams(location.search).get("tab") === "checks",
     "Checks tab missing",
@@ -213,7 +212,7 @@ export async function testPrDetailBackSkipsTabsWithoutPushingLoopInBrowser() {
   const checksUrl = here();
   const length = history.length;
   back().click();
-  await mountedList();
+  await mountedList(assertions);
   check(here() === list && history.length === length, "Detail Back appended list to history");
   history.forward();
   await wait(
@@ -225,11 +224,13 @@ export async function testPrDetailBackSkipsTabsWithoutPushingLoopInBrowser() {
   history.back();
   await wait(() => here() === overviewUrl, "Back from Checks did not restore Overview");
   history.back();
-  await mountedList();
-  return { passed: 5 };
+  await mountedList(assertions);
+  return result();
 }
 
 export async function testPrCanonicalLinkDoesNotTrapBrowserBackInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   const mixed = prs.map((pr, index) =>
     index === 0 ? { ...pr, url: "https://github.com/Browser-Fixture/Isolated/pull/1" } : pr,
   );
@@ -238,7 +239,7 @@ export async function testPrCanonicalLinkDoesNotTrapBrowserBackInBrowser() {
     waitForFiles: false,
     procedures: { ...procedures, "prs.list": () => ({ prs: mixed, fetchedAt: Date.now() }) },
   });
-  await mountedList();
+  await mountedList(assertions);
   await wait(
     () =>
       [...document.querySelectorAll("a")].some((entry) =>
@@ -253,12 +254,14 @@ export async function testPrCanonicalLinkDoesNotTrapBrowserBackInBrowser() {
   await wait(() => !!document.querySelector("diffs-container"), "Review did not load");
   check(history.length === length + 1, `Canonicalization inserted history entry: ${here()}`);
   history.back();
-  await mountedList();
+  await mountedList(assertions);
   check(here() === list, "Canonical PR link traps browser Back");
-  return { passed: 2 };
+  return result();
 }
 
 export async function testPrModeHistoryRestoresSessionCommitAndDraftInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   await mountAppFixture({
     searchParams: {
       mode: "commit",
@@ -291,19 +294,19 @@ export async function testPrModeHistoryRestoresSessionCommitAndDraftInBrowser() 
   )!;
   editor.value = "History draft";
   editor.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  button("Overview").click();
+  button(assertions, "Overview").click();
   await wait(
     () => new URLSearchParams(location.search).get("tab") === "overview",
     "Overview tab did not navigate",
   );
   const overview = here();
-  button("Checks").click();
+  button(assertions, "Checks").click();
   await wait(
     () => new URLSearchParams(location.search).get("tab") === "checks",
     "Checks tab did not navigate",
   );
   const checksUrl = here();
-  button("Changes").click();
+  button(assertions, "Changes").click();
   await wait(
     () => new URLSearchParams(location.search).get("tab") === "changes",
     "Changes tab did not navigate",
@@ -314,10 +317,10 @@ export async function testPrModeHistoryRestoresSessionCommitAndDraftInBrowser() 
       new URLSearchParams(location.search).get("commit") === "b".repeat(40),
     "Tabs added hidden entries or rewrote the shared commit reference",
   );
-  button("Changes").click();
+  button(assertions, "Changes").click();
   await new Promise(requestAnimationFrame);
   check(history.length === initialLength + 3, "Clicking active tab added a duplicate entry");
-  button("Full PR").click();
+  button(assertions, "Full PR").click();
   await wait(() => !new URLSearchParams(location.search).has("mode"), "Full PR route not selected");
   const full = here();
   history.back();
@@ -360,10 +363,11 @@ export async function testPrModeHistoryRestoresSessionCommitAndDraftInBrowser() 
     editor.isConnected && editor.value === "History draft",
     "Repeated traversal lost same-PR draft",
   );
-  return { passed: 8 };
+  return result();
 }
 
 export async function testPrCiAndInfoLinksKeepNativeKeyboardAndModifierBehaviorInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   await mountAppFixture({ initialPath: list, waitForFiles: false, procedures });
   await wait(
     () => !!document.querySelector('[aria-label="CI: 0/1 passed"]'),
@@ -412,10 +416,11 @@ export async function testPrCiAndInfoLinksKeepNativeKeyboardAndModifierBehaviorI
       !!document.querySelector('section[aria-label="Pull request checks"]'),
     "Keyboard Enter did not open Checks",
   );
-  return { passed: 10 };
+  return result();
 }
 
 export async function testPrSourceAndExternalLinksDoNotPolluteHistoryInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   await mountAppFixture({
     searchParams: { showChat: "1", keep: "history-context" },
     reviewSnapshot: (sessionId) => ({
@@ -475,5 +480,5 @@ export async function testPrSourceAndExternalLinksDoNotPolluteHistoryInBrowser()
     !captured && here() === initial && history.length === length,
     "App captured external link or polluted review history",
   );
-  return { passed: 3 };
+  return result();
 }

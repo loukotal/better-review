@@ -1,6 +1,7 @@
 import { For } from "solid-js";
 import { render } from "solid-js/web";
 
+import { createAssertions } from "../browser-tests/assertions";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
 import {
   GithubSyncStatus,
@@ -9,6 +10,7 @@ import {
 } from "./GithubSyncStatus";
 
 export function testGithubAdmissionRetryabilityLabelsInBrowser() {
+  const { check, result } = createAssertions(3000);
   const base: BrowserGithubOperation = {
     command: {
       operationId: "11111111-1111-4111-8111-111111111111",
@@ -38,8 +40,10 @@ export function testGithubAdmissionRetryabilityLabelsInBrowser() {
     ...base,
     blockedByOperationId: "22222222-2222-4222-8222-222222222222",
   });
-  if (verifying !== "verifying-account" || rejected !== "retry-failed" || blocked !== "blocked")
-    throw new Error("Admission retryability/blocker hook not reflected in UI states");
+  check(
+    !(verifying !== "verifying-account" || rejected !== "retry-failed" || blocked !== "blocked"),
+    "Admission retryability/blocker hook not reflected in UI states",
+  );
   const host = document.createElement("div");
   document.body.append(host);
   const dispose = render(
@@ -53,27 +57,27 @@ export function testGithubAdmissionRetryabilityLabelsInBrowser() {
     host,
   );
   try {
-    if (
-      !host
+    check(
+      host
         .querySelector('[data-github-sync-status="verifying-account"]')
         ?.getAttribute("aria-label")
-        ?.includes("account verification")
-    )
-      throw new Error("Verifying account mislabeled as permanent rejection or sending");
-    if (
-      !host
+        ?.includes("account verification"),
+      "Verifying account mislabeled as permanent rejection or sending",
+    );
+    check(
+      host
         .querySelector('[data-github-sync-status="retry-failed"]')
         ?.getAttribute("aria-label")
-        ?.includes("action needed")
-    )
-      throw new Error("Permanent rejection mislabeled as active sync");
-    if (
-      [...host.querySelectorAll("svg")].some(
+        ?.includes("action needed"),
+      "Permanent rejection mislabeled as active sync",
+    );
+    check(
+      ![...host.querySelectorAll("svg")].some(
         (icon) => getComputedStyle(icon).animationName === "spin",
-      )
-    )
-      throw new Error("Waiting/rejected/blocked admission falsely spins as active sending");
-    return { passed: 4 };
+      ),
+      "Waiting/rejected/blocked admission falsely spins as active sending",
+    );
+    return result();
   } finally {
     dispose();
     host.remove();
@@ -88,11 +92,7 @@ declare global {
 
 /** Verify production CSS actually animates the visible SVG, not only class strings. */
 export async function testGithubSyncMotionInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, result } = createAssertions(3000);
   const states: GithubSyncState[] = [
     "saving-local",
     "local-pending",
@@ -194,7 +194,7 @@ export async function testGithubSyncMotionInBrowser() {
         );
       }
     }
-    return { passed };
+    return result();
   } finally {
     await window.setBrowserMotionPreference("reduce");
     dispose();
@@ -204,11 +204,7 @@ export async function testGithubSyncMotionInBrowser() {
 
 /** Visual state sheet uses production SVGs and CSS, with no network requests. */
 export function testGithubSyncStatusInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, result } = createAssertions(3000);
   const states: GithubSyncState[] = [
     "saving-local",
     "local-pending",
@@ -288,7 +284,7 @@ export function testGithubSyncStatusInBrowser() {
         .length === 1,
       "Missing non-color warning icon",
     );
-    return { passed };
+    return result();
   } finally {
     dispose();
     host.remove();

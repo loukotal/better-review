@@ -3,11 +3,13 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { DiffViewer, DEFAULT_DIFF_SETTINGS, type DiffCommentDraft } from "../DiffViewer";
 import { prepareFindingComment, type FindingCommentRequest } from "../lib/finding-comment";
 import type { Annotation } from "../utils/parseReviewTokens";
 
 export async function testInlineFindingProvenanceInBrowser() {
+  const { check, wait, result } = createAssertions(3000);
   const head = "a".repeat(40),
     old = "b".repeat(40);
   const rawDiff =
@@ -21,14 +23,9 @@ export async function testInlineFindingProvenanceInBrowser() {
   const [commit, setCommit] = createSignal(false);
   const posts: DiffCommentDraft[] = [],
     received: Annotation[] = [];
-  let rejection = "",
-    passed = 0;
+  let rejection = "";
   const settle = async () => {
     for (let i = 0; i < 8; i++) await new Promise(requestAnimationFrame);
-  };
-  const check = (ok: unknown, message: string) => {
-    if (!ok) throw new Error(message);
-    passed++;
   };
   const dispose = render(
     () => (
@@ -88,12 +85,10 @@ export async function testInlineFindingProvenanceInBrowser() {
       await settle();
       // Initial diff rendering includes a worker-backed async syntax/layout pass.
       // Wait for the condition rather than assuming eight frames is sufficient.
-      for (
-        let frame = 0;
-        frame < 180 && !host.querySelector('[aria-label="Prepare comment for src/a.ts:2"]');
-        frame++
-      )
-        await new Promise(requestAnimationFrame);
+      await wait(
+        () => !!host.querySelector('[aria-label="Prepare comment for src/a.ts:2"]'),
+        `${scenario}: actual inline annotation missing`,
+      );
       const card = host.querySelector<HTMLElement>('[aria-label="Prepare comment for src/a.ts:2"]');
       check(!!card, `${scenario}: actual inline annotation missing`);
       for (const action of ["body", "button"]) {
@@ -135,7 +130,7 @@ export async function testInlineFindingProvenanceInBrowser() {
         );
       }
     }
-    return { passed, interceptedSubmissions: posts.length, networkPosts: 0, modelCalls: 0 };
+    return { ...result(), interceptedSubmissions: posts.length, networkPosts: 0, modelCalls: 0 };
   } finally {
     dispose();
     host.remove();

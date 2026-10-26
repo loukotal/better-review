@@ -5,7 +5,8 @@ import type { ResolvedSource } from "@better-review/shared";
 import { InlineSourceView } from "../components/InlineSourceView";
 import type { SelectedSource } from "../lib/ask-ai-selection";
 import { createSourceNavigation, type SourceWindow } from "../lib/review-interactions";
-import { askSourceRows, browserWait, sourceWindow } from "./source-fixture";
+import { createAssertions } from "./assertions";
+import { askSourceRows, sourceWindow } from "./source-fixture";
 
 declare global {
   interface Window {
@@ -14,11 +15,8 @@ declare global {
 }
 
 export async function testActualResolverSourceLineBoundsInBrowser() {
-  let passed = 0;
-  const check = (ok: unknown, message: string) => {
-    if (!ok) throw new Error(message);
-    passed++;
-  };
+  const assertions = createAssertions(3000);
+  const { check, wait, result } = assertions;
   const cases = [
     {
       name: "interior",
@@ -86,7 +84,7 @@ export async function testActualResolverSourceLineBoundsInBrowser() {
     );
     try {
       await navigation.openSource(target);
-      await browserWait(
+      await wait(
         () => !!host.querySelector('[data-source-ready="true"]'),
         "Actual source not rendered",
       );
@@ -110,7 +108,7 @@ export async function testActualResolverSourceLineBoundsInBrowser() {
         );
       if (fixture.last > 1) {
         // Include every valid row (including blank lines) in a real DOM selection.
-        await askSourceRows(host, fixture.first, fixture.last);
+        await askSourceRows(assertions, host, fixture.first, fixture.last);
         const selection = selections.at(-1);
         check(
           selection?.startLine === fixture.first && selection?.endLine === fixture.last,
@@ -138,5 +136,5 @@ export async function testActualResolverSourceLineBoundsInBrowser() {
       getSelection()?.removeAllRanges();
     }
   }
-  return { passed };
+  return result();
 }

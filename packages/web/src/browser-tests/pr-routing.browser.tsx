@@ -1,18 +1,11 @@
 import type { SearchedPr, PrStatus } from "@better-review/shared";
 
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
 const url = "https://github.com/browser-fixture/isolated/pull/1";
 const listPath = "/?mine=1&drafts=1&needsReview=0&repo=browser-fixture%2Fisolated";
-function check(value: unknown, message: string) {
-  if (!value) throw new Error(message);
-}
-async function wait(test: () => boolean, message: string) {
-  const deadline = performance.now() + 5000;
-  while (!test() && performance.now() < deadline) await new Promise(requestAnimationFrame);
-  check(test(), message);
-}
 const prs: SearchedPr[] = Array.from({ length: 70 }, (_, index) => ({
   number: index + 1,
   headRefOid: "a".repeat(40),
@@ -36,6 +29,7 @@ const procedures = {
 };
 
 export async function testPrDetailHeaderBackPreservesListContextInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   await mountAppFixture({
     defaultTab: "overview",
     waitForFiles: false,
@@ -50,10 +44,11 @@ export async function testPrDetailHeaderBackPreservesListContextInBrowser() {
   await wait(() => location.pathname === "/", "Header return did not reach list");
   check(location.search === listPath.slice(1), "Existing detail header return drops list filters");
   check(back, "Detail lacks a visible accessible Back action");
-  return { passed: 2 };
+  return result();
 }
 
 export async function testPrDetailDirectBackHasSafeFallbackInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   await mountAppFixture({ defaultTab: "overview", waitForFiles: false, procedures });
   await wait(() => !!document.querySelector("[data-pr-overview] h1"), "Direct detail not ready");
   const back = document.querySelector<HTMLAnchorElement>('a[aria-label="Back to pull requests"]');
@@ -64,10 +59,11 @@ export async function testPrDetailDirectBackHasSafeFallbackInBrowser() {
       location.pathname === "/" && !!document.querySelector('[aria-label="Filter pull requests"]'),
     "Direct Back was a no-op",
   );
-  return { passed: 2 };
+  return result();
 }
 
 export async function testPrListHasSeparateLazyDetailsAndDefaultReviewInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let sessions = 0,
     core = 0;
   await mountAppFixture({
@@ -152,20 +148,22 @@ export async function testPrListHasSeparateLazyDetailsAndDefaultReviewInBrowser(
     "Primary title did not open review",
   );
   check(!document.querySelector("[data-pr-overview]"), "Primary title still defaults to Overview");
-  return { passed: 9 };
+  return result();
 }
 
 export async function testBarePrUrlDefaultsToReviewInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   await mountAppFixture({ defaultTab: null, waitForFiles: false });
   await wait(
     () => !!document.querySelector("diffs-container") && !!document.getElementById("chat-panel"),
     "Bare PR URL did not open Changes/review",
   );
   check(!document.querySelector("[data-pr-overview]"), "Bare PR URL defaulted to detail");
-  return { passed: 1 };
+  return result();
 }
 
 export async function testReviewChecksIndicatorOpensActualChecksInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const detail = prDetailFixture(url);
   detail.checks = {
     status: "available",
@@ -241,10 +239,11 @@ export async function testReviewChecksIndicatorOpensActualChecksInBrowser() {
       document.body.textContent?.includes("E2E-Ci"),
     "Actual CheckRun contract not displayed",
   );
-  return { passed: 5 };
+  return result();
 }
 
 export async function testPrChecksPrioritizeFailureAndRunningContractInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let detail = prDetailFixture(url);
   detail.checks = {
     status: "available",
@@ -360,10 +359,11 @@ export async function testPrChecksPrioritizeFailureAndRunningContractInBrowser()
     sessions === 0 && !document.getElementById("chat-panel"),
     "Checks navigation started a review session",
   );
-  return { passed: 6 };
+  return result();
 }
 
 export async function testPrChecksReadFailureHasReadOnlyRetryInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let reads = 0,
     sessions = 0;
   const detail = prDetailFixture(url);
@@ -411,5 +411,5 @@ export async function testPrChecksReadFailureHasReadOnlyRetryInBrowser() {
       !section().textContent?.includes("No checks reported."),
     "Incomplete empty checks were presented as complete",
   );
-  return { passed: 4 };
+  return result();
 }

@@ -5,6 +5,7 @@ import { GithubPendingPanel } from "../components/GithubPendingPanel";
 import { GithubQueueContext } from "../context/GithubQueueContext";
 import type { BrowserGithubOperation, BrowserGithubState } from "../lib/github-outbox";
 import { githubJournal, githubPrScope } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 
 declare global {
   interface Window {
@@ -13,15 +14,7 @@ declare global {
 }
 
 export async function testCompactGlobalQueueDraftSeparationAndRecoveryInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 180 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(3000);
   const states: BrowserGithubState[] = [];
   for (let n = 0; n < 12; n++) {
     const scope = githubPrScope(`https://github.com/fixture/repo/pull/${16333 - n}`);
@@ -232,7 +225,7 @@ export async function testCompactGlobalQueueDraftSeparationAndRecoveryInBrowser(
       !panel.querySelector("[data-github-queue-action]"),
       "History view duplicated pending bodies",
     );
-    return { passed };
+    return result();
   } finally {
     dispose();
     root.remove();

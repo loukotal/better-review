@@ -1,20 +1,20 @@
 import type { GithubOutboxCommand, GithubOutboxSnapshot } from "@better-review/shared";
 
 import { githubPrScope, githubWrites } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 async function exercise(cancel: boolean, stale = false) {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, wait: waitFor, result } = createAssertions(4000);
+  // Keep live queue context in deadline diagnostics, without duplicating polling/counting.
   const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(
-      predicate(),
-      `${message}: ${document.querySelector("[popover]:popover-open")?.textContent}`,
-    );
+    try {
+      await waitFor(predicate, message);
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === message)
+        cause.message = `${message}: ${document.querySelector("[popover]:popover-open")?.textContent}`;
+      throw cause;
+    }
   };
   const scope = githubPrScope("https://github.com/browser-fixture/isolated/pull/1");
   const rpc = (kind: string, input?: unknown) => window.browserGithubActions({ kind, input });
@@ -135,7 +135,7 @@ async function exercise(cancel: boolean, stale = false) {
         "Stale confirmation changed uncertainty",
       );
       check((await posts()) === baseline, "Stale confirmation resent action");
-      return { passed };
+      return result();
     }
     await wait(
       () =>
@@ -169,7 +169,7 @@ async function exercise(cancel: boolean, stale = false) {
       (await posts()) === baseline + (cancel ? 0 : 1),
       "Retry/cancel dispatched wrong POST count",
     );
-    return { passed };
+    return result();
   } finally {
     dispose();
   }

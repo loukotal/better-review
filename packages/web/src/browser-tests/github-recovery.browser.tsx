@@ -7,22 +7,14 @@ import {
   githubWrites,
   refreshGithubActor,
 } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 /** A rotated editor and cancelled sole intent must still leave read-only text recovery. */
 export async function testAppCancelledCommentRecoveryInBrowser() {
-  let passed = 0,
-    revision = 0,
+  const { check, wait, result } = createAssertions(3000);
+  let revision = 0,
     enqueueCalls = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let frame = 0; frame < 180 && !predicate(); frame++)
-      await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
   const scope = githubPrScope("https://github.com/browser-fixture/isolated/pull/1");
   const records = new Map<string, GithubOutboxOperation>();
   await mountAppFixture({
@@ -164,5 +156,5 @@ export async function testAppCancelledCommentRecoveryInBrowser() {
       (await githubJournal.editorDrafts(scope)).every((draft) => !draft.body.trim()),
     "Opening recovery requeued or restored submitted text as a new intent",
   );
-  return { passed };
+  return result();
 }

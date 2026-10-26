@@ -6,6 +6,7 @@ import superjson from "superjson";
 
 import type { ReviewSnapshot, GithubOutboxCommand } from "@better-review/shared";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { sourceWindow } from "../browser-tests/source-fixture";
 import { getFileElementId } from "../DiffViewer";
 import { formatAnnotationForComment } from "../utils/formatAnnotationForClipboard";
@@ -23,6 +24,7 @@ export async function testAppAnnotationNavigationInBrowser(
     | "source"
     | "live-source" = "navigation",
 ) {
+  const { check, wait: waitFor, result } = createAssertions(3000);
   const originalUrl = location.href;
   const url = new URL(originalUrl);
   const prUrl = url.searchParams.get("prUrl");
@@ -447,18 +449,10 @@ export async function testAppAnnotationNavigationInBrowser(
     }
     return originalFetch(input, init);
   };
-  const waitFor = async (predicate: () => boolean, message: string) => {
-    for (let frame = 0; frame < 180; frame++) {
-      if (predicate()) return;
-      await new Promise(requestAnimationFrame);
-    }
-    throw new Error(message);
-  };
   const buttonFor = (label: string) =>
     Array.from(document.querySelectorAll<HTMLButtonElement>("#chat-panel button[title]")).find(
       (button) => button.closest(".my-5")?.textContent?.includes(`navigation-fixture-${label}`),
     );
-  let passed = 0;
   try {
     document
       .querySelector<HTMLButtonElement>('dialog[open] button[aria-label="Close dialog"]')
@@ -482,20 +476,20 @@ export async function testAppAnnotationNavigationInBrowser(
         "Live basename lookup failed to focus unchanged source at line 76",
       );
       const pane = document.querySelector<HTMLElement>("[data-inline-source]")!;
-      if (
-        !pane.textContent?.includes("functions/src/users/user-rent/user-rent-config.ts") ||
-        !pane.textContent.includes("approximate") ||
-        pane.dataset.sourceRef !== core.headSha ||
-        document.querySelector("dialog[open]") ||
-        document.querySelector('form[aria-label="New inline comment"]') ||
-        writes ||
-        commentPosts.length
-      )
-        throw new Error(
-          "Live filename fallback lost path/revision notice or opened a modal/comment",
-        );
+      check(
+        !(
+          !pane.textContent?.includes("functions/src/users/user-rent/user-rent-config.ts") ||
+          !pane.textContent.includes("approximate") ||
+          pane.dataset.sourceRef !== core.headSha ||
+          document.querySelector("dialog[open]") ||
+          document.querySelector('form[aria-label="New inline comment"]') ||
+          writes ||
+          commentPosts.length
+        ),
+        "Live filename fallback lost path/revision notice or opened a modal/comment",
+      );
       return {
-        passed: 1,
+        ...result(),
         chain:
           "real AnnotationBlock filename → real backend repository cache → main inline source line 76",
         modelCalls: 0,
@@ -516,20 +510,22 @@ export async function testAppAnnotationNavigationInBrowser(
             document.activeElement === pane()?.querySelector(`[data-source-line="${targetLine}"]`),
           `${label} did not focus inline source`,
         );
-        if (
-          !noEditor() ||
-          document.activeElement !== pane()?.querySelector(`[data-source-line="${targetLine}"]`)
-        )
-          throw new Error(`${label} opened a modal/editor or failed source focus`);
-        passed++;
+        check(
+          !(
+            !noEditor() ||
+            document.activeElement !== pane()?.querySelector(`[data-source-line="${targetLine}"]`)
+          ),
+          `${label} opened a modal/editor or failed source focus`,
+        );
       };
       await clickSource("missing-history", "functions/src/config/user-rent-config.ts", 3);
-      if (
-        !pane()?.textContent?.includes("approximate") ||
-        pane()?.dataset.sourceRef !== core.headSha
-      )
-        throw new Error("Missing history fallback lost revision/line approximation notice");
-      passed++;
+      check(
+        !(
+          !pane()?.textContent?.includes("approximate") ||
+          pane()?.dataset.sourceRef !== core.headSha
+        ),
+        "Missing history fallback lost revision/line approximation notice",
+      );
       getSelection()?.removeAllRanges();
       buttonFor("missing-history")!
         .closest(".my-5")!
@@ -542,9 +538,7 @@ export async function testAppAnnotationNavigationInBrowser(
             ?.textContent?.includes("historical"),
         "Fallback navigation incorrectly authorized historical comment prefill",
       );
-      if (!noEditor())
-        throw new Error("Historical finding mapped a stale line into a current PR draft");
-      passed++;
+      check(noEditor(), "Historical finding mapped a stale line into a current PR draft");
       for (const label of ["unchanged-source-link", "user-rent-config.ts:76"]) {
         const button = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-file]")).find(
           (button) => button.textContent === label,
@@ -556,8 +550,7 @@ export async function testAppAnnotationNavigationInBrowser(
             !!pane()?.textContent?.includes("Requested line 76"),
           "Markdown/backtick source links diverged from filename resolution",
         );
-        if (!noEditor()) throw new Error("Ordinary source links opened a modal/comment");
-        passed++;
+        check(noEditor(), "Ordinary source links opened a modal/comment");
       }
       await clickSource("renamed-source", "functions/src/config/new-config.ts", 2);
       buttonFor("ambiguous-visible")!.click();
@@ -577,7 +570,6 @@ export async function testAppAnnotationNavigationInBrowser(
             ?.shadowRoot?.querySelector(`[data-line="${line}"][data-selected-line]`),
         "Chosen exact source path did not focus the actual diff",
       );
-      passed++;
       buttonFor("ambiguous-source")!.click();
       await waitFor(
         () => !!pane()?.textContent?.includes("Multiple source files"),
@@ -592,7 +584,6 @@ export async function testAppAnnotationNavigationInBrowser(
           !!pane()?.querySelector("[data-selected-line]"),
         "Explicit repository path choice did not navigate",
       );
-      passed++;
       const previousCard = Array.from(
         document.querySelectorAll<HTMLElement>('[aria-label="Question about selected code"]'),
       ).find((card) => card.textContent?.includes("selection-ambiguous-history-fixture"))!;
@@ -611,23 +602,25 @@ export async function testAppAnnotationNavigationInBrowser(
           sourceReads.some((read) => read.path === "b/config.ts" && read.ref === core.headSha),
         "Chosen fallback lookup dropped captured historical selection",
       );
-      if (
-        pane()?.dataset.sourceRef !== oldRef ||
-        pane()?.dataset.sourceSide !== "LEFT" ||
-        !noEditor()
-      )
-        throw new Error("Fallback candidate relabeled original LEFT selection as current source");
-      passed++;
+      check(
+        !(
+          pane()?.dataset.sourceRef !== oldRef ||
+          pane()?.dataset.sourceSide !== "LEFT" ||
+          !noEditor()
+        ),
+        "Fallback candidate relabeled original LEFT selection as current source",
+      );
       buttonFor("unsafe-source")!.click();
       await waitFor(
         () => !!pane()?.textContent?.includes("Unsafe repository-relative"),
         "Unsafe path not rejected in inline navigation",
       );
-      if (!noEditor() || writes || commentPosts.length)
-        throw new Error("Source navigation created a comment/model mutation");
-      passed++;
+      check(
+        !(!noEditor() || writes || commentPosts.length),
+        "Source navigation created a comment/model mutation",
+      );
       return {
-        passed,
+        ...result(),
         chain: "filename/markdown/backticks → shared source resolver → inline main viewer",
         posts: 0,
         modelCalls: 0,
@@ -647,16 +640,17 @@ export async function testAppAnnotationNavigationInBrowser(
       const cached = queryClient.getQueryData<
         Array<{ origin?: { sessionId: string; revision?: string } }>
       >(queryKeys.local.annotations(prUrl))!;
-      if (
-        !cached.length ||
-        cached.some(
-          (annotation) =>
-            annotation.origin?.sessionId !== sessionId ||
-            annotation.origin?.revision !== core.headSha,
-        )
-      )
-        throw new Error("Active inline annotations lost transcript source revision/session");
-      passed++;
+      check(
+        !(
+          !cached.length ||
+          cached.some(
+            (annotation) =>
+              annotation.origin?.sessionId !== sessionId ||
+              annotation.origin?.revision !== core.headSha,
+          )
+        ),
+        "Active inline annotations lost transcript source revision/session",
+      );
       if (mode === "dismissal") {
         const settle = async () => {
           for (let i = 0; i < 12; i++) await new Promise(requestAnimationFrame);
@@ -684,20 +678,18 @@ export async function testAppAnnotationNavigationInBrowser(
           .click();
         await waitFor(() => !inlineCard(), "Dismiss did not remove actual inline finding");
         await replay();
-        if (inlineCard())
-          throw new Error("Identical transcript snapshot resurrected dismissed finding");
-        passed++;
+        check(!inlineCard(), "Identical transcript snapshot resurrected dismissed finding");
         // Empty revision-filtered results must still clear every visible/cached annotation.
         for (const message of snapshot.messages)
           if (message.role === "assistant") message.metadata.revision = oldRef;
         await replay();
-        if (queryClient.getQueryData<unknown[]>(queryKeys.local.annotations(prUrl))?.length)
-          throw new Error("Dismissal reconciliation retained stale annotations on empty result");
-        passed++;
+        check(
+          !queryClient.getQueryData<unknown[]>(queryKeys.local.annotations(prUrl))?.length,
+          "Dismissal reconciliation retained stale annotations on empty result",
+        );
         snapshot.messages[0].metadata.revision = core.headSha;
         await replay();
-        if (inlineCard()) throw new Error("Revision filtering cleared dismissal history");
-        passed++;
+        check(!inlineCard(), "Revision filtering cleared dismissal history");
         const commit = core.commits[0];
         if (!commit || commit.sha === core.headSha)
           throw new Error("Dismissal revision fixture needs a non-head commit");
@@ -714,7 +706,6 @@ export async function testAppAnnotationNavigationInBrowser(
             () => !!inlineCard(),
             "Dismissal leaked into a different source revision in the same session",
           );
-          passed++;
         } finally {
           Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
             .find((button) => button.textContent?.trim() === "Full PR")
@@ -725,9 +716,7 @@ export async function testAppAnnotationNavigationInBrowser(
             queryClient.setQueryData(commitKey, previousCommitDiff);
           else queryClient.removeQueries({ queryKey: commitKey, exact: true });
         }
-        if (inlineCard())
-          throw new Error("Returning from another source revision lost original dismissal");
-        passed++;
+        check(!inlineCard(), "Returning from another source revision lost original dismissal");
         const firstSession = sessionId;
         sessionId = `${firstSession}-other`;
         snapshot.sessionId = sessionId;
@@ -739,7 +728,6 @@ export async function testAppAnnotationNavigationInBrowser(
           () => !!inlineCard(),
           "Dismissal leaked into another session with identical finding content",
         );
-        passed++;
         sessionId = firstSession;
         snapshot.sessionId = firstSession;
         snapshotStream = undefined;
@@ -748,10 +736,9 @@ export async function testAppAnnotationNavigationInBrowser(
         dispatchEvent(new PopStateEvent("popstate"));
         await waitFor(() => !!snapshotStream, "Original session did not reconnect");
         await replay();
-        if (inlineCard()) throw new Error("Dismissal was lost across session reconnect");
-        passed++;
-        if (writes || commentPosts.length) throw new Error("Dismissal test performed a mutation");
-        return { passed, posts: 0, modelCalls: 0 };
+        check(!inlineCard(), "Dismissal was lost across session reconnect");
+        check(!(writes || commentPosts.length), "Dismissal test performed a mutation");
+        return { ...result(), posts: 0, modelCalls: 0 };
       }
       inlineCard()!.click();
       const editor = () =>
@@ -759,21 +746,24 @@ export async function testAppAnnotationNavigationInBrowser(
           .getElementById(getFileElementId(file.name))
           ?.querySelector<HTMLTextAreaElement>('textarea[placeholder="Write a comment..."]');
       await waitFor(() => !!editor(), "Inline body did not reach shared App preparation path");
-      if (!editor()!.value.includes(`${file.name}:${line}`))
-        throw new Error("Inline prefill lost full file reference");
+      check(
+        editor()!.value.includes(`${file.name}:${line}`),
+        "Inline prefill lost full file reference",
+      );
       editor()!.form!.requestSubmit();
       await waitFor(
         () => commentPosts.length === 1,
         "Explicit inline form submission did not reach intercepted transport",
       );
-      if (
-        commentPosts[0].expectedHeadSha !== core.headSha ||
-        typeof commentPosts[0].draftKey !== "string" ||
-        commentPosts[0].line !== line ||
-        commentPosts[0].filePath !== file.name
-      )
-        throw new Error("Inline submission lost validated coordinates/provenance");
-      passed++;
+      check(
+        !(
+          commentPosts[0].expectedHeadSha !== core.headSha ||
+          typeof commentPosts[0].draftKey !== "string" ||
+          commentPosts[0].line !== line ||
+          commentPosts[0].filePath !== file.name
+        ),
+        "Inline submission lost validated coordinates/provenance",
+      );
       await waitFor(() => !editor(), "Durably journaled editor did not close");
       // Same message IDs, changed origin: this must invalidate annotations, not merge cached PR-wide findings.
       for (const message of snapshot.messages)
@@ -788,11 +778,10 @@ export async function testAppAnnotationNavigationInBrowser(
         () => !inlineCard(),
         "Historical-only transcript left stale current annotations in DiffViewer",
       );
-      if (queryClient.getQueryData<unknown[]>(queryKeys.local.annotations(prUrl))?.length)
-        throw new Error(
-          "Empty revision-filtered transcript failed to replace persisted annotation cache",
-        );
-      passed++;
+      check(
+        !queryClient.getQueryData<unknown[]>(queryKeys.local.annotations(prUrl))?.length,
+        "Empty revision-filtered transcript failed to replace persisted annotation cache",
+      );
       const body = buttonFor("current-visible")!
         .closest(".my-5")!
         .querySelector<HTMLElement>(".whitespace-pre-wrap")!;
@@ -804,13 +793,12 @@ export async function testAppAnnotationNavigationInBrowser(
             ?.textContent?.includes("historical"),
         "Historical transcript action did not explicitly reject current-line prefill",
       );
-      if (editor() || commentPosts.length !== 1 || writes)
-        throw new Error(
-          "Historical inline/transcript transition created an unsafe draft or mutation",
-        );
-      passed++;
+      check(
+        !(editor() || commentPosts.length !== 1 || writes),
+        "Historical inline/transcript transition created an unsafe draft or mutation",
+      );
       return {
-        passed,
+        ...result(),
         interceptedExplicitPosts: commentPosts.length,
         actualPosts: 0,
         modelCalls: writes,
@@ -821,8 +809,10 @@ export async function testAppAnnotationNavigationInBrowser(
       const assertDiff = async (button: HTMLElement, label: string, targetLine = line) => {
         button.click();
         await new Promise(requestAnimationFrame);
-        if (document.querySelector("dialog[open]"))
-          throw new Error(`${label} opened a modal for current visible source`);
+        check(
+          !document.querySelector("dialog[open]"),
+          `${label} opened a modal for current visible source`,
+        );
         await waitFor(
           () =>
             !!document
@@ -831,11 +821,12 @@ export async function testAppAnnotationNavigationInBrowser(
               ?.shadowRoot?.querySelector(`[data-line="${targetLine}"][data-selected-line]`),
           `${label} did not focus code`,
         );
-        if (
-          document.querySelectorAll('form[aria-label="New inline comment"]').length !== noComments
-        )
-          throw new Error(`${label} incorrectly opened finding-prefill flow`);
-        passed++;
+        check(
+          !(
+            document.querySelectorAll('form[aria-label="New inline comment"]').length !== noComments
+          ),
+          `${label} incorrectly opened finding-prefill flow`,
+        );
       };
       const currentGroup = Array.from(
         document.querySelectorAll<HTMLElement>("#chat-panel .wrap-break-word"),
@@ -902,7 +893,6 @@ export async function testAppAnnotationNavigationInBrowser(
         "Unresolved source links must explain unsafe paths",
       );
       document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')!.click();
-      passed++;
       const selectionCard = (label: string) =>
         Array.from(
           document.querySelectorAll<HTMLElement>('[aria-label="Question about selected code"]'),
@@ -919,14 +909,15 @@ export async function testAppAnnotationNavigationInBrowser(
           ),
         "Previous-version selection link lost side/old line",
       );
-      if (
-        !document
-          .querySelector('[data-inline-source][data-source-side="LEFT"]')
-          ?.textContent?.includes("old version selection fixture") ||
-        document.querySelectorAll('form[aria-label="New inline comment"]').length !== noComments
-      )
-        throw new Error("Previous selection must show exact captured old text without prefill");
-      passed++;
+      check(
+        !(
+          !document
+            .querySelector('[data-inline-source][data-source-side="LEFT"]')
+            ?.textContent?.includes("old version selection fixture") ||
+          document.querySelectorAll('form[aria-label="New inline comment"]').length !== noComments
+        ),
+        "Previous selection must show exact captured old text without prefill",
+      );
       document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')!.click();
       const historicalGroup = Array.from(
         document.querySelectorAll<HTMLElement>("#chat-panel .wrap-break-word"),
@@ -940,7 +931,6 @@ export async function testAppAnnotationNavigationInBrowser(
         "Historical code link lost source revision",
       );
       document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')!.click();
-      passed++;
       const input = document.querySelector<HTMLTextAreaElement>(
         '[aria-label="Message review assistant"]',
       )!;
@@ -995,9 +985,10 @@ export async function testAppAnnotationNavigationInBrowser(
         }),
       );
       await new Promise(requestAnimationFrame);
-      if (writes !== 1 || input.value !== "Keep shortcut-excluded draft" || commentPosts.length)
-        throw new Error("Chat shortcut exclusions or navigation/prefill distinction regressed");
-      passed++;
+      check(
+        !(writes !== 1 || input.value !== "Keep shortcut-excluded draft" || commentPosts.length),
+        "Chat shortcut exclusions or navigation/prefill distinction regressed",
+      );
       input.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
@@ -1005,9 +996,8 @@ export async function testAppAnnotationNavigationInBrowser(
         () => writes === 2 && !input.disabled,
         "Ordinary Enter-to-send must remain a native MessageForm submission",
       );
-      passed++;
       return {
-        passed,
+        ...result(),
         chain: "markdown/FileLink/SelectionQuestionMessage → ChatPanel → App → correct source side",
         interceptedChatSubmissions: writes,
         paidModelCalls: 0,
@@ -1038,17 +1028,14 @@ export async function testAppAnnotationNavigationInBrowser(
         severity: "critical",
         message: "navigation-fixture-current-visible",
       });
-      if (nativeEditor()!.value !== expected || document.querySelector("dialog[open]"))
-        throw new Error(
-          "Finding prefill must contain full path/body at current line without a modal",
-        );
-      passed++;
-      if (document.activeElement !== nativeEditor())
-        await waitFor(
-          () => document.activeElement === nativeEditor(),
-          "Inline comment textarea must receive focus",
-        );
-      passed++;
+      check(
+        !(nativeEditor()!.value !== expected || document.querySelector("dialog[open]")),
+        "Finding prefill must contain full path/body at current line without a modal",
+      );
+      await waitFor(
+        () => document.activeElement === nativeEditor(),
+        "Inline comment textarea must receive focus",
+      );
       nativeEditor()!.value = "User-edited finding draft";
       nativeEditor()!.dispatchEvent(new InputEvent("input", { bubbles: true }));
       bodyClick("current-unchanged");
@@ -1064,22 +1051,24 @@ export async function testAppAnnotationNavigationInBrowser(
         () => inline().getAttribute("data-source-ready") === "true",
         "Pinned inline source did not validate",
       );
-      if (
-        inline().getAttribute("data-file") !== file.name ||
-        inline().getAttribute("data-line") !== "1" ||
-        inline().getAttribute("data-side") !== "RIGHT" ||
-        document.querySelector("dialog[open]")
-      )
-        throw new Error("Unchanged prefill location/side must be exact and non-modal");
-      passed++;
+      check(
+        !(
+          inline().getAttribute("data-file") !== file.name ||
+          inline().getAttribute("data-line") !== "1" ||
+          inline().getAttribute("data-side") !== "RIGHT" ||
+          document.querySelector("dialog[open]")
+        ),
+        "Unchanged prefill location/side must be exact and non-modal",
+      );
       const inlineEditor = inline().querySelector<HTMLTextAreaElement>("textarea")!;
       inlineEditor.value = "User-edited unchanged draft";
       inlineEditor.dispatchEvent(new InputEvent("input", { bubbles: true }));
       bodyClick("current-visible");
       await waitFor(() => !!nativeEditor(), "Native editor missing after switching finding");
-      if (nativeEditor()!.value !== "User-edited finding draft")
-        throw new Error("Switching findings destroyed native draft");
-      passed++;
+      check(
+        nativeEditor()!.value === "User-edited finding draft",
+        "Switching findings destroyed native draft",
+      );
       const originalCopy = navigator.clipboard.writeText;
       let copies = 0;
       navigator.clipboard.writeText = async () => {
@@ -1094,38 +1083,38 @@ export async function testAppAnnotationNavigationInBrowser(
       } finally {
         navigator.clipboard.writeText = originalCopy;
       }
-      if (
-        copies !== 1 ||
-        document
-          .querySelector("[data-finding-comment-notice]")
-          ?.textContent?.includes("historical") ||
-        nativeEditor()!.value !== "User-edited finding draft"
-      )
-        throw new Error("Copy bubbled into finding-prefill action");
-      passed++;
+      check(
+        !(
+          copies !== 1 ||
+          document
+            .querySelector("[data-finding-comment-notice]")
+            ?.textContent?.includes("historical") ||
+          nativeEditor()!.value !== "User-edited finding draft"
+        ),
+        "Copy bubbled into finding-prefill action",
+      );
       bodyClick("current-unchanged");
       await waitFor(
         () => !!document.querySelector("[data-inline-finding-comment] textarea"),
         "Inline editor missing on return",
       );
-      if (
-        inline().querySelector<HTMLTextAreaElement>("textarea")!.value !==
-        "User-edited unchanged draft"
-      )
-        throw new Error("Switching findings destroyed unchanged draft");
-      passed++;
+      check(
+        !(
+          inline().querySelector<HTMLTextAreaElement>("textarea")!.value !==
+          "User-edited unchanged draft"
+        ),
+        "Switching findings destroyed unchanged draft",
+      );
       bodyClick("historical-visible");
       await new Promise(requestAnimationFrame);
-      if (
-        !document
-          .querySelector("[data-finding-comment-notice]")
-          ?.textContent?.includes("historical") ||
-        document.querySelector("dialog[open]")
-      )
-        throw new Error(
-          "Historical finding must be explicitly blocked, not mapped to a current-line editor/modal",
-        );
-      passed++;
+      check(
+        !(
+          !document
+            .querySelector("[data-finding-comment-notice]")
+            ?.textContent?.includes("historical") || document.querySelector("dialog[open]")
+        ),
+        "Historical finding must be explicitly blocked, not mapped to a current-line editor/modal",
+      );
       bodyClick("unavailable-file");
       await waitFor(
         () =>
@@ -1140,10 +1129,8 @@ export async function testAppAnnotationNavigationInBrowser(
             ?.getAttribute("data-source-ready") === "true",
         "Full-file source must validate before enabling submission",
       );
-      passed++;
-      if (writes) throw new Error("Finding actions auto-published");
-      if (commentPosts.length)
-        throw new Error("Finding actions published without explicit submission");
+      check(!writes, "Finding actions auto-published");
+      check(!commentPosts.length, "Finding actions published without explicit submission");
       bodyClick("current-visible");
       await waitFor(() => !!nativeEditor(), "Editor missing for explicit-submit transport test");
       nativeEditor()!.form!.requestSubmit();
@@ -1152,15 +1139,17 @@ export async function testAppAnnotationNavigationInBrowser(
         "Explicit comment submission did not reach guarded transport",
       );
       const post = commentPosts[0];
-      if (
-        post.filePath !== file.name ||
-        typeof post.draftKey !== "string" ||
-        post.line !== line ||
-        post.side !== "RIGHT" ||
-        post.body !== "User-edited finding draft" ||
-        post.expectedHeadSha !== core.headSha
-      )
-        throw new Error("Comment transport lost full path/line/side/body/revision");
+      check(
+        !(
+          post.filePath !== file.name ||
+          typeof post.draftKey !== "string" ||
+          post.line !== line ||
+          post.side !== "RIGHT" ||
+          post.body !== "User-edited finding draft" ||
+          post.expectedHeadSha !== core.headSha
+        ),
+        "Comment transport lost full path/line/side/body/revision",
+      );
       document.querySelector<HTMLButtonElement>('button[aria-label="GitHub queue"]')?.click();
       await waitFor(
         () => !!document.querySelector("[data-github-queue-action] > summary"),
@@ -1174,15 +1163,14 @@ export async function testAppAnnotationNavigationInBrowser(
             ?.textContent?.includes("fixture comment rejected"),
         "Rejected admission must retain a visible outbox error",
       );
-      if (
-        !document
+      check(
+        !!document
           .querySelector("[popover]:popover-open [data-operation-id]")
-          ?.textContent?.includes("User-edited finding draft")
-      )
-        throw new Error("Rejected admission dropped journaled content");
-      passed++;
+          ?.textContent?.includes("User-edited finding draft"),
+        "Rejected admission dropped journaled content",
+      );
       return {
-        passed,
+        ...result(),
         chain: "finding body → ChatPanel → App → inline PR comment",
         autoPublishes: 0,
         interceptedExplicitPosts: commentPosts.length,
@@ -1204,10 +1192,10 @@ export async function testAppAnnotationNavigationInBrowser(
       buttonFor(fixture.label)!.click();
       if (fixture.expected === "diff" || expandedCurrent) {
         await new Promise(requestAnimationFrame);
-        if (document.querySelector("dialog[open]"))
-          throw new Error(
-            "Current-revision visible annotation opened a source modal instead of focusing the diff",
-          );
+        check(
+          !document.querySelector("dialog[open]"),
+          "Current-revision visible annotation opened a source modal instead of focusing the diff",
+        );
         await waitFor(
           () =>
             !!document
@@ -1216,10 +1204,10 @@ export async function testAppAnnotationNavigationInBrowser(
               ?.shadowRoot?.querySelector(`[data-line="${fixture.line}"][data-selected-line]`),
           "Real FileDiffView did not focus the current annotation row",
         );
-        if (document.querySelector("[data-inline-source]"))
-          throw new Error(
-            "Verified current visible source should focus the actual diff rather than keep an inline fallback",
-          );
+        check(
+          !document.querySelector("[data-inline-source]"),
+          "Verified current visible source should focus the actual diff rather than keep an inline fallback",
+        );
       } else {
         await waitFor(
           () => !!document.querySelector('[data-inline-source][data-source-ready="true"]'),
@@ -1231,11 +1219,10 @@ export async function testAppAnnotationNavigationInBrowser(
         );
         document.querySelector<HTMLButtonElement>('[aria-label="Close inline source"]')!.click();
       }
-      passed++;
     }
-    if (writes) throw new Error("Unexpected model submission");
+    check(!writes, "Unexpected model submission");
     return {
-      passed,
+      ...result(),
       chain: "AnnotationBlock → ChatPanel → App → FileDiffView/InlineSourceView",
       sourceReads: sourceReads.length,
       modelCalls: writes,

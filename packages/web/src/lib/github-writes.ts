@@ -1,16 +1,11 @@
 import { createSignal } from "solid-js";
 
-import {
-  isGithubActor,
-  isGithubPrScope,
-  type GithubActor,
-  type GithubPrScope,
-  type GithubWriteAction,
-} from "@better-review/shared";
+import { isGithubActor, type GithubActor, type GithubWriteAction } from "@better-review/shared";
 
 import { configureGithubEditorService } from "./github-editor-service";
 import { createGithubOutbox } from "./github-outbox";
 import { createIndexedDbGithubJournal } from "./github-outbox-journal";
+import { githubPrScope } from "./github-pr-scope";
 import { getGithubSyncTimeoutMs } from "./github-queue-settings";
 import { trpc } from "./trpc";
 
@@ -26,24 +21,7 @@ try {
 const [currentGithubActor, setCurrentGithubActor] = createSignal(actor);
 export { currentGithubActor };
 
-export function githubPrScope(url: string): GithubPrScope {
-  const parsed = new URL(url);
-  const match = parsed.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/);
-  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com" || !match)
-    throw new Error("Invalid GitHub PR URL");
-  const owner = match[1]!.toLowerCase(),
-    repo = match[2]!.toLowerCase(),
-    number = Number(match[3]);
-  const scope: GithubPrScope = {
-    host: "github.com",
-    owner,
-    repo,
-    number,
-    url: `https://github.com/${owner}/${repo}/pull/${number}`,
-  };
-  if (!isGithubPrScope(scope)) throw new Error("Invalid GitHub PR scope");
-  return scope;
-}
+export { githubPrScope };
 
 export const githubJournal = createIndexedDbGithubJournal();
 export const githubWrites = createGithubOutbox({

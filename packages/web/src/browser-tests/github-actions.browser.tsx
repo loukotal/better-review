@@ -7,6 +7,7 @@ import {
   refreshGithubActor,
 } from "../lib/github-writes";
 import { api, queryClient, queryKeys } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 declare global {
@@ -17,16 +18,7 @@ declare global {
 
 /** Actual App buttons → IndexedDB → RPC → SQLite worker → production HTTP adapter. */
 export async function testAppGithubDeleteResolveInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let frame = 0; frame < 180 && !predicate(); frame++)
-      await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(3000);
   const url = "https://github.com/browser-fixture/isolated/pull/1";
   const scope = githubPrScope(url);
   const comment: PRComment = {
@@ -403,5 +395,5 @@ export async function testAppGithubDeleteResolveInBrowser() {
     listRefreshes === beforeToggles.listRefreshes,
     "Comment creation/deletion forced a full PR-list refresh",
   );
-  return { passed, toggleRefreshes };
+  return { ...result(), toggleRefreshes };
 }

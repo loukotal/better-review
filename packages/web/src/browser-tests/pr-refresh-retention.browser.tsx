@@ -2,6 +2,7 @@ import type { PrDetail } from "@better-review/shared";
 
 import { githubPrScope, githubWrites, refreshGithubActor } from "../lib/github-writes";
 import { queryClient, queryKeys } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
@@ -24,20 +25,13 @@ function fixture(): PrDetail {
   };
   return detail;
 }
-function check(value: unknown, message: string) {
-  if (!value) throw new Error(message);
-}
-async function wait(test: () => boolean, message: string) {
-  const until = performance.now() + 5000;
-  while (!test() && performance.now() < until) await new Promise(requestAnimationFrame);
-  check(test(), message);
-}
 const refresh = () =>
   [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (entry) => entry.textContent?.trim() === "Refresh checks",
   )!;
 
 export async function testPrCachedChecksSurviveHeldReadAndNoopRefreshInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const detail = fixture();
   queryClient.setQueryData(queryKeys.pr.detail(url), detail, { updatedAt: Date.now() - 600_000 });
   let release!: (value: PrDetail) => void;
@@ -104,10 +98,11 @@ export async function testPrCachedChecksSurviveHeldReadAndNoopRefreshInBrowser()
     reads === 1 && refreshes === 3 && document.querySelector("li[data-check-kind]") === row,
     "Identity/outbox/focus updates refetched or remounted stable detail",
   );
-  return { passed: 6 };
+  return result();
 }
 
 export async function testPrPartialReadFailureKeepsKnownChecksButNewHeadClearsThemInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const original = fixture();
   let next = original;
   await mountAppFixture({
@@ -149,5 +144,5 @@ export async function testPrPartialReadFailureKeepsKnownChecksButNewHeadClearsTh
     !document.body.textContent?.includes("Stable visible check"),
     "Old-head checks leaked into a new PR head",
   );
-  return { passed: 3 };
+  return result();
 }

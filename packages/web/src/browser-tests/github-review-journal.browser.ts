@@ -4,14 +4,11 @@ import type { GithubOutboxOperation } from "@better-review/shared";
 import { createGithubOutbox, type GithubOutboxTransport } from "../lib/github-outbox";
 import { createIndexedDbGithubJournal } from "../lib/github-outbox-journal";
 import { createGithubOutboxProjection } from "../lib/github-outbox-projection";
+import { createAssertions } from "./assertions";
 
 /** Actual IndexedDB close/reopen; transport is an isolated fixture, never GitHub. */
 export async function testReviewJournalInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, wait, result } = createAssertions(2000);
   const scope = {
     host: "github.com",
     owner: "test",
@@ -331,12 +328,10 @@ export async function testReviewJournalInBrowser() {
   });
   try {
     client.startRecovery(); // app open on list page; no PR activation at all
-    const deadline = Date.now() + 2_000;
-    while (!client.getState(scope).operations[0]?.backendOwned) {
-      if (Date.now() > deadline)
-        throw new Error("Global IndexedDB recovery did not run on list page");
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await wait(
+      () => !!client.getState(scope).operations[0]?.backendOwned,
+      "Global IndexedDB recovery did not run on list page",
+    );
     check(globalAdmissions === 2, "Global recovery did not deduplicate lost acknowledgement");
     check(globalHeartbeats === 0, "Global recovery fabricated an active PR lease");
     check(client.getStates()[0]?.pendingCount === 1, "Global pending state missing on list page");
@@ -348,5 +343,5 @@ export async function testReviewJournalInBrowser() {
       request.onerror = () => reject(request.error);
     });
   }
-  return { passed };
+  return result();
 }

@@ -7,6 +7,7 @@ import {
   refreshGithubActor,
 } from "../lib/github-writes";
 import { api } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 /** Runner performs an actual page reload between phases, retaining only browser storage. */
@@ -22,15 +23,7 @@ export async function testAppGithubDraftIntentReloadInBrowser(phase = "before") 
     updated_at: "2026-01-01T00:00:00Z",
     canEdit: true,
   };
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
   await mountAppFixture({
     extras: { comments: [], issueComments: [remote], status: null },
     procedures: {
@@ -96,7 +89,7 @@ export async function testAppGithubDraftIntentReloadInBrowser(phase = "before") 
         body: saved.command.action,
       }),
     );
-    return { passed };
+    return result();
   }
   const proof = JSON.parse(sessionStorage.getItem("github-intent-reload-proof")!);
   await open("Reply");
@@ -164,21 +157,13 @@ export async function testAppGithubDraftIntentReloadInBrowser(phase = "before") 
     "Submitting edit cleared the independent reply intent",
   );
   githubWrites.activate();
-  return { passed };
+  return result();
 }
 
 export async function testAppGithubComposerIntentCoverageInBrowser() {
   const url = "https://github.com/browser-fixture/isolated/pull/1",
     scope = githubPrScope(url);
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
   await mountAppFixture({
     procedures: {
       "githubOutbox.enqueue": () => {
@@ -253,5 +238,5 @@ export async function testAppGithubComposerIntentCoverageInBrowser() {
     "Genuinely repeated new comments did not get separate admissions",
   );
   githubWrites.activate();
-  return { passed };
+  return result();
 }

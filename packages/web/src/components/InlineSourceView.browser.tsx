@@ -3,6 +3,7 @@ import { render } from "solid-js/web";
 
 import type { ResolvedSource } from "@better-review/shared";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { sourceRequest, sourceWindow } from "../browser-tests/source-fixture";
 import type { SourceTarget } from "../lib/annotation-navigation";
 import type { SelectedSource } from "../lib/ask-ai-selection";
@@ -10,6 +11,7 @@ import { InlineSourceView } from "./InlineSourceView";
 
 /** Read-only inline source selection preserves source text/ref; no publishing or model transport. */
 export async function testInlineSourceViewInBrowser() {
+  const { check, result } = createAssertions(3000);
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;inset:10px;overflow:auto;background:#111;z-index:9999";
   document.body.append(host);
@@ -44,13 +46,8 @@ export async function testInlineSourceViewInBrowser() {
   const settle = async () => {
     for (let i = 0; i < 8; i++) await new Promise(requestAnimationFrame);
   };
-  let dispose = () => {},
-    passed = 0;
+  let dispose = () => {};
   let question: { selection: SelectedSource; ref: string } | undefined;
-  const check = (ok: unknown, message: string) => {
-    if (!ok) throw new Error(message);
-    passed++;
-  };
   try {
     dispose = render(
       () => (
@@ -118,7 +115,7 @@ export async function testInlineSourceViewInBrowser() {
         !host.textContent?.includes("Showing current fallback code"),
       "Captured source must not be mislabeled as the current fallback file",
     );
-    return { passed, posts: 0, modelCalls: 0 };
+    return { ...result(), posts: 0, modelCalls: 0 };
   } finally {
     dispose();
     host.remove();
@@ -128,6 +125,7 @@ export async function testInlineSourceViewInBrowser() {
 }
 
 export async function testInlineSourceAmbiguityInBrowser() {
+  const { check, result } = createAssertions(3000);
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;inset:10px;overflow:auto;background:#111;z-index:9999";
   document.body.append(host);
@@ -173,12 +171,7 @@ export async function testInlineSourceAmbiguityInBrowser() {
   const settle = async () => {
     for (let i = 0; i < 10; i++) await new Promise(requestAnimationFrame);
   };
-  let dispose = () => {},
-    passed = 0;
-  const check = (ok: unknown, message: string) => {
-    if (!ok) throw new Error(message);
-    passed++;
-  };
+  let dispose = () => {};
   try {
     for (const { captured, staleDirectory } of [
       { captured: false, staleDirectory: false },
@@ -224,8 +217,8 @@ export async function testInlineSourceAmbiguityInBrowser() {
       const choice = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
         (button) => button.textContent === (staleDirectory ? "a/config.ts" : "b/file.ts"),
       );
-      if (!choice) throw new Error(`Ambiguity fixture did not load: ${host.textContent}`);
-      choice.click();
+      check(choice, `Ambiguity fixture did not load: ${host.textContent}`);
+      choice!.click();
       await settle();
       check(
         target().ref === originalRef && target().side === originalSide,
@@ -278,7 +271,7 @@ export async function testInlineSourceAmbiguityInBrowser() {
       host.replaceChildren();
       getSelection()?.removeAllRanges();
     }
-    return { passed, posts: 0, modelCalls: 0 };
+    return { ...result(), posts: 0, modelCalls: 0 };
   } finally {
     dispose();
     host.remove();
@@ -288,6 +281,7 @@ export async function testInlineSourceAmbiguityInBrowser() {
 }
 
 export async function testInlineSourceRetryInBrowser() {
+  const { check, result } = createAssertions(3000);
   const host = document.createElement("div");
   document.body.append(host);
   const originalFetch = window.fetch;
@@ -346,25 +340,25 @@ export async function testInlineSourceRetryInBrowser() {
   );
   try {
     await settle();
-    if (
-      !host
+    check(
+      host
         .querySelector('[role="alert"]')
-        ?.textContent?.includes("Source repository read failed") ||
-      host.textContent?.includes("No source matching")
-    )
-      throw new Error("Repository failure was hidden as missing source");
+        ?.textContent?.includes("Source repository read failed") &&
+        !host.textContent?.includes("No source matching"),
+      "Repository failure was hidden as missing source",
+    );
     Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
       .find((button) => button.textContent === "Retry")!
       .click();
     await settle();
-    if (
-      reads !== 2 ||
-      host.querySelector("code")?.textContent !== "prepared source" ||
-      host.querySelector("[data-source-ref]")?.getAttribute("data-source-ref") !== head ||
-      host.querySelector("form,dialog")
-    )
-      throw new Error("Retry did not replace repository error with read-only prepared source");
-    return { passed: 2, posts: 0, modelCalls: 0 };
+    check(
+      reads === 2 &&
+        host.querySelector("code")?.textContent === "prepared source" &&
+        host.querySelector("[data-source-ref]")?.getAttribute("data-source-ref") === head &&
+        !host.querySelector("form,dialog"),
+      "Retry did not replace repository error with read-only prepared source",
+    );
+    return { ...result(), posts: 0, modelCalls: 0 };
   } finally {
     dispose();
     host.remove();

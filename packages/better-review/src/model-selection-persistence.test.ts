@@ -11,8 +11,8 @@ test("explicit selection survives server restart instead of reverting to the Cod
   const authPath = path.join(directory, "auth.json");
   await writeFile(authPath, JSON.stringify({ "openai-codex": { type: "api", key: "fixture" } }));
   const env = {
-    ...process.env,
-    OPENAI_API_KEY: "",
+    PATH: process.env.PATH,
+    HOME: directory,
     BETTER_REVIEW_MODEL: "",
     BETTER_REVIEW_PI_AUTH_PATH: authPath,
     BETTER_REVIEW_OPENCODE_AUTH_PATH: path.join(directory, "missing-auth.json"),
@@ -71,6 +71,11 @@ test("explicit selection survives server restart instead of reverting to the Cod
   );
   run(
     `try { setSelectedModel({providerId: "openai", modelId: "gpt-5.5-pro"}); throw new Error("accepted"); } catch (error) { if (!error.message.includes("requires OPENAI_API_KEY")) throw error; } console.log(JSON.stringify(getSelectedModel()))`,
+  );
+  assert.equal(
+    await readFile(env.BETTER_REVIEW_MODEL_SELECTION_PATH, "utf8"),
+    saved,
+    "rejecting an unroutable model must not change persisted selection",
   );
   assert.equal(run("console.log(JSON.stringify(getSelectedModel()))").modelId, "gpt-6.1-sol");
 

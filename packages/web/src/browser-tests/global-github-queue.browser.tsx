@@ -11,19 +11,12 @@ import {
   queueGithubWrite,
   refreshGithubActor,
 } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 const url = "https://github.com/browser-fixture/isolated/pull/1";
-async function wait(predicate: () => boolean, message: string) {
-  for (let i = 0; i < 240 && !predicate(); i++) await new Promise(requestAnimationFrame);
-  if (!predicate()) throw new Error(message);
-}
 async function exercise(kind: "approve" | "issue-comment", failed = false) {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, wait, result } = createAssertions(4000);
   const scope = githubPrScope(url);
   let release!: () => void;
   const admission = new Promise<void>((resolve) => {
@@ -144,8 +137,8 @@ async function exercise(kind: "approve" | "issue-comment", failed = false) {
     const toggle = [...document.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Needs review"),
     );
-    if (!toggle) throw new Error("Needs-review filter missing");
-    toggle.click();
+    check(toggle, "Needs-review filter missing");
+    toggle!.click();
     await wait(
       () =>
         !!document.querySelector(
@@ -153,7 +146,6 @@ async function exercise(kind: "approve" | "issue-comment", failed = false) {
         ),
       "Confirmed approval badge missing after clearing filter",
     );
-    passed += 2;
   } else if (!failed)
     await wait(() => extras > baseline, "Comment completion did not refresh affected extras");
   await new Promise((resolve) => setTimeout(resolve, 150));
@@ -167,7 +159,7 @@ async function exercise(kind: "approve" | "issue-comment", failed = false) {
       ),
       "Failed approval falsely approved row",
     );
-  return { passed };
+  return result();
 }
 export function testGlobalQueueApprovalCompletesAfterLeavingBeforeAckInBrowser() {
   return exercise("approve");

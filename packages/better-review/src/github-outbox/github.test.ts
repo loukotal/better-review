@@ -509,17 +509,25 @@ for (const kind of ["request-changes", "review-comment"] as const) {
       author: actor,
       submittedAt: createdAt,
     };
-    for (const correct of [true, false]) {
+    for (const change of [
+      {},
+      { state: "APPROVED" },
+      { commit_id: otherSha },
+      { body: wire("different") },
+      { body: `${marker}\n\nhello` },
+      { body: `hello${marker}` },
+      { user: { id: 99, login: "other" } },
+    ]) {
       const f = fixture([
         user(),
         {
           path: "/repos/acme/repo/pulls/3/reviews/51",
-          data: review(correct ? {} : { state: "APPROVED" }),
+          data: review(change),
         },
       ]);
       assert.equal(
         (await f.adapter.verifyApplied(op(), candidate)).outcome,
-        correct ? "matched" : "conflict",
+        Object.keys(change).length ? "conflict" : "matched",
       );
       f.done();
     }
@@ -1299,6 +1307,147 @@ const candidateInline = (): GithubRemoteResult => ({
   location: { path: "untrusted.ts", side: "LEFT", line: 90, originalLine: 90, commitSha: otherSha },
   threadId: "FORGED_THREAD",
 });
+
+for (const kind of [
+  "approve",
+  "request-changes",
+  "review-comment",
+  "issue-comment",
+  "inline-comment",
+  "reply",
+] as const) {
+  test(`${kind}: candidate ID must equal fresh server ID; kind and fresh viewer gate candidate reads`, async () => {
+    let action: GithubWriteAction;
+    let candidate: GithubRemoteResult;
+    let data: Record<string, unknown>;
+    let path: string;
+    const parents: Step[] = [];
+    switch (kind) {
+      case "approve":
+      case "request-changes":
+      case "review-comment": {
+        action = { kind, body: "hello", expectedHeadSha: sha };
+        const state =
+          kind === "approve"
+            ? "APPROVED"
+            : kind === "request-changes"
+              ? "CHANGES_REQUESTED"
+              : "COMMENTED";
+        candidate =
+          kind === "approve"
+            ? { kind: "approval", id: 51, url: scope.url, commitSha: sha }
+            : {
+                kind: "review",
+                id: 51,
+                url: scope.url,
+                state: kind === "request-changes" ? "CHANGES_REQUESTED" : "COMMENTED",
+                commitSha: sha,
+                body: "hello",
+                author: actor,
+                submittedAt: createdAt,
+              };
+        data = {
+          id: 51,
+          html_url: scope.url,
+          body: wire(),
+          user: actor,
+          state,
+          commit_id: sha,
+          submitted_at: createdAt,
+        };
+        path = "/repos/acme/repo/pulls/3/reviews/51";
+        break;
+      }
+      case "issue-comment":
+        action = { kind, body: "hello" };
+        candidate = candidateIssue();
+        data = issue();
+        path = "/repos/acme/repo/issues/comments/21";
+        break;
+      case "inline-comment":
+        action = {
+          kind,
+          body: "hello",
+          expectedHeadSha: sha,
+          anchor: { path: "src/a.ts", side: "RIGHT", line: 5 },
+        };
+        candidate = candidateInline();
+        data = inline();
+        path = "/repos/acme/repo/pulls/comments/22";
+        break;
+      case "reply":
+        action = {
+          kind,
+          body: "hello",
+          target: { source: "remote", kind: "review-comment", id: 23 },
+        };
+        candidate = candidateInline();
+        data = inline(wire(), { in_reply_to_id: 23 });
+        path = "/repos/acme/repo/pulls/comments/22";
+        parents.push({
+          path: "/repos/acme/repo/pulls/comments/23",
+          data: inline("parent", { id: 23 }),
+        });
+        break;
+    }
+    const op = operation(action);
+    // Otherwise matching evidence must not confirm a different candidate ID.
+    const mismatch = fixture([user(), ...parents, { path, data: { ...data, id: 999 } }]);
+    assert.equal((await mismatch.adapter.verifyApplied(op, candidate)).outcome, "conflict");
+    assert.equal(mismatch.calls.length, 2 + parents.length);
+    assert.ok(
+      mismatch.calls.every(
+        (call) => new Headers(call.init.headers).get("authorization") === "Bearer secret-token",
+      ),
+    );
+    mismatch.done();
+
+    // Existing issue-comment tests already cover both early gates.
+    if (kind !== "issue-comment") {
+      const wrongKind = fixture([user()]);
+      assert.equal(
+        (await wrongKind.adapter.verifyApplied(op, candidateIssue())).outcome,
+        "conflict",
+      );
+      assert.equal(wrongKind.calls.length, 1);
+      wrongKind.done();
+      const wrongViewer = fixture([{ path: "/user", data: { id: 8, login: "alice" } }]);
+      assert.equal((await wrongViewer.adapter.verifyApplied(op, candidate)).outcome, "auth");
+      assert.equal(wrongViewer.calls.length, 1);
+      wrongViewer.done();
+    }
+
+    if (kind === "approve") {
+      // Approval keeps clean-body matching; submitted reviews require exact wire bodies.
+      const looseBody = fixture([user(), { path, data: { ...data, body: `hello${marker}` } }]);
+      assert.equal((await looseBody.adapter.verifyApplied(op, candidate)).outcome, "matched");
+      looseBody.done();
+    }
+    // Review-family and issue-comment evidence already has focused verification tests.
+    const changes: Record<string, unknown>[] =
+      kind === "approve"
+        ? [
+            { body: wire("different") },
+            { commit_id: otherSha },
+            { user: { id: 8, login: "alice" } },
+          ]
+        : kind === "inline-comment"
+          ? [{ body: wire("different") }, { user: { id: 8, login: "alice" } }]
+          : kind === "reply"
+            ? [
+                { body: wire("different") },
+                { commit_id: otherSha },
+                { user: { id: 8, login: "alice" } },
+              ]
+            : [];
+    for (const change of changes) {
+      const f = fixture([user(), ...parents, { path, data: { ...data, ...change } }]);
+      assert.equal((await f.adapter.verifyApplied(op, candidate)).outcome, "conflict");
+      assert.ok(f.calls.every((call) => call.init.method === "GET"));
+      f.done();
+    }
+  });
+}
 
 test("verifyApplied treats candidate as ID only and returns fresh clean server evidence", async () => {
   const f = fixture([user(), { path: "/repos/acme/repo/issues/comments/21", data: issue() }]);

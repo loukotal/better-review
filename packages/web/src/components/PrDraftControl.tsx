@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, on, Show } from "solid-js";
 import type { PrDetail } from "@better-review/shared";
 
 import { Button } from "../design-system";
-import { githubDraftConfirmation } from "../lib/github-comment-views";
+import { githubConfirmationState } from "../lib/github-comment-views";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
 import { currentGithubActor, githubPrScope, queueGithubWrite } from "../lib/github-writes";
 import { GithubSyncStatus, githubSyncState } from "./GithubSyncStatus";
@@ -23,56 +23,24 @@ export function PrDraftControl(props: {
       () => setError(undefined),
     ),
   );
-  const canonicalUrl = () => githubPrScope(props.url).url;
-  const samePr = (url?: string) => {
-    try {
-      return !!url && githubPrScope(url).url === canonicalUrl();
-    } catch {
-      return false;
-    }
-  };
-  const confirmed = () => githubDraftConfirmation(canonicalUrl(), props.detail, props.operations);
-  const operations = createMemo(() =>
-    props.operations.filter(
-      (item) =>
-        item.command.scope.url === canonicalUrl() && item.command.action.kind === "set-draft",
-    ),
+  const confirmation = createMemo(() =>
+    githubConfirmationState.draft({
+      url: props.url,
+      detail: props.detail,
+      actor: currentGithubActor(),
+      operations: props.operations,
+    }),
   );
-  const pending = () =>
-    operations().filter(
-      (item) =>
-        !item.operation?.archivedAt && item.status !== "synced" && item.status !== "cancelled",
-    );
-  const metadata = () => {
-    const section = props.detail?.metadata;
-    return section?.status === "available" ? section.data : undefined;
-  };
+  const confirmed = () => confirmation().confirmed;
+  const pending = () => confirmation().pending;
+  const metadata = () => confirmation().metadata;
   const waitingForDetail = () => !!confirmed();
-  const allowed = () => {
-    const detail = props.detail,
-      caps = detail?.stageCapabilities;
-    return (
-      props.canSubmit &&
-      samePr(detail?.url) &&
-      samePr(metadata()?.url) &&
-      detail?.metadata.status === "available" &&
-      detail.metadata.complete &&
-      detail?.actor.status === "available" &&
-      detail.actor.complete &&
-      detail.actor.data.databaseId === currentGithubActor()?.id &&
-      !!currentGithubActor() &&
-      caps?.status === "available" &&
-      caps.complete &&
-      caps.data.canSetDraft &&
-      metadata()?.state === "OPEN"
-    );
-  };
+  const allowed = () => props.canSubmit && confirmation().allowed;
   const submit = async () => {
-    const meta = metadata(),
+    const action = confirmation().action,
       url = props.url;
-    if (!meta || !allowed() || saving() || pending().length || waitingForDetail()) return;
+    if (!action || !allowed() || saving() || pending().length || waitingForDetail()) return;
     // Freeze identity and desired state before any await. Never toggle remotely.
-    const action = { kind: "set-draft" as const, pullRequestId: meta.id, draft: !meta.draft };
     setSaving(true);
     setError(undefined);
     try {

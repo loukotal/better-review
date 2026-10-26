@@ -1,24 +1,20 @@
 import type { PrMergeInput } from "@better-review/shared";
 
 import { refreshPrDetail, queryClient, queryKeys } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
 const url = "https://github.com/browser-fixture/isolated/pull/1";
-function check(value: unknown, message: string) {
-  if (!value) throw new Error(message);
-}
-async function wait(test: () => boolean, message: string) {
-  const deadline = performance.now() + 5000;
-  while (!test() && performance.now() < deadline) await new Promise(requestAnimationFrame);
-  check(test(), message);
-}
-function button(label: string) {
-  const found = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+function findButton(label: string) {
+  return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (entry) => entry.textContent?.trim() === label,
   );
-  if (!found) throw new Error(`Missing button: ${label}`);
-  return found;
+}
+function button(assertions: Pick<ReturnType<typeof createAssertions>, "check">, label: string) {
+  const found = findButton(label);
+  assertions.check(found, `Missing button: ${label}`);
+  return found!;
 }
 function gate<T>() {
   let resolve!: (value: T) => void;
@@ -29,6 +25,8 @@ function gate<T>() {
 }
 
 export async function testPrDetailRejectedMergeNewAttemptInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   let detail = prDetailFixture(url);
   const commands: PrMergeInput[] = [];
   let applied = 0;
@@ -59,17 +57,22 @@ export async function testPrDetailRejectedMergeNewAttemptInBrowser() {
     () => !!document.querySelector('section[aria-label="Merge pull request"] button'),
     "Merge panel not ready",
   );
-  button("Create merge commit").click();
+  button(assertions, "Create merge commit").click();
   await wait(
     () => document.body.textContent?.includes("Preflight rejected old head") ?? false,
     "Rejection missing",
   );
   check(applied === 0, "Preflight rejection dispatched");
-  await wait(() => !button("Check outcome").disabled, "Rejected attempt refresh did not settle");
+  // Keep polling lookups uncounted; the wait counts terminal success once.
+  await wait(() => {
+    const outcome = findButton("Check outcome");
+    if (!outcome) throw new Error("Missing button: Check outcome");
+    return !outcome.disabled;
+  }, "Rejected attempt refresh did not settle");
   detail = prDetailFixture(url, "c".repeat(40));
   if (detail.actor.status === "available")
     detail.actor.data = { id: "U_new_actor", login: "new-actor" };
-  button("Refresh details").click();
+  button(assertions, "Refresh details").click();
   await wait(() => {
     const cached = queryClient.getQueryData<ReturnType<typeof prDetailFixture>>(
       queryKeys.pr.detail(url),
@@ -77,18 +80,18 @@ export async function testPrDetailRejectedMergeNewAttemptInBrowser() {
     return cached?.actor.status === "available" && cached.actor.data.id === "U_new_actor";
   }, "Fresh actor not loaded");
   check(commands.length === 1, "Refresh retried rejected attempt");
-  button("Checks").click();
+  button(assertions, "Checks").click();
   await wait(
     () => !!document.querySelector('section[aria-label="Pull request checks"]'),
     "Checks not mounted",
   );
-  button("Overview").click();
+  button(assertions, "Overview").click();
   await wait(
     () => !!document.querySelector('section[aria-label="Merge pull request"]'),
     "Overview not restored",
   );
   check(commands.length === 1, "Remount retried rejected attempt");
-  button("New merge attempt").click();
+  button(assertions, "New merge attempt").click();
   await wait(() => commands.length === 2, "Explicit new attempt did not dispatch");
   check(commands[1]!.requestId !== commands[0]!.requestId, "New attempt reused old UUID");
   check(
@@ -112,10 +115,12 @@ export async function testPrDetailRejectedMergeNewAttemptInBrowser() {
       ),
     "Uncertain attempt permits another dispatch",
   );
-  return { passed: 8 };
+  return result();
 }
 
 export async function testPrDetailHistoryRestoresEditorFocusInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   await mountAppFixture({ searchParams: { showChat: "1" } });
   await wait(
     () =>
@@ -129,9 +134,9 @@ export async function testPrDetailHistoryRestoresEditorFocusInBrowser() {
   )!;
   initialEditor.focus();
   initialEditor.setSelectionRange(0, 0);
-  button("Overview").click();
+  button(assertions, "Overview").click();
   await wait(() => !!document.querySelector("[data-pr-overview]"), "Overview missing");
-  button("Changes").click();
+  button(assertions, "Changes").click();
   await wait(
     () => !document.getElementById("chat-panel")?.closest("[inert]"),
     "Changes not active",
@@ -172,10 +177,12 @@ export async function testPrDetailHistoryRestoresEditorFocusInBrowser() {
   await new Promise(requestAnimationFrame);
   check(document.activeElement === external, "History navigation stole unrelated editor focus");
   external.remove();
-  return { passed: 3 };
+  return result();
 }
 
 export async function testPrDetailRefreshSingleFlightInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result: assertionResult } = assertions;
   const held = gate<ReturnType<typeof prDetailFixture>>();
   let reads = 0;
   let fail = false;
@@ -197,7 +204,7 @@ export async function testPrDetailRefreshSingleFlightInBrowser() {
     },
   });
   await wait(() => !!document.querySelector("[data-pr-overview] h1"), "Overview not ready");
-  for (let index = 0; index < 5; index++) button("Refresh details").click();
+  for (let index = 0; index < 5; index++) button(assertions, "Refresh details").click();
   await wait(() => reads > 0, "Refresh did not start");
   await new Promise((resolve) => setTimeout(resolve, 40));
   check(reads === 1, `Five clicks dispatched ${reads} reads`);
@@ -229,10 +236,12 @@ export async function testPrDetailRefreshSingleFlightInBrowser() {
   fail = false;
   await refreshPrDetail(url);
   check(reads === 4, "Failed refresh did not release per-PR key");
-  return { passed: 6 };
+  return assertionResult();
 }
 
 export async function testPrDetailConfirmedMergeQueuesFreshReadInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   const held = gate<ReturnType<typeof prDetailFixture>>();
   let reads = 0,
     writes = 0;
@@ -264,9 +273,9 @@ export async function testPrDetailConfirmedMergeQueuesFreshReadInBrowser() {
     () => !!document.querySelector('section[aria-label="Merge pull request"] button'),
     "Merge not ready",
   );
-  button("Refresh details").click();
+  button(assertions, "Refresh details").click();
   await wait(() => reads === 1, "Pre-write read did not start");
-  button("Create merge commit").click();
+  button(assertions, "Create merge commit").click();
   await wait(
     () => document.body.textContent?.includes("Merge confirmed") ?? false,
     "Write confirmation missing",
@@ -302,7 +311,7 @@ export async function testPrDetailConfirmedMergeQueuesFreshReadInBrowser() {
     );
     check(reads === 2 && writes === 1, "Write confirmation did not queue exactly one fresh read");
     check(!staleUi && !staleCache, "Pre-write response published after confirmed merge");
-    return { passed: 2 };
+    return result();
   } finally {
     observer.disconnect();
     unsubscribe();

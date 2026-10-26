@@ -16,9 +16,9 @@ import {
 } from "../lib/review-interactions";
 import { parseSelectionQuestionMessage } from "../lib/selection-question-message";
 import { trpc } from "../lib/trpc";
+import { createAssertions } from "./assertions";
 import {
   askSourceRows,
-  browserWait,
   sourceJson,
   sourceRequest,
   sourceWindow,
@@ -56,19 +56,9 @@ function setupHost() {
   document.body.append(host);
   return host;
 }
-function assertions() {
-  let passed = 0;
-  return {
-    check(ok: unknown, message: string) {
-      if (!ok) throw new Error(message);
-      passed++;
-    },
-    result: () => ({ passed }),
-  };
-}
-
 export async function testSourcePaginationAbsoluteSelectionInBrowser() {
-  const { check, result } = assertions();
+  const assertions = createAssertions(3000);
+  const { check, wait, result } = assertions;
   const host = setupHost(),
     originalFetch = window.fetch;
   const reads: SourceFixtureRequest[] = [];
@@ -93,7 +83,7 @@ export async function testSourcePaginationAbsoluteSelectionInBrowser() {
     host,
   );
   const pageReady = (first: number, last: number) =>
-    browserWait(
+    wait(
       () =>
         host.querySelectorAll("code").length === last - first + 1 &&
         !!host.querySelector(`[data-source-line="${first}"]`) &&
@@ -110,7 +100,7 @@ export async function testSourcePaginationAbsoluteSelectionInBrowser() {
       host.querySelector("nav")?.textContent?.includes("Lines 250–449 of 850"),
       "page summary must use absolute coordinates",
     );
-    await askSourceRows(host, 350, 351);
+    await askSourceRows(assertions, host, 350, 351);
     check(
       questions[0]?.startLine === 350 &&
         questions[0]?.endLine === 351 &&
@@ -121,7 +111,7 @@ export async function testSourcePaginationAbsoluteSelectionInBrowser() {
     );
     button(host, "Load later lines").click();
     await pageReady(450, 649);
-    await askSourceRows(host, 475, 476);
+    await askSourceRows(assertions, host, 475, 476);
     check(
       questions[1]?.startLine === 475 &&
         questions[1]?.endLine === 476 &&
@@ -138,7 +128,7 @@ export async function testSourcePaginationAbsoluteSelectionInBrowser() {
     await pageReady(250, 449);
     button(host, "Load earlier lines").click();
     await pageReady(50, 249);
-    await askSourceRows(host, 75);
+    await askSourceRows(assertions, host, 75);
     check(
       questions[2]?.startLine === 75 &&
         questions[2]?.text === "source line 75" &&
@@ -180,7 +170,8 @@ export async function testSourcePaginationAbsoluteSelectionInBrowser() {
 }
 
 export async function testSourceAbortPreservesOtherReaderInBrowser() {
-  const { check, result } = assertions();
+  const assertions = createAssertions(3000);
+  const { check, wait, result } = assertions;
   const host = setupHost(),
     originalFetch = window.fetch;
   const left = document.createElement("div"),
@@ -239,13 +230,13 @@ export async function testSourceAbortPreservesOtherReaderInBrowser() {
     right,
   );
   try {
-    await browserWait(() => pending.length === 2, "two independent source readers did not start");
+    await wait(() => pending.length === 2, "two independent source readers did not start");
     check(
       sharedLoads.size === 1,
       "both readers must be waiting on the same mocked immutable cache fill",
     );
     setCurrent({ ...target, path: "fast.ts" });
-    await browserWait(
+    await wait(
       () => !!left.querySelector('[data-source-ready="true"]'),
       "superseding source did not render",
     );
@@ -258,7 +249,7 @@ export async function testSourceAbortPreservesOtherReaderInBrowser() {
       "other reader must still be waiting on the shared fill",
     );
     pending[1].release();
-    await browserWait(
+    await wait(
       () => !!right.querySelector('[data-source-ready="true"]'),
       "other shared reader did not complete after first reader cancellation",
     );
@@ -271,7 +262,7 @@ export async function testSourceAbortPreservesOtherReaderInBrowser() {
       "other reader must retain successful source without a cancellation error",
     );
     setCurrent({ ...target, path: "close-before-resolution.ts" });
-    await browserWait(() => pending.length === 3, "closing-source request did not start");
+    await wait(() => pending.length === 3, "closing-source request did not start");
     disposeLeft();
     disposeLeft = () => {};
     check(
@@ -289,7 +280,8 @@ export async function testSourceAbortPreservesOtherReaderInBrowser() {
 }
 
 export async function testAmbiguousCandidatePaginationProvenanceInBrowser() {
-  const { check, result } = assertions();
+  const assertions = createAssertions(3000);
+  const { check, wait, result } = assertions;
   const host = setupHost(),
     originalFetch = window.fetch;
   const reads: SourceFixtureRequest[] = [];
@@ -359,7 +351,7 @@ export async function testAmbiguousCandidatePaginationProvenanceInBrowser() {
           : {}),
       });
       button(host, "src/large.ts").click();
-      await browserWait(
+      await wait(
         () => navigation.destination()?.result.status === "found",
         "candidate lookup did not resolve",
       );
@@ -376,7 +368,7 @@ export async function testAmbiguousCandidatePaginationProvenanceInBrowser() {
           "unverified fallback must not offer current-source paging as captured historical source",
         );
         await navigation.page("later");
-        await askSourceRows(host, 350, 351);
+        await askSourceRows(assertions, host, 350, 351);
         const selection = selections.at(-1)!;
         check(
           selection.revision === previous &&
@@ -387,11 +379,11 @@ export async function testAmbiguousCandidatePaginationProvenanceInBrowser() {
         );
       } else {
         button(host, "Load later lines").click();
-        await browserWait(
+        await wait(
           () => !!host.querySelector('[data-source-line="475"]'),
           "chosen candidate did not load its later page",
         );
-        await askSourceRows(host, 475, 476);
+        await askSourceRows(assertions, host, 475, 476);
         const selection = selections.at(-1)!;
         check(
           selection.revision === head &&
@@ -443,7 +435,8 @@ function interactionContext(): ReviewInteractionContext {
 }
 
 export async function testPagedQuestionDraftAndDeliveryInBrowser() {
-  const { check, result } = assertions();
+  const assertions = createAssertions(3000);
+  const { check, wait, result } = assertions;
   const host = setupHost(),
     originalFetch = window.fetch;
   const [context, setContext] = createSignal(interactionContext());
@@ -541,12 +534,12 @@ export async function testPagedQuestionDraftAndDeliveryInBrowser() {
     for (const destination of ["new", "saved"]) {
       await interactions.openSource(target);
       await interactions.source.page("later");
-      await browserWait(
+      await wait(
         () => !!host.querySelector('[data-source-line="475"]'),
         "question fixture did not page source",
       );
-      await askSourceRows(host, 475, 476);
-      await browserWait(
+      await askSourceRows(assertions, host, 475, 476);
+      await wait(
         () => !!document.querySelector('form[aria-label="Ask about selection"]'),
         "paged-source question composer did not open",
       );
@@ -573,7 +566,7 @@ export async function testPagedQuestionDraftAndDeliveryInBrowser() {
       fail = true;
       form().requestSubmit();
       form().requestSubmit();
-      await browserWait(
+      await wait(
         () => !!draft.state.error() && !draft.state.sending(),
         "ambiguous admission failure did not retain a visible question error",
       );
@@ -587,10 +580,7 @@ export async function testPagedQuestionDraftAndDeliveryInBrowser() {
         "failed send must preserve the rendered question draft",
       );
       form().requestSubmit();
-      await browserWait(
-        () => !interactions.question(),
-        "retry did not complete and dismiss question",
-      );
+      await wait(() => !interactions.question(), "retry did not complete and dismiss question");
       check(
         sends.length === initial + 2 &&
           sends[initial].key === sends[initial + 1].key &&
@@ -616,7 +606,7 @@ export async function testPagedQuestionDraftAndDeliveryInBrowser() {
       "retry and existing conversation delivery must not create duplicate sessions",
     );
     await interactions.openSource(target);
-    await askSourceRows(host, 350);
+    await askSourceRows(assertions, host, 350);
     const draft = interactions.question()!;
     draft.state.setQuestion("Retain me after revision change");
     setContext({ ...context(), scope: "different-revision", headSha: "c".repeat(40) });
@@ -643,7 +633,8 @@ export async function testPagedQuestionDraftAndDeliveryInBrowser() {
 }
 
 export async function testCurrentCommentGuardRetainsBrowserDraftInBrowser() {
-  const { check, result } = assertions();
+  const assertions = createAssertions(3000);
+  const { check, wait, result } = assertions;
   const host = setupHost(),
     originalFetch = window.fetch;
   const [context, setContext] = createSignal(interactionContext());
@@ -687,12 +678,12 @@ export async function testCurrentCommentGuardRetainsBrowserDraftInBrowser() {
   );
   try {
     interactions.prepareComment(finding, target.sessionId, head);
-    await browserWait(
+    await wait(
       () => host.querySelector('[data-source-ready="true"]') !== null,
       "verified current comment source did not load",
     );
     const entry = interactions.inlineFinding()!;
-    await browserWait(
+    await wait(
       () => !!host.querySelector("textarea:not(:disabled)"),
       "Durable inline draft did not hydrate",
     );
@@ -726,12 +717,12 @@ export async function testCurrentCommentGuardRetainsBrowserDraftInBrowser() {
       "last-moment comment guard must reject stale validated locations even if a consumer bypasses disabled UI",
     );
     setContext(interactionContext());
-    await browserWait(
+    await wait(
       () => !host.querySelector("fieldset")!.disabled,
       "restoring exact source context did not re-enable the draft",
     );
     host.querySelector("form")!.requestSubmit();
-    await browserWait(
+    await wait(
       () => posts.length === 1,
       "current validated comment did not reach local submission spy",
     );

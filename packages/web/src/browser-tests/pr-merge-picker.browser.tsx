@@ -5,16 +5,9 @@ import superjson from "superjson";
 import type { PrDetail, PrMergeInput } from "@better-review/shared";
 
 import { PrMergePanel } from "../components/PrMergePanel";
+import { createAssertions } from "./assertions";
 import { prDetailFixture } from "./pr-detail-fixture";
 
-function check(value: unknown, message: string) {
-  if (!value) throw new Error(message);
-}
-async function wait(test: () => boolean) {
-  const deadline = performance.now() + 5000;
-  while (!test() && performance.now() < deadline) await new Promise(requestAnimationFrame);
-  check(test(), "Merge picker did not reach expected state");
-}
 const trusted = () =>
   window as unknown as {
     activateBrowserLinkWithEnter: (selector: string) => Promise<void>;
@@ -22,6 +15,10 @@ const trusted = () =>
   };
 
 export async function testPrMergePickerKeyboardAndOneShotInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, result } = assertions;
+  const wait = (test: () => boolean) =>
+    assertions.wait(test, "Merge picker did not reach expected state");
   const url = "https://github.com/browser-fixture/merge-picker/pull/1";
   const detail = prDetailFixture(url);
   if (detail.mergeCapabilities.status !== "available") throw new Error("Missing capabilities");
@@ -160,7 +157,7 @@ export async function testPrMergePickerKeyboardAndOneShotInBrowser() {
     setCurrent(structuredClone(detail));
     await new Promise(requestAnimationFrame);
     check(calls.length === 1, "Refresh retried an uncertain attempt");
-    return { passed: 17 };
+    return result();
   } finally {
     dispose();
     host.remove();
@@ -171,6 +168,10 @@ export async function testPrMergePickerKeyboardAndOneShotInBrowser() {
 }
 
 export async function testPrMergePickerQueueAndAdminRemainExplicitInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, result } = assertions;
+  const wait = (test: () => boolean) =>
+    assertions.wait(test, "Merge picker did not reach expected state");
   const url = "https://github.com/browser-fixture/merge-picker/pull/2";
   const detail = prDetailFixture(url);
   if (detail.mergeCapabilities.status !== "available") throw new Error("Missing capabilities");
@@ -210,7 +211,7 @@ export async function testPrMergePickerQueueAndAdminRemainExplicitInBrowser() {
       "Admin action disguised as normal merge",
     );
     check(!localStorage.getItem(`pr-merge-intent:${url}`), "Selection created merge intent");
-    return { passed: 4 };
+    return result();
   } finally {
     dispose();
     host.remove();

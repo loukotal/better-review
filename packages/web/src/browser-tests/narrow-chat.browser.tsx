@@ -2,6 +2,7 @@ import { render } from "solid-js/web";
 
 import { SelectionQuestionMessage } from "../components/SelectionQuestionMessage";
 import { formatSelectionQuestion } from "../lib/ask-ai-selection";
+import { createAssertions } from "./assertions";
 
 declare global {
   interface Window {
@@ -11,6 +12,7 @@ declare global {
 
 /** Geometry assertions are the regression oracle; PNGs are review artifacts, not pixel baselines. */
 export async function testNarrowChatLayoutInBrowser() {
+  const { check, result } = createAssertions(3000);
   const host = document.createElement("div");
   host.id = "browser-layout-capture";
   host.className = "bg-bg p-3 text-sm text-text";
@@ -44,11 +46,6 @@ export async function testNarrowChatLayoutInBrowser() {
     ),
     host,
   );
-  let passed = 0;
-  const check = (ok: boolean, message: string) => {
-    if (!ok) throw new Error(message);
-    passed++;
-  };
   try {
     for (const width of [240, 320, 600]) {
       host.style.width = `${width}px`;
@@ -74,7 +71,7 @@ export async function testNarrowChatLayoutInBrowser() {
         await window.captureBrowserLayout?.(`chat-${width}-${expanded ? "expanded" : "collapsed"}`);
       }
     }
-    return { passed };
+    return result();
   } finally {
     dispose();
     host.remove();

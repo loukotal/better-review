@@ -6,9 +6,11 @@ import {
   queueGithubWrite,
   refreshGithubActor,
 } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 export async function testBlockedFollowerRevealsEarlierActionAndSafeCancelInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   const url = "https://github.com/browser-fixture/isolated/pull/1",
     scope = githubPrScope(url);
   const comment: PRComment = {
@@ -27,14 +29,6 @@ export async function testBlockedFollowerRevealsEarlierActionAndSafeCancelInBrow
     isResolved: false,
   };
   const rpc = (kind: string) => (input: unknown) => window.browserGithubActions({ kind, input });
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-  };
-  const wait = async (test: () => boolean, message: string) => {
-    const until = performance.now() + 5000;
-    while (!test() && performance.now() < until) await new Promise(requestAnimationFrame);
-    check(test(), message);
-  };
   const snapshot = async () =>
     (await window.browserGithubActions({ kind: "snapshot" })) as GithubOutboxSnapshot;
   await mountAppFixture({
@@ -147,5 +141,5 @@ export async function testBlockedFollowerRevealsEarlierActionAndSafeCancelInBrow
     ).length === 1,
     "Follower dispatched more than once",
   );
-  return { passed: 7 };
+  return result();
 }

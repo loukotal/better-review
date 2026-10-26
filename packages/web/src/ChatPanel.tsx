@@ -59,6 +59,7 @@ import {
 import type { SelectionSourceContext } from "./lib/selection-question-message";
 import { highlightCode, clearHighlightCache } from "./lib/shiki";
 import { trpc } from "./lib/trpc";
+import { buildFeedbackText } from "./utils/feedback-text";
 import { parseReviewTokens, type Annotation, type MessageSegment } from "./utils/parseReviewTokens";
 
 // Configure marked for safe, minimal output
@@ -793,71 +794,6 @@ export function ChatPanel(props: ChatPanelProps) {
 
   // Copy all AI feedback to clipboard (full assistant messages, skipping dismissed annotations)
   const [feedbackCopied, setFeedbackCopied] = createSignal(false);
-
-  /**
-   * Build a clean text version of all assistant messages.
-   * - Strips <<REVIEW_ORDER>> blocks entirely
-   * - Converts <<ANNOTATION>> blocks to readable "[SEVERITY] file:line - message"
-   * - Converts [[file:path:line]] refs to "path:line"
-   * - Removes annotation blocks whose IDs are not in the active (non-dismissed) set
-   */
-  function buildFeedbackText(
-    messages: Array<{ role: string; content: string }>,
-    activeAnnotationIds: Set<string>,
-  ): string {
-    const parts: string[] = [];
-
-    for (const msg of messages) {
-      if (msg.role !== "assistant" || !msg.content.trim()) continue;
-
-      let text = msg.content;
-
-      // Strip review order blocks, including payloads wrapped in fenced json
-      text = text.replace(/<<REVIEW_ORDER>>[\s\S]*?<<\/REVIEW_ORDER>>/g, "");
-
-      // Replace annotation blocks - keep non-dismissed, remove dismissed
-      text = text.replace(
-        /<<ANNOTATION\s+file="([^"]+)"\s+line="([^"]+)"\s+severity="(info|note|warning|critical|error)">>([^]*?)<<\/ANNOTATION>>/g,
-        (_match, file, lineStr, severity, message) => {
-          const lineMatch = lineStr.match(/^(\d+)/);
-          const line = lineMatch ? parseInt(lineMatch[1], 10) : 1;
-          const trimmedMessage = message.trim();
-
-          // Compute the same hash-based ID used elsewhere
-          const normalizedSeverity = severity === "note" ? "info" : severity;
-          const content = `${file}:${line}:${normalizedSeverity}:${trimmedMessage}`;
-          let hash = 0;
-          for (let i = 0; i < content.length; i++) {
-            hash = (hash << 5) - hash + content.charCodeAt(i);
-            hash = hash & hash;
-          }
-          const id = `annotation-${Math.abs(hash).toString(36)}`;
-
-          if (!activeAnnotationIds.has(id)) {
-            return ""; // Dismissed - skip
-          }
-
-          const label = severity.toUpperCase();
-          return `[${label}] ${file}:${line} - ${trimmedMessage}`;
-        },
-      );
-
-      // Replace file references with plain text
-      text = text.replace(
-        /\*{0,2}\[\[file:([^\]:\s]+)(?::(\d+))?\]\]\*{0,2}/g,
-        (_match, file, line) => (line ? `${file}:${line}` : file),
-      );
-
-      // Clean up excessive blank lines left by removals
-      text = text.replace(/\n{3,}/g, "\n\n").trim();
-
-      if (text) {
-        parts.push(text);
-      }
-    }
-
-    return parts.join("\n\n---\n\n");
-  }
 
   async function handleCopyFeedback() {
     const messages = chat.messages();

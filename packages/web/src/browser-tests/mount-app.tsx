@@ -43,6 +43,8 @@ export async function mountAppFixture(
     /** Existing diff fixtures explicitly enter Changes. Overview tests opt out. */
     defaultTab?: "changes" | "overview" | "checks" | null;
     initialPath?: string;
+    /** Composition fixture: bypass all in-page outbox responses and use actual HTTP. */
+    githubOutboxHttp?: boolean;
   } = {},
 ) {
   const prUrl = options.prUrl ?? fixturePrUrl;
@@ -106,6 +108,8 @@ export async function mountAppFixture(
       location.href,
     );
     const procedure = url.pathname.split("/").pop()!;
+    if (options.githubOutboxHttp && procedure.startsWith("githubOutbox."))
+      return originalFetch(input, init);
     if (options.procedures?.[procedure]) {
       const payload = superjson.deserialize(
         JSON.parse(init?.body ? String(init.body) : (url.searchParams.get("input") ?? "{}")),

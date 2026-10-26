@@ -7,27 +7,22 @@ import {
   projectGithubComments,
 } from "../lib/github-comment-views";
 import { githubJournal, githubPrScope, refreshGithubActor } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
 const url = "https://github.com/browser-fixture/isolated/pull/1";
-async function wait(test: () => boolean, message: string) {
-  const deadline = performance.now() + 5000;
-  while (!test() && performance.now() < deadline) await new Promise(requestAnimationFrame);
-  if (!test()) throw new Error(message);
-}
-function button(name: string) {
+function button(assertions: Pick<ReturnType<typeof createAssertions>, "check">, name: string) {
   const value = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (entry) => entry.textContent?.trim() === name,
   );
-  if (!value) throw new Error(`Missing button: ${name}`);
-  return value;
-}
-function check(value: unknown, message: string) {
-  if (!value) throw new Error(message);
+  assertions.check(value, `Missing button: ${name}`);
+  return value!;
 }
 
 export async function testPrDetailOverviewIsLazyInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   let core = 0,
     sessions = 0,
     models = 0;
@@ -78,7 +73,7 @@ export async function testPrDetailOverviewIsLazyInBrowser() {
     !document.querySelector('button[title="Toggle file tree panel"]'),
     "Overview exposes files toolbar",
   );
-  button("Checks").click();
+  button(assertions, "Checks").click();
   await wait(
     () => document.body.textContent?.includes("No checks reported.") ?? false,
     "Checks tab not displayed",
@@ -90,7 +85,7 @@ export async function testPrDetailOverviewIsLazyInBrowser() {
   );
   history.back();
   await wait(() => !!document.querySelector("[data-pr-overview]"), "Back did not restore Overview");
-  button("Changes").click();
+  button(assertions, "Changes").click();
   await wait(
     () => !!document.querySelector("diffs-container") && !!document.getElementById("chat-panel"),
     "First Changes did not mount review",
@@ -98,7 +93,7 @@ export async function testPrDetailOverviewIsLazyInBrowser() {
   const chat = document.getElementById("chat-panel");
   const diff = document.querySelector("diffs-container");
   const sessionCount = sessions;
-  button("Chat").click();
+  button(assertions, "Chat").click();
   await wait(
     () =>
       !!document.querySelector<HTMLTextAreaElement>(
@@ -113,7 +108,7 @@ export async function testPrDetailOverviewIsLazyInBrowser() {
   editor.dispatchEvent(new InputEvent("input", { bubbles: true }));
   editor.focus();
   editor.setSelectionRange(2, 7);
-  button("Overview").click();
+  button(assertions, "Overview").click();
   await wait(
     () => !!document.querySelector("[data-pr-overview]"),
     "Overview missing after Changes",
@@ -127,7 +122,7 @@ export async function testPrDetailOverviewIsLazyInBrowser() {
   });
   window.dispatchEvent(shortcut);
   check(!shortcut.defaultPrevented, "Hidden diff intercepted browser search");
-  button("Changes").click();
+  button(assertions, "Changes").click();
   await wait(() => !chat?.closest("[inert]"), "Changes stayed inert");
   check(
     chat === document.getElementById("chat-panel") &&
@@ -142,10 +137,12 @@ export async function testPrDetailOverviewIsLazyInBrowser() {
       editor.selectionEnd === 7,
     "Chat draft/caret lost across tabs",
   );
-  return { passed: 14 };
+  return result();
 }
 
 export async function testPrDetailChecksAndPermissionsInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   const detail = prDetailFixture(url);
   detail.checks = {
     status: "available",
@@ -222,25 +219,27 @@ export async function testPrDetailChecksAndPermissionsInBrowser() {
   for (const value of ["Passed", "pending", "skipped", "cancelled", "failure", "incomplete"])
     check(document.body.textContent?.includes(value), `Missing check state ${value}`);
   unavailable = true;
-  button("Refresh checks").click();
+  button(assertions, "Refresh checks").click();
   await wait(
     () => document.body.textContent?.includes("Check API unavailable") ?? false,
     "Checks error hidden",
   );
-  button("Overview").click();
+  button(assertions, "Overview").click();
   await wait(
     () => document.body.textContent?.includes("Repository permission denied") ?? false,
     "Merge permission failure hidden",
   );
-  check(button("Merge unavailable").disabled, "Unavailable merge enabled");
+  check(button(assertions, "Merge unavailable").disabled, "Unavailable merge enabled");
   check(
     !document.body.textContent?.includes("Admin Merge"),
     "Admin merge exposed without capability",
   );
-  return { passed: 11 };
+  return result();
 }
 
 export async function testPrDetailMergeIsOneShotInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   let detail: PrDetail = prDetailFixture(url);
   let writes = 0,
     reads = 0;
@@ -286,7 +285,7 @@ export async function testPrDetailMergeIsOneShotInBrowser() {
     () => !!document.querySelector('section[aria-label="Merge pull request"] button'),
     "Merge panel missing",
   );
-  button("Create merge commit").click();
+  button(assertions, "Create merge commit").click();
   await wait(
     () => document.body.textContent?.includes("Connection lost after dispatch") ?? false,
     "Uncertain result hidden",
@@ -300,12 +299,12 @@ export async function testPrDetailMergeIsOneShotInBrowser() {
     !!localStorage.getItem(`pr-merge-intent:${url}`),
     "Merge intent not persisted before dispatch",
   );
-  button("Checks").click();
+  button(assertions, "Checks").click();
   await wait(
     () => !!document.querySelector('section[aria-label="Pull request checks"]'),
     "Checks did not mount",
   );
-  button("Overview").click();
+  button(assertions, "Overview").click();
   await wait(
     () =>
       !![...document.querySelectorAll("button")].find(
@@ -314,7 +313,7 @@ export async function testPrDetailMergeIsOneShotInBrowser() {
     "Saved intent not restored",
   );
   check(writes === 1 && reads === 0, "Tab remount retried or reconciled automatically");
-  button("Check outcome").click();
+  button(assertions, "Check outcome").click();
   await wait(
     () => document.body.textContent?.includes("GitHub reports merged") ?? false,
     "Read-only outcome missing",
@@ -324,10 +323,12 @@ export async function testPrDetailMergeIsOneShotInBrowser() {
     document.querySelector('section[aria-label="Merge pull request"] h2')?.textContent === "Merged",
     "Fresh merged metadata not displayed",
   );
-  return { passed: 7 };
+  return result();
 }
 
 export async function testPrDetailReviewActionsUseOutboxInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   let detail = prDetailFixture(url);
   await mountAppFixture({
     defaultTab: "overview",
@@ -346,14 +347,14 @@ export async function testPrDetailReviewActionsUseOutboxInBrowser() {
     ["Request changes", "request-changes"],
     ["Comment review", "review-comment"],
   ] as const) {
-    button(label).click();
+    button(assertions, label).click();
     await wait(
       () =>
         !!document.querySelector<HTMLTextAreaElement>('[aria-label="Review body"]:not(:disabled)'),
       "Review draft not ready",
     );
     const editor = document.querySelector<HTMLTextAreaElement>('[aria-label="Review body"]')!;
-    check(button("Submit review").disabled, "Blank review permitted");
+    check(button(assertions, "Submit review").disabled, "Blank review permitted");
     const capturedHead =
       detail.metadata.status === "available" ? detail.metadata.data.head.sha : "";
     if (detail.metadata.status === "available")
@@ -367,7 +368,7 @@ export async function testPrDetailReviewActionsUseOutboxInBrowser() {
           },
         },
       };
-    button("Refresh details").click();
+    button(assertions, "Refresh details").click();
     await wait(
       () =>
         document
@@ -404,10 +405,12 @@ export async function testPrDetailReviewActionsUseOutboxInBrowser() {
     "Queued review forged remote decision",
   );
   check(!document.querySelector("diffs-container"), "Review actions started diff/session work");
-  return { passed: 10 };
+  return result();
 }
 
 export async function testPrDetailRejectedMergeDoesNotRetryInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   const detail = prDetailFixture(url);
   let writes = 0;
   await mountAppFixture({
@@ -435,7 +438,7 @@ export async function testPrDetailRejectedMergeDoesNotRetryInBrowser() {
     () => !!document.querySelector('section[aria-label="Merge pull request"] button'),
     "Merge panel missing",
   );
-  button("Create merge commit").click();
+  button(assertions, "Create merge commit").click();
   await wait(
     () => document.body.textContent?.includes("PR head changed") ?? false,
     "Stale rejection hidden",
@@ -451,10 +454,12 @@ export async function testPrDetailRejectedMergeDoesNotRetryInBrowser() {
     document.querySelector('section[aria-label="Merge pull request"] h2')?.textContent !== "Merged",
     "Rejected merge optimistically marked merged",
   );
-  return { passed: 3 };
+  return result();
 }
 
 export async function testPrDetailMergeReloadInBrowser(phase = "before") {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   let writes = 0,
     reads = 0;
   const detail = prDetailFixture(url);
@@ -503,13 +508,13 @@ export async function testPrDetailMergeReloadInBrowser(phase = "before") {
       () => !!document.querySelector('section[aria-label="Merge pull request"] button'),
       "Merge panel missing",
     );
-    button("Create merge commit").click();
+    button(assertions, "Create merge commit").click();
     await wait(
       () => document.body.textContent?.includes("Dispatch uncertain; reload safely") ?? false,
       "Uncertain response missing",
     );
     check(writes === 1, "Initial merge dispatch missing");
-    return { passed: 1 };
+    return result();
   }
   await wait(
     () =>
@@ -519,7 +524,7 @@ export async function testPrDetailMergeReloadInBrowser(phase = "before") {
     "Reload lost saved merge intent",
   );
   check(writes === 0 && reads === 0, "Reload automatically dispatched or reconciled");
-  button("Check outcome").click();
+  button(assertions, "Check outcome").click();
   await wait(
     () => document.body.textContent?.includes("Still uncertain; no write dispatched") ?? false,
     "Reload outcome check failed",
@@ -533,10 +538,11 @@ export async function testPrDetailMergeReloadInBrowser(phase = "before") {
       ),
     "Observed merge falsely attributed to our pinned-head attempt",
   );
-  return { passed: 4 };
+  return result();
 }
 
 export async function testPrDetailNavigationDiscardsLateResponsesInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
   let release: (detail: PrDetail) => void = () => {};
   const delayed = new Promise<PrDetail>((resolve) => {
     release = resolve;
@@ -583,10 +589,12 @@ export async function testPrDetailNavigationDiscardsLateResponsesInBrowser() {
     core === 0 && !document.getElementById("chat-panel"),
     "Overview PR navigation created review work",
   );
-  return { passed: 3 };
+  return result();
 }
 
 export async function testPrDetailUnknownDiscussionAndDismissedReviewInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   const detail = prDetailFixture(url);
   detail.reviews = {
     status: "available",
@@ -651,17 +659,17 @@ export async function testPrDetailUnknownDiscussionAndDismissedReviewInBrowser()
     ),
     "Unknown thread offered guessed resolution action",
   );
-  button("Unresolved").click();
+  button(assertions, "Unresolved").click();
   await wait(
     () => !document.body.textContent?.includes("Discussion with unknown resolution"),
     "Unknown thread counted as known unresolved",
   );
-  button("All").click();
+  button(assertions, "All").click();
   await wait(
     () => !!document.querySelector('[data-github-comment-key="remote:review-comment:1"]'),
     "All discussions did not restore unknown thread",
   );
-  button("src/example.ts:9 · RIGHT · revision unavailable").click();
+  button(assertions, "src/example.ts:9 · RIGHT · revision unavailable").click();
   await wait(
     () =>
       document.body.textContent?.includes("GitHub did not provide a trustworthy source revision") ??
@@ -672,10 +680,12 @@ export async function testPrDetailUnknownDiscussionAndDismissedReviewInBrowser()
     new URLSearchParams(location.search).get("tab") === "changes",
     "Source click did not activate Changes",
   );
-  return { passed: 7 };
+  return result();
 }
 
 export async function testPrDetailMergeDisabledStatesInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   let detail = prDetailFixture(url);
   await mountAppFixture({
     defaultTab: "overview",
@@ -712,7 +722,7 @@ export async function testPrDetailMergeDisabledStatesInBrowser() {
     }
     if (state === "UNKNOWN")
       detail.mergeCapabilities = { status: "unavailable", message: "Merge state unknown" };
-    button("Refresh details").click();
+    button(assertions, "Refresh details").click();
     await wait(
       () =>
         [
@@ -722,12 +732,14 @@ export async function testPrDetailMergeDisabledStatesInBrowser() {
         ].some((entry) => entry.textContent === labels[state]),
       `Missing ${state} merge state`,
     );
-    check(button(labels[state]).disabled, `${state} merge action enabled`);
+    check(button(assertions, labels[state]).disabled, `${state} merge action enabled`);
   }
-  return { passed: 6 };
+  return result();
 }
 
 export async function testPrDetailHistoricalSourceKeepsProvenanceInBrowser() {
+  const assertions = createAssertions(5000);
+  const { check, wait, result } = assertions;
   const historical = "c".repeat(40);
   const comment = {
     id: 2,
@@ -779,7 +791,7 @@ export async function testPrDetailHistoricalSourceKeepsProvenanceInBrowser() {
     !request && !document.getElementById("chat-panel"),
     "Overview resolved source or created session implicitly",
   );
-  button("src/example.ts:200 · RIGHT · ccccccc (original location)").click();
+  button(assertions, "src/example.ts:200 · RIGHT · ccccccc (original location)").click();
   await wait(() => !!request, "Historical source did not navigate after Changes activation");
   check(
     new URLSearchParams(location.search).get("tab") === "changes",
@@ -797,9 +809,9 @@ export async function testPrDetailHistoricalSourceKeepsProvenanceInBrowser() {
     () => document.body.textContent?.includes("Original source snapshot unavailable") ?? false,
     "Missing exact source was hidden",
   );
-  button("Overview").click();
+  button(assertions, "Overview").click();
   await wait(() => !!document.querySelector("[data-pr-overview]"), "Overview did not return");
-  button("src/example.ts:200 · LEFT · ccccccc (original location)").click();
+  button(assertions, "src/example.ts:200 · LEFT · ccccccc (original location)").click();
   await wait(
     () =>
       document.body.textContent?.includes("not the immutable deleted-side source revision") ??
@@ -807,10 +819,11 @@ export async function testPrDetailHistoricalSourceKeepsProvenanceInBrowser() {
     "Historical LEFT source falsely used its comparison head",
   );
   check(request?.side === "RIGHT", "Historical LEFT coordinate sent as exact HEAD source");
-  return { passed: 7 };
+  return result();
 }
 
 export async function testPrDetailProjectionIndependentReadsInBrowser() {
+  const { check, result } = createAssertions(5000);
   for (const detailFirst of [true, false]) {
     const current = `https://github.com/browser-fixture/isolated/pull/${detailFirst ? 91 : 92}`;
     const detail = prDetailFixture(current);
@@ -873,5 +886,5 @@ export async function testPrDetailProjectionIndependentReadsInBrowser() {
       "Old comments leaked through resource fence",
     );
   }
-  return { passed: 10 };
+  return result();
 }

@@ -1,6 +1,7 @@
 import type { ReviewSnapshot } from "@better-review/shared";
 
 import { AUTO_ORDER_PREFERENCE_KEY } from "../lib/automatic-review-order";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 const head = "a".repeat(40);
@@ -31,19 +32,6 @@ function snapshot(sessionId: string, running = false, files = ai): ReviewSnapsho
       },
     ],
   };
-}
-
-function assertions() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
-  return { check, wait, result: () => ({ passed }) };
 }
 
 const fileElements = () => [...document.querySelectorAll<HTMLElement>('[id^="file-src"]')];
@@ -81,7 +69,7 @@ export async function testManualReviewOrderUnchangedViewportInBrowser() {
 }
 
 async function liveOrderFixture(automatic: boolean, keepFirst = false) {
-  const { check, wait, result } = assertions();
+  const { check, wait, result } = createAssertions(5000);
   if (automatic) localStorage.removeItem(AUTO_ORDER_PREFERENCE_KEY);
   else
     localStorage.setItem(AUTO_ORDER_PREFERENCE_KEY, JSON.stringify({ version: 1, enabled: false }));
@@ -146,7 +134,7 @@ async function liveOrderFixture(automatic: boolean, keepFirst = false) {
 }
 
 export async function testInitialAutomaticOrderPaintedRowsInBrowser() {
-  const { check, wait, result } = assertions();
+  const { check, wait, result } = createAssertions(5000);
   localStorage.removeItem(AUTO_ORDER_PREFERENCE_KEY);
   localStorage.removeItem("better-review:applied-review-orders");
   let release!: () => void;
@@ -154,6 +142,7 @@ export async function testInitialAutomaticOrderPaintedRowsInBrowser() {
     release = resolve;
   });
   let requested = false;
+  let sessionCalls = 0;
   const rendered: string[] = [];
   const observer = new MutationObserver(() => {
     const value = order();
@@ -163,6 +152,18 @@ export async function testInitialAutomaticOrderPaintedRowsInBrowser() {
   const dispose = await mountAppFixture({
     diff,
     waitForFiles: false,
+    procedures: {
+      "prReview.getOrCreateSession": () => {
+        sessionCalls++;
+        return {
+          session: { id: "bootstrap" },
+          sessions: [],
+          headSha: head,
+          sessionHeadSha: head,
+          sessionScope: { mode: "full", commitSha: null },
+        };
+      },
+    },
     reviewSnapshot: async (sessionId) => {
       requested = true;
       await held;
@@ -194,6 +195,12 @@ export async function testInitialAutomaticOrderPaintedRowsInBrowser() {
       await new Promise(requestAnimationFrame);
       check(visibleRows(scroll).length > 5, `Initial ordered source blanked at frame ${frame}`);
     }
+    check(sessionCalls === 1, "Initial preload duplicated session creation");
+    document.querySelector<HTMLButtonElement>('button[aria-label="Review settings"]')!.click();
+    check(
+      document.querySelector<HTMLInputElement>('[aria-label="Review settings"] input')?.checked,
+      "Preference did not default on",
+    );
     return result();
   } finally {
     release();

@@ -2,6 +2,7 @@ import { isGithubOutboxControl, type GithubOutboxOperation } from "@better-revie
 
 import { createIndexedDbGithubJournal } from "../lib/github-outbox-journal";
 import { githubPrScope, githubWrites } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 declare global {
@@ -12,15 +13,7 @@ declare global {
 }
 
 async function exercise(width = 390, height = 844) {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
   const journal = createIndexedDbGithubJournal();
   await window.setBrowserQueueViewport(width, height);
   const operations: GithubOutboxOperation[] = [];
@@ -346,7 +339,7 @@ async function exercise(width = 390, height = 844) {
     rootRow.textContent?.includes("automatically unblocks"),
     "Cancellation consequences hidden",
   );
-  return { passed };
+  return result();
 }
 export function testActualFiveRowQueueRecoveryButtonsStayReachableInBrowser() {
   return exercise();

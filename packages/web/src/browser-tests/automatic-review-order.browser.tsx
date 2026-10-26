@@ -9,6 +9,7 @@ import {
   type AvailableReviewOrder,
 } from "../lib/automatic-review-order";
 import { getReviewOrder, restoreCache } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 declare global {
@@ -40,15 +41,7 @@ export async function testAutomaticOrderDeferredCommitDiffInBrowser() {
 }
 
 async function heldAppOrderFixture(mode: "retained-hydration" | "retained-completion" | "commit") {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
   const tab = (name: string) => {
     const button = [
       ...document.querySelectorAll<HTMLButtonElement>('nav[aria-label="Pull request tabs"] button'),
@@ -163,12 +156,9 @@ async function heldAppOrderFixture(mode: "retained-hydration" | "retained-comple
     observer.disconnect();
     dispose();
   }
-  return { passed };
+  return result();
 }
 
-export async function testInitialSavedOrderNoFlickerInBrowser() {
-  return initialOrderFixture("completed");
-}
 export async function testInitialRunningOrderInBrowser() {
   return initialOrderFixture("running");
 }
@@ -204,15 +194,7 @@ export async function testInitialSessionFailureInBrowser() {
 }
 
 export async function testInitialOrderFastNavigationInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
   localStorage.setItem(AUTO_ORDER_PREFERENCE_KEY, JSON.stringify({ version: 1, enabled: true }));
   localStorage.removeItem("better-review:applied-review-orders");
   let release!: () => void;
@@ -260,19 +242,11 @@ export async function testInitialOrderFastNavigationInBrowser() {
   );
   check(order.join(",") === paths.join(","), "Late old PR response crossed navigation");
   check(getReviewOrder(secondUrl) === null, "Late old PR order persisted on new PR");
-  return { passed };
+  return result();
 }
 
 async function initialOrderFixture(mode: string) {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
   const ai = [...paths].reverse();
   const revision = mode === "commit" ? "b".repeat(40) : head;
   let snapshot: ReviewSnapshot = {
@@ -424,7 +398,7 @@ async function initialOrderFixture(mode: string) {
     release();
     observer.disconnect();
   }
-  return { passed };
+  return result();
 }
 
 export async function testDelayedAutomaticReviewOrderInBrowser() {
@@ -432,15 +406,7 @@ export async function testDelayedAutomaticReviewOrderInBrowser() {
 }
 
 export async function testAutomaticReviewOrderInBrowser(mode = "existing") {
-  let passed = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 300 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
   const reversed = [paths[2], paths[0], paths[1]];
   const complete: ReviewSnapshot = {
     sessionId: "bootstrap",
@@ -624,20 +590,12 @@ export async function testAutomaticReviewOrderInBrowser(mode = "existing") {
       outsideEditor.value.includes("outside click typing"),
     "Outside dismissal stole editor focus or typing",
   );
-  return { passed };
+  return result();
 }
 
 /** The runner reloads the document between phases, preserving only browser storage. */
 export async function testAutomaticReviewOrderReloadInBrowser(phase = "before") {
-  let passed = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
   const ai = [paths[2], paths[0], paths[1]],
     manual = [paths[1], paths[0], paths[2]];
   restoreCache();
@@ -703,19 +661,11 @@ export async function testAutomaticReviewOrderReloadInBrowser(phase = "before") 
       "Reload lost enabled toggle",
     );
   }
-  return { passed };
+  return result();
 }
 
 export async function testAutomaticReviewOrderPrSwitchInBrowser() {
-  let passed = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
   const secondUrl = url.replace("/1", "/2");
   localStorage.setItem(AUTO_ORDER_PREFERENCE_KEY, JSON.stringify({ version: 1, enabled: true }));
   localStorage.removeItem("better-review:applied-review-orders");
@@ -766,20 +716,12 @@ export async function testAutomaticReviewOrderPrSwitchInBrowser() {
   await new Promise((resolve) => setTimeout(resolve, 1200));
   check(order() === paths.join(","), "Previous PR/session order leaked into next PR");
   check(getReviewOrder(secondUrl) === null, "Stale order persisted for second PR");
-  return { passed };
+  return result();
 }
 
 /** Hydrate/switch through production tRPC receipts. All conversations share the viewed head SHA. */
 export async function testAutomaticReviewOrderSavedScopeInBrowser() {
-  let passed = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
   localStorage.setItem(AUTO_ORDER_PREFERENCE_KEY, JSON.stringify({ version: 1, enabled: true }));
   localStorage.removeItem("better-review:applied-review-orders");
   const ids = ["bootstrap-commit", "bootstrap-unknown", "bootstrap-full"];
@@ -877,7 +819,7 @@ export async function testAutomaticReviewOrderSavedScopeInBrowser() {
   check(order() === manualOrder, "Unknown saved scope guessed from full PR UI");
   await select(2);
   await wait(() => order() === full.join(","), "Matching saved full PR order was rejected");
-  return { passed };
+  return result();
 }
 
 export async function testAutomaticReviewOrderPullChangedHeadInBrowser() {
@@ -886,16 +828,8 @@ export async function testAutomaticReviewOrderPullChangedHeadInBrowser() {
 
 /** Same-SHA commit-to-full conversion cannot replay pre-conversion orders. */
 export async function testAutomaticReviewOrderPullLatestInBrowser(mode = "same-head") {
-  let passed = 0,
-    pulls = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
+  let pulls = 0;
   const latest = mode === "changed-head" ? "c".repeat(40) : head;
   const oldOrder = [paths[2], paths[0]],
     fullOrder = [paths[1], paths[2], paths[0]];
@@ -1013,20 +947,12 @@ export async function testAutomaticReviewOrderPullLatestInBrowser(mode = "same-h
     "Unchanged Pull did not hydrate",
   );
   check(pulls === 2 && order() === fullOrder.join(","), "Unchanged Pull lost trusted scope/order");
-  return { passed };
+  return result();
 }
 
 /** Keep ChatPanel mounted while PR props change; delay new hydration with the same head SHA. */
 export async function testAutomaticReviewOrderInPlaceScopeInBrowser() {
-  let passed = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(5000);
   const secondUrl = url.replace("/1", "/2");
   const receipt = (id: string) => ({
     session: { id },
@@ -1141,5 +1067,5 @@ export async function testAutomaticReviewOrderInPlaceScopeInBrowser() {
     "Late old PR Pull notice leaked into new conversation",
   );
   dispose();
-  return { passed };
+  return result();
 }

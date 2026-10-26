@@ -292,6 +292,91 @@ export function createGithubOutboxAdapter(
     };
   }
   type Ctx = ReturnType<typeof context>;
+  type Action = Ctx["command"]["action"];
+  type CreationFacts = {
+    collection: string;
+    candidateCollection: string;
+  } & (
+    | {
+        action: Extract<Action, { kind: "approve" }>;
+        resultKind: "approval";
+        event: "APPROVE";
+        state: "APPROVED";
+      }
+    | {
+        action: Extract<Action, { kind: "request-changes" }>;
+        resultKind: "review";
+        event: "REQUEST_CHANGES";
+        state: "CHANGES_REQUESTED";
+      }
+    | {
+        action: Extract<Action, { kind: "review-comment" }>;
+        resultKind: "review";
+        event: "COMMENT";
+        state: "COMMENTED";
+      }
+    | { action: Extract<Action, { kind: "issue-comment" }>; resultKind: "issue-comment" }
+    | {
+        action: Extract<Action, { kind: "inline-comment" | "reply" }>;
+        resultKind: "review-comment";
+      }
+  );
+  function creationActionFacts(ctx: Ctx): CreationFacts | undefined {
+    const action = ctx.command.action;
+    const reviews = `${ctx.pr}/reviews`;
+    switch (action.kind) {
+      case "approve":
+        return {
+          action,
+          collection: reviews,
+          candidateCollection: reviews,
+          resultKind: "approval",
+          event: "APPROVE",
+          state: "APPROVED",
+        };
+      case "request-changes":
+        return {
+          action,
+          collection: reviews,
+          candidateCollection: reviews,
+          resultKind: "review",
+          event: "REQUEST_CHANGES",
+          state: "CHANGES_REQUESTED",
+        };
+      case "review-comment":
+        return {
+          action,
+          collection: reviews,
+          candidateCollection: reviews,
+          resultKind: "review",
+          event: "COMMENT",
+          state: "COMMENTED",
+        };
+      case "issue-comment":
+        return {
+          action,
+          collection: `${ctx.issue}/comments`,
+          candidateCollection: `${ctx.base}/issues/comments`,
+          resultKind: "issue-comment",
+        };
+      case "inline-comment":
+      case "reply":
+        return {
+          action,
+          collection: `${ctx.pr}/comments`,
+          candidateCollection: `${ctx.base}/pulls/comments`,
+          resultKind: "review-comment",
+        };
+      case "set-draft":
+      case "edit-comment":
+      case "delete-comment":
+      case "resolve-thread":
+      case "unresolve-thread":
+        return undefined;
+    }
+    const exhaustive: never = action;
+    return exhaustive;
+  }
 
   async function verify(actor: GithubActor) {
     const current = await identity();
@@ -432,42 +517,41 @@ export function createGithubOutboxAdapter(
     }
     throw new Failure(error("unavailable", "The reply parent could not be verified.", true));
   }
-  function creationMatch(data: Json, ctx: Ctx, replyTarget?: Json): boolean {
-    const action = ctx.command.action;
+  function creationMatch(data: Json, ctx: Ctx, facts: CreationFacts, replyTarget?: Json): boolean {
+    const action = facts.action;
     if (
       !actorMatches(data, ctx) ||
       !text(data.body) ||
       !data.body.includes(marker(ctx.command.operationId)) ||
-      !("body" in action) ||
       clean(data.body) !== action.body
     )
       return false;
-    switch (action.kind) {
+    switch (facts.resultKind) {
       case "issue-comment":
         return belongs(data, "issue-comment", ctx);
-      case "approve":
-        return data.state === "APPROVED" && data.commit_id === action.expectedHeadSha;
-      case "request-changes":
-      case "review-comment":
+      case "approval":
+        return data.state === facts.state && data.commit_id === facts.action.expectedHeadSha;
+      case "review":
         return (
-          data.state === (action.kind === "request-changes" ? "CHANGES_REQUESTED" : "COMMENTED") &&
-          data.commit_id === action.expectedHeadSha &&
+          data.state === facts.state &&
+          data.commit_id === facts.action.expectedHeadSha &&
           data.body === wire(action.body, ctx.command.operationId)
         );
-      case "inline-comment": {
-        const a = action.anchor;
-        return (
-          belongs(data, "review-comment", ctx) &&
-          data.commit_id === action.expectedHeadSha &&
-          (data.in_reply_to_id === null || data.in_reply_to_id === undefined) &&
-          data.path === a.path &&
-          data.side === a.side &&
-          (data.line ?? data.original_line) === a.line &&
-          (data.start_line ?? data.original_start_line ?? undefined) === a.startLine &&
-          (data.start_side ?? undefined) === a.startSide
-        );
-      }
-      case "reply":
+      case "review-comment": {
+        const action = facts.action;
+        if (action.kind === "inline-comment") {
+          const a = action.anchor;
+          return (
+            belongs(data, "review-comment", ctx) &&
+            data.commit_id === action.expectedHeadSha &&
+            (data.in_reply_to_id === null || data.in_reply_to_id === undefined) &&
+            data.path === a.path &&
+            data.side === a.side &&
+            (data.line ?? data.original_line) === a.line &&
+            (data.start_line ?? data.original_start_line ?? undefined) === a.startLine &&
+            (data.start_side ?? undefined) === a.startSide
+          );
+        }
         return (
           action.target.source === "remote" &&
           belongs(data, "review-comment", ctx) &&
@@ -477,15 +561,11 @@ export function createGithubOutboxAdapter(
           data.commit_id === replyTarget.commit_id &&
           data.path === replyTarget.path
         );
-      default:
-        return false;
+      }
     }
   }
-  function creationResult(data: Json, ctx: Ctx): GithubRemoteResult {
-    if (
-      ctx.command.action.kind === "request-changes" ||
-      ctx.command.action.kind === "review-comment"
-    ) {
+  function creationResult(data: Json, facts: CreationFacts): GithubRemoteResult {
+    if (facts.resultKind === "review") {
       const result = {
         kind: "review",
         id: data.id,
@@ -504,19 +584,16 @@ export function createGithubOutboxAdapter(
         throw invalid();
       return result;
     }
-    if (ctx.command.action.kind === "approve") {
+    if (facts.resultKind === "approval") {
       if (
         !positive(data.id) ||
         !text(data.html_url) ||
-        data.commit_id !== ctx.command.action.expectedHeadSha
+        data.commit_id !== facts.action.expectedHeadSha
       )
         throw invalid();
       return { kind: "approval", id: data.id, url: data.html_url, commitSha: data.commit_id };
     }
-    return comment(
-      data,
-      ctx.command.action.kind === "issue-comment" ? "issue-comment" : "review-comment",
-    );
+    return comment(data, facts.resultKind);
   }
   async function graphql(query: string, variables: Json, mutation = false) {
     // GraphQL reads also use POST, but a failed read never implies an uncertain write.
@@ -811,36 +888,37 @@ export function createGithubOutboxAdapter(
           throw invalid();
         return { outcome: "accepted", result: comment(data, action.target.kind) };
       }
-      let path: string;
+      const facts = creationActionFacts(ctx);
+      if (!facts) throw invalid();
+      let path = facts.collection;
       let payload: Json;
       let replyTarget: Json | undefined;
-      if (!("body" in action)) throw invalid();
-      const body = wire(action.body, ctx.command.operationId);
-      switch (action.kind) {
-        case "approve":
-        case "request-changes":
-        case "review-comment":
-          await head(ctx, action.expectedHeadSha);
-          path = `${ctx.pr}/reviews`;
+      const body = wire(facts.action.body, ctx.command.operationId);
+      switch (facts.resultKind) {
+        case "approval":
+        case "review":
+          await head(ctx, facts.action.expectedHeadSha);
           payload = {
-            event:
-              action.kind === "approve"
-                ? "APPROVE"
-                : action.kind === "request-changes"
-                  ? "REQUEST_CHANGES"
-                  : "COMMENT",
-            commit_id: action.expectedHeadSha,
+            event: facts.event,
+            commit_id: facts.action.expectedHeadSha,
             body,
           };
           break;
         case "issue-comment":
-          path = `${ctx.issue}/comments`;
           payload = { body };
           break;
-        case "inline-comment": {
+        case "review-comment": {
+          const action = facts.action;
+          if (action.kind === "reply") {
+            if (action.target.source !== "remote") throw invalid();
+            replyTarget = await replyRoot(ctx, action.target.id);
+            // Replies POST only to the verified root, never to the list collection.
+            path = `${ctx.pr}/comments/${replyTarget.id}/replies`;
+            payload = { body };
+            break;
+          }
           await head(ctx, action.expectedHeadSha);
           const a = action.anchor;
-          path = `${ctx.pr}/comments`;
           payload = {
             body,
             commit_id: action.expectedHeadSha,
@@ -853,17 +931,11 @@ export function createGithubOutboxAdapter(
           };
           break;
         }
-        case "reply":
-          if (action.target.source !== "remote") throw invalid();
-          replyTarget = await replyRoot(ctx, action.target.id);
-          path = `${ctx.pr}/comments/${replyTarget.id}/replies`;
-          payload = { body };
-          break;
       }
       const { data } = await request(path, "POST", payload);
       mutated = true;
-      if (!object(data) || !creationMatch(data, ctx, replyTarget)) throw invalid();
-      return { outcome: "accepted", result: creationResult(data, ctx) };
+      if (!object(data) || !creationMatch(data, ctx, facts, replyTarget)) throw invalid();
+      return { outcome: "accepted", result: creationResult(data, facts) };
     } catch (cause) {
       const failure = cause instanceof Failure ? cause : invalid();
       return {
@@ -964,21 +1036,15 @@ export function createGithubOutboxAdapter(
           error: error("target-changed", "The comment has a different remote version."),
         };
       }
-      const path =
-        action.kind === "approve" ||
-        action.kind === "request-changes" ||
-        action.kind === "review-comment"
-          ? `${ctx.pr}/reviews`
-          : action.kind === "issue-comment"
-            ? `${ctx.issue}/comments`
-            : `${ctx.pr}/comments`;
+      const facts = creationActionFacts(ctx);
+      if (!facts) throw invalid();
       const replyTarget =
         action.kind === "reply" && action.target.source === "remote"
           ? await replyRoot(ctx, action.target.id)
           : undefined;
-      const all = await pages(path);
-      const matches = all.filter((data) => creationMatch(data, ctx, replyTarget));
-      const results = matches.map((data) => creationResult(data, ctx));
+      const all = await pages(facts.collection);
+      const matches = all.filter((data) => creationMatch(data, ctx, facts, replyTarget));
+      const results = matches.map((data) => creationResult(data, facts));
       if (results.length > 1) return { outcome: "ambiguous", candidates: results };
       if (results.length === 1)
         return { outcome: "matched", result: await enrich(results[0]!, ctx, operation) };
@@ -1067,36 +1133,26 @@ export function createGithubOutboxAdapter(
           };
         return { outcome: "matched", result: comment(found.data, action.target.kind) };
       }
-      const expectedKind =
-        action.kind === "approve"
-          ? "approval"
-          : action.kind === "request-changes" || action.kind === "review-comment"
-            ? "review"
-            : action.kind === "issue-comment"
-              ? "issue-comment"
-              : "review-comment";
-      if (candidate.kind !== expectedKind || !("id" in candidate)) throw invalid();
-      const path =
-        candidate.kind === "approval" || candidate.kind === "review"
-          ? `${ctx.pr}/reviews/${candidate.id}`
-          : targetPath(
-              ctx,
-              candidate.kind === "issue-comment" ? "issue-comment" : "review-comment",
-              candidate.id,
-            );
+      const facts = creationActionFacts(ctx);
+      if (!facts || candidate.kind !== facts.resultKind || !("id" in candidate)) throw invalid();
+      const path = `${facts.candidateCollection}/${candidate.id}`;
       const replyTarget =
         action.kind === "reply" && action.target.source === "remote"
           ? await replyRoot(ctx, action.target.id)
           : undefined;
       const { data } = await request(path);
-      if (!object(data) || data.id !== candidate.id || !creationMatch(data, ctx, replyTarget))
+      if (
+        !object(data) ||
+        data.id !== candidate.id ||
+        !creationMatch(data, ctx, facts, replyTarget)
+      )
         return {
           outcome: "conflict",
           error: error("conflict", "The candidate does not confirm this operation."),
         };
       return {
         outcome: "matched",
-        result: await enrich(creationResult(data, ctx), ctx, operation),
+        result: await enrich(creationResult(data, facts), ctx, operation),
       };
     } catch (cause) {
       const diagnostic =

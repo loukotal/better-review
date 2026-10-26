@@ -9,6 +9,7 @@ import type {
 
 import { PrCommentsPanel } from "../components/PrCommentsPanel";
 import { githubPrScope, githubWrites, refreshGithubActor } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 declare global {
@@ -19,11 +20,7 @@ declare global {
 
 /** Same panel contract for both raw legacy comments and outbox-backed views. */
 export async function testAppConversationQuoteIdentityInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, wait, result } = createAssertions(3000);
   const url = "https://github.com/browser-fixture/isolated/pull/1";
   const comment = (id: number, login: string, body: string): IssueComment => ({
     id,
@@ -54,12 +51,10 @@ export async function testAppConversationQuoteIdentityInBrowser() {
     waitForFiles: false,
     extras: { comments: [], issueComments: comments, status: null },
   });
-  for (
-    let frame = 0;
-    frame < 180 && !document.querySelector('[data-github-comment-key="remote:issue-comment:13"]');
-    frame++
-  )
-    await new Promise(requestAnimationFrame);
+  await wait(
+    () => !!document.querySelector('[data-github-comment-key="remote:issue-comment:13"]'),
+    "Conversation comments did not render",
+  );
   const verify = (root: ParentNode, card: (id: number) => HTMLElement | null, label: string) => {
     const threads = [...root.querySelectorAll<HTMLElement>("[data-github-conversation-thread]")];
     check(threads.length === 12, `${label}: guessed an ambiguous relationship`);
@@ -102,21 +97,12 @@ export async function testAppConversationQuoteIdentityInBrowser() {
     dispose();
     legacy.remove();
   }
-  return { passed };
+  return result();
 }
 
 /** Real App, RPC serialization and IndexedDB. No external requests or model calls. */
 export async function testAppNestedConversationRepliesInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let frame = 0; frame < 180 && !predicate(); frame++)
-      await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(3000);
   const url = "https://github.com/browser-fixture/isolated/pull/1";
   const scope = githubPrScope(url);
   const stamp = "2026-01-01T00:00:00Z";
@@ -205,21 +191,12 @@ export async function testAppNestedConversationRepliesInBrowser() {
       ),
     "Quoted issue reply did not reach the production issue-comment endpoint exactly once",
   );
-  return { passed };
+  return result();
 }
 
 /** Actual App → IndexedDB → RPC → SQLite worker → production GitHub adapter. */
 export async function testAppNestedReviewRepliesInBrowser(mode?: string) {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let frame = 0; frame < 240 && !predicate(); frame++)
-      await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
   const url = "https://github.com/browser-fixture/isolated/pull/1";
   const scope = githubPrScope(url);
   const fixture = (kind: string, input?: unknown) => window.browserNestedReplies({ kind, input });
@@ -342,7 +319,7 @@ export async function testAppNestedReviewRepliesInBrowser(mode?: string) {
         ),
       "Nested delete targeted the root instead of the selected reply",
     );
-    return { passed };
+    return result();
   }
   const reply = async (parent: string, body: string) => {
     await wait(() => !!card(parent), `Parent missing: ${parent}`);
@@ -412,5 +389,5 @@ export async function testAppNestedReviewRepliesInBrowser(mode?: string) {
     document.querySelectorAll("[data-github-review-thread]").length === 1,
     "Confirmed nested review reply left its discussion",
   );
-  return { passed };
+  return result();
 }

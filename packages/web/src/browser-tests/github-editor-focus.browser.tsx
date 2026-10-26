@@ -2,6 +2,7 @@ import type { IssueComment, PRComment } from "@better-review/shared";
 
 import { githubJournal, githubPrScope, refreshGithubActor } from "../lib/github-writes";
 import { api } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 declare global {
@@ -38,16 +39,8 @@ export async function testAppGithubEditorFocusInBrowser() {
   };
   let remoteIssue = issue,
     polls = 0,
-    enqueues = 0,
-    passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+    enqueues = 0;
+  const { check, wait, result } = createAssertions(4000);
   await mountAppFixture({
     extras: { comments: [review], issueComments: [issue], status: null },
     procedures: {
@@ -139,7 +132,7 @@ export async function testAppGithubEditorFocusInBrowser() {
         );
     }
   }
-  return { passed };
+  return result();
 }
 
 /** Actual reply editors stay spinner-only while durable admission is held or fails. */
@@ -155,16 +148,8 @@ export async function testAppGithubReplySubmitSpinnerInBrowser() {
     updated_at: "2026-01-01T00:00:00Z",
     canEdit: true,
   };
-  let passed = 0,
-    enqueues = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
+  let enqueues = 0;
   await mountAppFixture({
     extras: {
       comments: [
@@ -265,7 +250,7 @@ export async function testAppGithubReplySubmitSpinnerInBrowser() {
     }
     await window.clickBrowserGithubCommentButton(key, "Cancel");
   }
-  return { passed };
+  return result();
 }
 
 /** A failed explicit Save retains focus, the pinned edit baseline and a reloadable draft. */
@@ -274,16 +259,8 @@ export async function testAppGithubFailedSaveReloadInBrowser(phase = "before") {
   const scope = githubPrScope(url),
     key = "remote:issue-comment:10";
   const text = "held edit survives failed admission and reload";
-  let passed = 0,
-    enqueues = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 240 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
+  let enqueues = 0;
   await mountAppFixture({
     extras: {
       comments: [],
@@ -367,5 +344,5 @@ export async function testAppGithubFailedSaveReloadInBrowser(phase = "before") {
     );
     await wait(() => enqueues > 0, "Background sync did not start");
   }
-  return { passed };
+  return result();
 }

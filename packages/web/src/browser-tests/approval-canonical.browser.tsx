@@ -8,6 +8,7 @@ import {
   refreshGithubActor,
 } from "../lib/github-writes";
 import { fetchPrDetail, queryClient, queryKeys } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
 
@@ -24,15 +25,7 @@ export async function testOverviewReusedCanonicalApprovalRequiresNewAcknowledgem
 }
 
 async function canonicalApproval(reused: boolean, tab: "changes" | "overview") {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let i = 0; i < 180 && !predicate(); i++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(3000);
   const scope = githubPrScope("https://github.com/browser-fixture/isolated/pull/1");
   const head = "a".repeat(40);
   const canonical: GithubOutboxOperation = {
@@ -219,5 +212,5 @@ async function canonicalApproval(reused: boolean, tab: "changes" | "overview") {
     "Polling or metadata changes rearmed settled acknowledgement",
   );
   dispose();
-  return { passed };
+  return result();
 }

@@ -1,9 +1,11 @@
 /** Browser-only regression checks; run via Vite import(...).testSelectionInBrowser(). */
 import { FileDiff, parseDiffFromFile, parsePatchFiles } from "@pierre/diffs";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { extractLines, extractTextSelection } from "./ask-ai-selection";
 
 export function testSelectionInBrowser() {
+  const { check, result } = createAssertions(3000);
   const host = document.createElement("div");
   document.body.append(host);
   const root = host.attachShadow({ mode: "open" });
@@ -17,11 +19,6 @@ export function testSelectionInBrowser() {
   const rows = root.querySelectorAll("[data-additions] [data-line]");
   const first = rows[0]!.firstChild!.firstChild!;
   const last = rows[0]!.lastChild!.firstChild!;
-  let passed = 0;
-  function check(condition: boolean, message: string) {
-    if (!condition) throw new Error(message);
-    passed++;
-  }
   function range(start: Node, from: number, end: Node, to: number) {
     selection.removeAllRanges();
     const value = document.createRange();
@@ -73,7 +70,7 @@ export function testSelectionInBrowser() {
     rejects("reject ambiguous unified context side");
     selection.removeAllRanges();
     check(extractTextSelection(root, file) === null, "collapsed selection is no action");
-    return { passed };
+    return result();
   } finally {
     selection.removeAllRanges();
     host.remove();
@@ -82,6 +79,7 @@ export function testSelectionInBrowser() {
 
 /** Render Pierre's real expanded source, not hand-authored DOM, in both layouts. */
 export async function testExpandedSelectionInBrowser() {
+  const { check, wait, result } = createAssertions(2000);
   const oldLines = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`);
   const newLines = [...oldLines];
   newLines[14] = "changed 15";
@@ -90,52 +88,47 @@ export async function testExpandedSelectionInBrowser() {
     { name: "a.ts", contents: oldLines.join("\n") },
     { name: "a.ts", contents: newLines.join("\n") },
   );
-  let passed = 0;
   for (const diffStyle of ["split", "unified"] as const) {
     const host = document.createElement("div");
     document.body.append(host);
     const diff = new FileDiff({ diffStyle, expandUnchanged: true, disableFileHeader: true });
     try {
       diff.render({ fileDiff: file, containerWrapper: host });
-      for (
-        let frame = 0;
-        frame < 120 &&
-        !host.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-line="60"]');
-        frame++
-      )
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await wait(
+        () =>
+          !!host.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-line="60"]'),
+        `${diffStyle}: expanded line 60 not rendered`,
+      );
       const root = host.querySelector("diffs-container")?.shadowRoot;
-      if (!root) throw new Error(`${diffStyle}: no rendered shadow root`);
+      check(root, `${diffStyle}: no rendered shadow root`);
       for (const line of [1, 30, 60]) {
         for (const side of ["LEFT", "RIGHT"] as const) {
           const column =
             diffStyle === "split" ? `[data-${side === "LEFT" ? "deletions" : "additions"}] ` : "";
-          const row = root.querySelector(`${column}[data-line="${line}"]`);
-          if (!row) throw new Error(`${diffStyle}: expanded line ${line} not rendered`);
+          const row = root!.querySelector(`${column}[data-line="${line}"]`);
+          check(row, `${diffStyle}: expanded line ${line} not rendered`);
           const gutter = extractLines(file, side, line, line);
-          if (gutter.text !== `line ${line}`)
-            throw new Error(`${diffStyle}: incorrect gutter source`);
-          passed++;
+          check(gutter.text === `line ${line}`, `${diffStyle}: incorrect gutter source`);
           const range = document.createRange();
-          range.selectNodeContents(row);
+          range.selectNodeContents(row!);
           const selection = window.getSelection()!;
           selection.removeAllRanges();
           selection.addRange(range);
           if (diffStyle === "split") {
-            const text = extractTextSelection(root, file);
-            if (text?.text !== `line ${line}` || text.side !== side || text.startLine !== line)
-              throw new Error(`split: incorrect expanded ${side} text at line ${line}`);
+            const text = extractTextSelection(root!, file);
+            check(
+              !(text?.text !== `line ${line}` || text.side !== side || text.startLine !== line),
+              `split: incorrect expanded ${side} text at line ${line}`,
+            );
           } else {
             let rejected = false;
             try {
-              extractTextSelection(root, file);
+              extractTextSelection(root!, file);
             } catch {
               rejected = true;
             }
-            if (!rejected)
-              throw new Error("unified context must keep its explicit gutter-only side rule");
+            check(rejected, "unified context must keep its explicit gutter-only side rule");
           }
-          passed++;
         }
       }
     } finally {
@@ -144,5 +137,5 @@ export async function testExpandedSelectionInBrowser() {
       host.remove();
     }
   }
-  return { passed };
+  return result();
 }

@@ -1,12 +1,13 @@
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { DiffViewer, DEFAULT_DIFF_SETTINGS } from "../DiffViewer";
 import type { SelectedSource } from "../lib/ask-ai-selection";
 import type { Annotation } from "../utils/parseReviewTokens";
 import type { PRComment } from "./types";
 
-function mountRefreshFixture() {
+function mountRefreshFixture(assertions: ReturnType<typeof createAssertions>) {
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;inset:10px;overflow:auto;background:#111";
   document.body.append(host);
@@ -40,16 +41,6 @@ function mountRefreshFixture() {
   const settle = async () => {
     for (let frame = 0; frame < 8; frame++) await new Promise(requestAnimationFrame);
   };
-  const wait = async (condition: () => boolean) => {
-    for (let frame = 0; frame < 180 && !condition(); frame++)
-      await new Promise(requestAnimationFrame);
-    if (!condition()) throw new Error("Actual diff annotation did not render");
-  };
-  let passed = 0;
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
   return {
     host,
     setAnnotations,
@@ -58,9 +49,10 @@ function mountRefreshFixture() {
     selections,
     resolutions,
     settle,
-    wait,
-    check,
-    result: () => ({ passed }),
+    wait: (condition: () => boolean) =>
+      assertions.wait(condition, "Actual diff annotation did not render"),
+    check: assertions.check,
+    result: assertions.result,
     close: () => {
       dispose();
       host.remove();
@@ -70,7 +62,7 @@ function mountRefreshFixture() {
 }
 
 export async function testSameIdFindingOriginRefreshInBrowser() {
-  const fixture = mountRefreshFixture();
+  const fixture = mountRefreshFixture(createAssertions(3000));
   const { host, setAnnotations, received, settle, wait, check } = fixture;
   let annotation: Annotation = {
     id: "same-finding",
@@ -117,7 +109,7 @@ export async function testSameIdFindingOriginRefreshInBrowser() {
 }
 
 export async function testSameBodyLegacyThreadRefreshInBrowser() {
-  const fixture = mountRefreshFixture();
+  const fixture = mountRefreshFixture(createAssertions(3000));
   const { host, setComments, settle, wait, check, resolutions } = fixture;
   let comment: PRComment = {
     id: 1,
@@ -199,7 +191,7 @@ export async function testSameBodyLegacyThreadRefreshInBrowser() {
 }
 
 export async function testMultilineSelectionAnnotationRefreshInBrowser() {
-  const fixture = mountRefreshFixture();
+  const fixture = mountRefreshFixture(createAssertions(3000));
   const { host, setAnnotations, setComments, settle, wait, check, selections } = fixture;
   let annotation: Annotation = {
     id: "stable-finding",

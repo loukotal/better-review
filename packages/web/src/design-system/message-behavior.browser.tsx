@@ -2,6 +2,7 @@
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { CommentThread, CommentView, PendingCommentForm } from "../components/CommentView";
 import { PrCommentsPanel } from "../components/PrCommentsPanel";
 import { Dialog } from "./Dialog";
@@ -10,11 +11,7 @@ import { Popover } from "./Popover";
 import { Textarea } from "./Textarea";
 
 export async function testMessageBehaviorInBrowser() {
-  let passed = 0;
-  const check = (condition: boolean, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
+  const { check, result } = createAssertions(3000);
   const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
   const key = (element: Element, extra: KeyboardEventInit = {}) =>
     element.dispatchEvent(
@@ -256,7 +253,7 @@ export async function testMessageBehaviorInBrowser() {
     check(popover.matches(":popover-open"), "native popover inside control stays open");
     button("×").click();
     check(!popover.matches(":popover-open"), "popover explicit close still works");
-    return { passed };
+    return result();
   } finally {
     dispose();
     host.remove();

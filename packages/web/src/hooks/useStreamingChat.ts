@@ -137,9 +137,14 @@ export function useStreamingChat(
   let client: ReviewClient | undefined;
   let stop: (() => void) | undefined;
   let generation = 0;
-  let pending:
-    | { body: string; key: string; id?: string; resolve: (success: boolean) => void }
-    | undefined;
+  let observations = 0;
+  type PendingRequest = {
+    body: string;
+    key: string;
+    id?: string;
+    resolve: (success: boolean) => void;
+  };
+  let pending: PendingRequest | undefined;
   let retry: { body: string; key: string; model?: ReviewModelIntent } | undefined;
   let latest: ReviewSnapshot | undefined;
 
@@ -156,6 +161,14 @@ export function useStreamingChat(
     setStreamingReasoning("");
     setActiveTools([]);
     setAwaitingFirstToken(false);
+  }
+  function settle(request: PendingRequest, settlement: ReviewSettlement) {
+    const complete = settlement.outcome === "completed";
+    retry = complete ? undefined : { body: request.body, key: crypto.randomUUID() };
+    setRetryableMessage(complete ? null : request.body);
+    setError(settlementMessage(settlement));
+    request.resolve(complete);
+    pending = undefined;
   }
   function apply(snapshot: ReviewSnapshot) {
     latest = snapshot;
@@ -177,12 +190,7 @@ export function useStreamingChat(
       setAwaitingFirstToken(running && !projected.live);
       connected();
       if (settlement && pending) {
-        const complete = settlement.outcome === "completed";
-        retry = complete ? undefined : { body: pending.body, key: crypto.randomUUID() };
-        setRetryableMessage(complete ? null : pending.body);
-        setError(settlementMessage(settlement));
-        pending.resolve(complete);
-        pending = undefined;
+        settle(pending, settlement);
       } else if (!pending && !snapshot.running) {
         const last = snapshot.settlements.at(-1);
         setError(last ? settlementMessage(last) : null);
@@ -217,7 +225,10 @@ export function useStreamingChat(
     setConnectionStatus("connecting");
     stop = client.observe(
       (snapshot) => {
-        if (generation === version) apply(snapshot);
+        if (generation === version) {
+          observations++;
+          apply(snapshot);
+        }
       },
       (message) => {
         if (generation !== version) return;
@@ -240,23 +251,69 @@ export function useStreamingChat(
     const result = new Promise<boolean>((done) => {
       resolve = done;
     });
-    pending = { body, key, resolve };
+    const request: PendingRequest = { body, key, resolve };
+    pending = request;
     setError(null);
     setRetryableMessage(null);
     setIsStreaming(true);
     setAwaitingFirstToken(true);
     try {
       const receipt = await target.send(body, key, model);
-      if (generation !== version || !pending) return false;
-      pending.id = receipt.submissionId;
+      if (generation !== version) return false;
+      if (pending !== request) return result;
+      request.id = receipt.submissionId;
       if (latest) apply(latest);
       // A fast completion may precede SSE attachment, or a reconnect may be in progress.
-      if (pending) {
-        const snapshot = await target.history();
-        if (generation === version) apply(snapshot);
+      if (pending === request) {
+        const observed = observations;
+        try {
+          const snapshot = await target.history();
+          if (generation === version && pending === request) {
+            const settlement = snapshot.settlements.find(
+              (item) => item.submissionId === request.id,
+            );
+            // Delivery order is not snapshot order. A matching settlement can extend
+            // a late pre-admission observation, but cannot erase observed progress.
+            const canPresent =
+              observations === observed ||
+              (settlement &&
+                latest &&
+                !latest.running &&
+                !latest.compacting &&
+                // Git refs have no ordering; retain any known observed authority.
+                (latest.revision === undefined || snapshot.revision === latest.revision) &&
+                JSON.stringify(snapshot.messages.slice(0, latest.messages.length)) ===
+                  JSON.stringify(latest.messages) &&
+                latest.settlements.every((previous) =>
+                  snapshot.settlements.some(
+                    (item) =>
+                      item.submissionId === previous.submissionId &&
+                      item.outcome === previous.outcome &&
+                      item.error === previous.error,
+                  ),
+                ));
+            if (canPresent) {
+              apply(snapshot);
+            } else if (settlement) {
+              // Settlement belongs to this request; conflicting presentation still
+              // belongs to the observer. Never apply A's receipt to pending B.
+              batch(() => {
+                settle(request, settlement);
+                setIsStreaming(latest?.running ?? false);
+                setAwaitingFirstToken(
+                  Boolean(latest?.running && !conversationSnapshotState(latest).live),
+                );
+              });
+            }
+          }
+        } catch (cause) {
+          if (generation === version && pending === request && observations === observed)
+            throw cause;
+        }
       }
     } catch (cause) {
       if (generation !== version) return false;
+      if (pending !== request) return result;
       const message = cause instanceof Error ? cause.message : "Failed to send review message";
       retry = { body, key, model };
       setRetryableMessage(body);

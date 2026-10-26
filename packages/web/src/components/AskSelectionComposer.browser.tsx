@@ -4,18 +4,15 @@ import { render } from "solid-js/web";
 
 import type { StoredSession } from "@better-review/shared";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { createSelectionDraft, createSelectionSender } from "../lib/ask-ai-selection";
 import { AskSelectionComposer, createSelectionQuestionState } from "./AskSelectionComposer";
 
 export async function testBusyNewConversationInBrowser() {
+  const { check, result } = createAssertions(3000);
   const sender = createSelectionSender();
   const sends: { id: string; body: string; key: string }[] = [];
   let creates = 0;
-  let passed = 0;
-  const check = (condition: boolean, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
   for (let round = 0; round < 2; round++) {
     const selection = createSelectionDraft(
       { file: "a.ts", side: "RIGHT", startLine: 1, endLine: 1, text: "same source" },
@@ -124,10 +121,11 @@ export async function testBusyNewConversationInBrowser() {
   check(creates === 2, "identical questions in separate composer drafts must create twice");
   check(sends[0]?.key !== sends[1]?.key, "separate drafts must not share admission keys");
   check(sends[0]?.body === sends[1]?.body, "fixture questions/context must be genuinely identical");
-  return { passed, creates, admissions: sends.length };
+  return { ...result(), creates, admissions: sends.length };
 }
 
 export async function testSelectionConversationPickerInBrowser() {
+  const { check, result } = createAssertions(3000);
   const [current, setCurrent] = createSignal<string | null>("session-a");
   const state = createSelectionQuestionState();
   const sessions = ["session-a", "session-b"].map(
@@ -159,11 +157,6 @@ export async function testSelectionConversationPickerInBrowser() {
     ),
     host,
   );
-  let passed = 0;
-  const check = (condition: boolean, message: string) => {
-    if (!condition) throw new Error(message);
-    passed++;
-  };
   try {
     const picker = host.querySelector("select")!;
     const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]')!;
@@ -213,7 +206,7 @@ export async function testSelectionConversationPickerInBrowser() {
       await new Promise(requestAnimationFrame);
       check(host.scrollWidth <= width, `composer fits ${width}px`);
     }
-    return { passed };
+    return result();
   } finally {
     dispose();
     host.remove();

@@ -14,6 +14,7 @@ import {
   refreshGithubActor,
 } from "../lib/github-writes";
 import { api, queryClient, queryKeys } from "../lib/query";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 declare global {
@@ -63,18 +64,9 @@ export async function testAppGithubCommentProjectionInBrowser() {
   const controls: GithubOutboxControl[] = [];
   let revision = 0,
     calls = 0,
-    passed = 0,
     identityKnown = true,
     backendOffline = false;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let frame = 0; frame < 240 && !predicate(); frame++)
-      await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(4000);
   const card = (key: string) =>
     document.querySelector<HTMLElement>(`[data-github-comment-key="${key}"]`);
   const button = (root: Element, label: string) =>
@@ -726,5 +718,5 @@ export async function testAppGithubCommentProjectionInBrowser() {
   );
   await window.dismissBrowserPopover("escape");
   githubWrites.activate();
-  return { passed };
+  return result();
 }

@@ -1,5 +1,7 @@
 import superjson from "superjson";
 
+import type { createAssertions } from "./assertions";
+
 export interface SourceFixtureRequest {
   sessionId: string;
   path: string;
@@ -52,15 +54,12 @@ export function sourceWindow(content: string, range: SourceFixtureRequest["range
 
 export const sourceJson = (value: unknown) => Response.json({ result: { data: { json: value } } });
 
-export async function browserWait(predicate: () => boolean, message: string) {
-  for (let frame = 0; frame < 180; frame++) {
-    if (predicate()) return;
-    await new Promise(requestAnimationFrame);
-  }
-  throw new Error(message);
-}
-
-export async function askSourceRows(host: HTMLElement, first: number, last = first) {
+export async function askSourceRows(
+  assertions: Pick<ReturnType<typeof createAssertions>, "wait">,
+  host: HTMLElement,
+  first: number,
+  last = first,
+) {
   const startCode = host.querySelector(`[data-source-line="${first}"] code`)!;
   const endCode = host.querySelector(`[data-source-line="${last}"] code`)!;
   const start = startCode.firstChild ?? startCode;
@@ -73,7 +72,7 @@ export async function askSourceRows(host: HTMLElement, first: number, last = fir
   getSelection()!.removeAllRanges();
   getSelection()!.addRange(range);
   host.querySelector("section")!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-  await browserWait(
+  await assertions.wait(
     () => !!document.querySelector('[aria-label="Selection actions"] button'),
     "Source selection bubble did not open",
   );

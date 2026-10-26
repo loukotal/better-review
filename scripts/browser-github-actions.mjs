@@ -13,9 +13,8 @@ const { createGithubOutboxAdapter } = await tsImport(
   import.meta.url,
 );
 
-/** Production admission/worker/HTTP adapter; every HTTP response is local. */
-export async function createBrowserGithubActions() {
-  const directory = await mkdtemp(join(tmpdir(), "better-review-browser-actions-"));
+/** Shared fake GitHub state and production HTTP adapter; no outbound network. */
+export function createBrowserGithubActionsFixture() {
   const actor = { id: 42, login: "browser-fixture" };
   const scope = {
     host: "github.com",
@@ -31,11 +30,16 @@ export async function createBrowserGithubActions() {
   let failDelete = false;
   let failEdit = false;
   let loseApprovalResponse = false;
+  let loseAppliedApprovalResponse = false;
+  let releaseReviewRead;
+  let reviewReadGate;
   let rejectApproval = false;
   let releaseApproval;
   let approvalGate;
   let createdIssue;
   let createdReview;
+  let approval;
+  let appliedApprovalWithoutAck;
   const comment = {
     id: 20,
     node_id: "comment-node-not-thread",
@@ -90,21 +94,26 @@ export async function createBrowserGithubActions() {
           loseApprovalResponse = false;
           throw new TypeError("Fixture lost delivery acknowledgement");
         }
-        return Response.json(
-          {
-            id: calls.filter((call) => call.method === "POST" && call.path.endsWith("/reviews"))
-              .length,
-            user: actor,
-            body: payload.body,
-            state: "APPROVED",
-            commit_id: payload.commit_id,
-            html_url: `${scope.url}#pullrequestreview-fixture`,
-          },
-          { status: 201 },
-        );
+        approval = {
+          id: calls.filter((call) => call.method === "POST" && call.path.endsWith("/reviews"))
+            .length,
+          user: actor,
+          body: payload.body,
+          state: "APPROVED",
+          commit_id: payload.commit_id,
+          html_url: `${scope.url}#pullrequestreview-fixture`,
+        };
+        if (loseAppliedApprovalResponse) {
+          loseAppliedApprovalResponse = false;
+          appliedApprovalWithoutAck = approval;
+          throw new TypeError("Fixture applied approval but lost its response");
+        }
+        return Response.json(approval, { status: 201 });
       }
-      if (url.pathname === "/repos/browser-fixture/isolated/pulls/1/reviews" && method === "GET")
-        return Response.json([]);
+      if (url.pathname === "/repos/browser-fixture/isolated/pulls/1/reviews" && method === "GET") {
+        if (reviewReadGate) await reviewReadGate;
+        return Response.json(appliedApprovalWithoutAck ? [appliedApprovalWithoutAck] : []);
+      }
       if (
         url.pathname === "/repos/browser-fixture/isolated/pulls/1/comments" &&
         method === "POST"
@@ -185,26 +194,17 @@ export async function createBrowserGithubActions() {
       throw new Error(`Unexpected fixture request: ${method} ${url.pathname}`);
     },
   });
-  const box = await createGithubOutbox({
-    databasePath: join(directory, "outbox.sqlite"),
-    adapter,
-    getCachedActor: () => actor,
-    pollMs: 10,
-    now: () => clock ?? Date.now(),
-  });
   return {
+    actor,
+    scope,
+    adapter,
+    now: () => clock ?? Date.now(),
     async invoke({ kind, input }) {
       if (kind === "clock") {
         clock = Number(input);
         return clock;
       }
-      if (kind === "enqueue") return box.enqueue(input);
-      if (kind === "snapshot") return box.snapshot(scope);
-      if (kind === "pending") return box.listPending();
-      if (kind === "heartbeat") return box.heartbeat(input);
-      if (kind === "control") return box.control(input);
-      if (kind === "batch-control") return box.batchControl(input);
-      if (kind === "state") return { resolved, deleted, calls };
+      if (kind === "state") return { resolved, deleted, calls, approval };
       if (kind === "fail-delete") {
         failDelete = !!input;
         return;
@@ -215,6 +215,21 @@ export async function createBrowserGithubActions() {
       }
       if (kind === "lose-approval-response") {
         loseApprovalResponse = !!input;
+        return;
+      }
+      if (kind === "lose-applied-approval-response") {
+        loseAppliedApprovalResponse = true;
+        return;
+      }
+      if (kind === "hold-review-read") {
+        reviewReadGate = new Promise((resolve) => {
+          releaseReviewRead = resolve;
+        });
+        return;
+      }
+      if (kind === "release-review-read") {
+        releaseReviewRead?.();
+        reviewReadGate = undefined;
         return;
       }
       if (kind === "reject-approval") {
@@ -236,6 +251,35 @@ export async function createBrowserGithubActions() {
     },
     async close() {
       releaseApproval?.();
+      releaseReviewRead?.();
+    },
+  };
+}
+
+/** Existing exposed-function fixtures keep their direct worker transport. */
+export async function createBrowserGithubActions() {
+  const directory = await mkdtemp(join(tmpdir(), "better-review-browser-actions-"));
+  const fixture = createBrowserGithubActionsFixture();
+  const box = await createGithubOutbox({
+    databasePath: join(directory, "outbox.sqlite"),
+    adapter: fixture.adapter,
+    getCachedActor: () => fixture.actor,
+    pollMs: 10,
+    now: fixture.now,
+  });
+  return {
+    async invoke(request) {
+      const { kind, input } = request;
+      if (kind === "enqueue") return box.enqueue(input);
+      if (kind === "snapshot") return box.snapshot(fixture.scope);
+      if (kind === "pending") return box.listPending();
+      if (kind === "heartbeat") return box.heartbeat(input);
+      if (kind === "control") return box.control(input);
+      if (kind === "batch-control") return box.batchControl(input);
+      return fixture.invoke(request);
+    },
+    async close() {
+      await fixture.close();
       await box.close();
       await rm(directory, { recursive: true, force: true });
     },

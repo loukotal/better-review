@@ -2,18 +2,11 @@ import type { GithubOutboxOperation } from "@better-review/shared";
 
 import { createIndexedDbGithubJournal } from "../lib/github-outbox-journal";
 import { githubPrScope, githubWrites } from "../lib/github-writes";
+import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
 export async function testTimedOutQueueIsStaticAndUnknownDeliveryStillRequiresConsentInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
-  const wait = async (predicate: () => boolean, message: string) => {
-    for (let n = 0; n < 180 && !predicate(); n++) await new Promise(requestAnimationFrame);
-    check(predicate(), message);
-  };
+  const { check, wait, result } = createAssertions(3000);
   const journal = createIndexedDbGithubJournal();
   const scope = githubPrScope("https://github.com/browser-fixture/isolated/pull/1");
   const operations: GithubOutboxOperation[] = [];
@@ -122,5 +115,5 @@ export async function testTimedOutQueueIsStaticAndUnknownDeliveryStillRequiresCo
     "Timeout discarded original content",
   );
   check(unsafe === 0, "Opening timeout state performed an unsafe request");
-  return { passed };
+  return result();
 }

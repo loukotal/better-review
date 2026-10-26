@@ -4,9 +4,11 @@ import { render } from "solid-js/web";
 import type { PrDetailCheck, PrDetailSection } from "@better-review/shared";
 
 import { PrChecks } from "../components/PrChecks";
+import { createAssertions } from "./assertions";
 
 /** No App, query cache, or PR read owner: isolate native details event ordering. */
 export async function testPrCheckGroupsKeepUserToggleBeforeOtherGroupsInitialToggleInBrowser() {
+  const { check, result } = createAssertions(5000);
   const initial: PrDetailSection<PrDetailCheck[]> = {
     status: "available",
     complete: true,
@@ -67,9 +69,6 @@ export async function testPrCheckGroupsKeepUserToggleBeforeOtherGroupsInitialTog
     ),
     root,
   );
-  const check = (condition: unknown, message: string) => {
-    if (!condition) throw new Error(message);
-  };
   try {
     const groups = [...root.querySelectorAll("details")];
     const passed = groups.find((group) =>
@@ -110,7 +109,7 @@ export async function testPrCheckGroupsKeepUserToggleBeforeOtherGroupsInitialTog
       group.querySelector("summary")?.textContent?.startsWith("Passed"),
     );
     check(restored?.open, "Expansion did not survive temporarily empty check results");
-    return { passed: 8 };
+    return result();
   } finally {
     dispose();
     root.remove();

@@ -5,15 +5,12 @@ import type {
   GithubPrScope,
 } from "@better-review/shared";
 
+import { createAssertions } from "../browser-tests/assertions";
 import { createGithubOutbox, type GithubOutboxTransport } from "./github-outbox";
 import { createIndexedDbGithubJournal } from "./github-outbox-journal";
 
 export async function testGithubOutboxInBrowser() {
-  let passed = 0;
-  function check(value: unknown, message: string) {
-    if (!value) throw new Error(message);
-    passed++;
-  }
+  const { check, result } = createAssertions(2000);
   const name = `github-outbox-test-${crypto.randomUUID()}`;
   const scope: GithubPrScope = {
     host: "github.com",
@@ -233,16 +230,12 @@ export async function testGithubOutboxInBrowser() {
       request.onerror = () => reject(request.error);
     });
   }
-  return { passed };
+  return result();
 }
 
 /** Separate editor intents/tabs, canonical receipt, real IndexedDB reopening. */
 export async function testContentDuplicateReceiptInBrowser() {
-  let passed = 0;
-  const check = (value: unknown, message: string) => {
-    if (!value) throw new Error(message);
-    passed++;
-  };
+  const { check, result } = createAssertions(2000);
   const name = `github-content-dedup-${crypto.randomUUID()}`;
   const scope: GithubPrScope = {
     host: "github.com",
@@ -345,5 +338,5 @@ export async function testContentDuplicateReceiptInBrowser() {
     await client.close();
     indexedDB.deleteDatabase(name);
   }
-  return { passed };
+  return result();
 }

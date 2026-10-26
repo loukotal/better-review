@@ -38,7 +38,14 @@ async function run(test: Test) {
   const exports = await modules[test.file]();
   const fn = exports[test.name] as (mode?: string) => unknown;
   const result = await fn(test.mode);
-  if (!result || typeof result !== "object" || !("passed" in result) || !Number(result.passed))
+  if (
+    !result ||
+    typeof result !== "object" ||
+    !("passed" in result) ||
+    typeof result.passed !== "number" ||
+    !Number.isSafeInteger(result.passed) ||
+    result.passed <= 0
+  )
     throw new Error(`${test.name} did not report assertions`);
   return result;
 }
