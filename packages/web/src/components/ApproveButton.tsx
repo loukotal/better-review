@@ -190,7 +190,7 @@ export function ApproveButton(props: {
                   <Show when={submitting()}>
                     <GithubSyncStatus status="saving-local" iconOnly />
                   </Show>
-                  {submitting() ? "Saving locally…" : "Approve PR"}
+                  {submitting() ? "Saving locally…" : "Approve"}
                 </Button>
               </div>
             </MessageForm>
