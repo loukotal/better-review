@@ -54,30 +54,27 @@ export function normalizeThinkingLevel(
 export function createModelResolution(options: {
   catalog: { get(providerId: string, modelId: string): ModelEntry | null };
   credentials: {
-    openAiApiKey(): boolean;
-    oauth(providerId: string): boolean;
     available(providerId: string): boolean;
   };
   currentThinking?: () => ReasoningEffort | undefined;
 }) {
   function route(model: ModelEntry, policy: "explicit" | "current"): ModelEntry {
-    const missingOpenAiKey = model.providerId === "openai" && !options.credentials.openAiApiKey();
+    // OpenAI supports both API keys and native ChatGPT OAuth. Never replace an
+    // explicit OpenAI provider with the legacy Codex provider.
+    if (model.providerId === "openai") {
+      if (policy === "explicit" && !options.credentials.available("openai"))
+        throw new Error(
+          `Model ${model.providerId}/${model.modelId} requires OpenAI credentials. Sign in with ChatGPT via /login openai or set OPENAI_API_KEY.`,
+        );
+      return model;
+    }
     const missingOpenCodeKey =
       model.providerId === "opencode" && !options.credentials.available("opencode");
-    if (!missingOpenAiKey && !missingOpenCodeKey) return model;
-    // Explicit OpenAI intent needs the legacy OAuth/stored-auth fact. Current
-    // preference routing additionally accepts environment Codex credentials.
-    const hasCodex =
-      missingOpenAiKey && policy === "explicit"
-        ? options.credentials.oauth("openai-codex")
-        : options.credentials.available("openai-codex");
+    if (!missingOpenCodeKey) return model;
+    const hasCodex = options.credentials.available("openai-codex");
     const codex = hasCodex ? options.catalog.get("openai-codex", model.modelId) : null;
     if (codex) return codex;
     if (policy === "current") return model;
-    if (missingOpenAiKey)
-      throw new Error(
-        `Model ${model.providerId}/${model.modelId} requires OPENAI_API_KEY. Select an openai-codex model or set OPENAI_API_KEY.`,
-      );
     throw new Error(
       `Model ${model.providerId}/${model.modelId} requires OPENCODE_API_KEY. Select an authenticated provider or set OPENCODE_API_KEY.`,
     );

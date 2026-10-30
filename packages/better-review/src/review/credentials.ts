@@ -31,8 +31,11 @@ export function reviewCredentials(
   const key = (file: string, provider: string) =>
     file === paths.opencode && provider === "openai-codex" ? "openai" : provider;
   async function source(provider: string) {
-    for (const file of [paths.pi, paths.opencode])
-      if ((await load(file))[key(file, provider)]) return file;
+    for (const file of [paths.pi, paths.opencode]) {
+      const value = (await load(file))[key(file, provider)];
+      if (file === paths.opencode && provider === "openai" && value?.type === "oauth") continue;
+      if (value) return file;
+    }
     return undefined;
   }
   function canonical(value: Record<string, unknown> | undefined): Credential | undefined {

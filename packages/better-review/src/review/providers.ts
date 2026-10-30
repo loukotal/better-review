@@ -69,13 +69,15 @@ export function getPiAuthApiKey(provider: string): string | undefined {
   return getCredentialApiKey(readAuthFile(PI_AUTH_PATH, "Pi")[provider], provider, "Pi");
 }
 
-function getOpenCodeAuthApiKey(provider: string): string | undefined {
+function getOpenCodeCredential(provider: string): StoredCredential | undefined {
   const authProvider = OPENCODE_AUTH_PROVIDER_ALIASES.get(provider) ?? provider;
-  return getCredentialApiKey(
-    readAuthFile(OPENCODE_AUTH_PATH, "OpenCode")[authProvider],
-    provider,
-    "OpenCode",
-  );
+  const credential = readAuthFile(OPENCODE_AUTH_PATH, "OpenCode")[authProvider];
+  // OpenCode's `openai` OAuth belongs to legacy Codex, not Pi's native OpenAI auth.
+  return provider === "openai" && credential?.type === "oauth" ? undefined : credential;
+}
+
+function getOpenCodeAuthApiKey(provider: string): string | undefined {
+  return getCredentialApiKey(getOpenCodeCredential(provider), provider, "OpenCode");
 }
 
 export function getAuthApiKey(provider: string): string | undefined {
@@ -135,9 +137,7 @@ export function getReviewProviders(): Provider[] {
 
 export function hasPiOAuthProvider(provider: string): boolean {
   const pi = readAuthFile(PI_AUTH_PATH, "Pi")[provider];
-  const opencode = readAuthFile(OPENCODE_AUTH_PATH, "OpenCode")[
-    OPENCODE_AUTH_PROVIDER_ALIASES.get(provider) ?? provider
-  ];
+  const opencode = getOpenCodeCredential(provider);
   if (
     [pi, opencode].some(
       (credential) => credential?.type === "oauth" && typeof credential.refresh === "string",

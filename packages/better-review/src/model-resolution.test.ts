@@ -24,6 +24,7 @@ function fixture(
     oauth?: boolean;
     codex?: boolean;
     opencode?: boolean;
+    openai?: boolean;
     matching?: boolean;
   } = {},
 ) {
@@ -36,16 +37,9 @@ function fixture(
   const resolution = createModelResolution({
     catalog: { get: (provider, model) => catalog.get(`${provider}/${model}`) ?? null },
     credentials: {
-      openAiApiKey: () => {
-        credentials.push("openai-key");
-        return !!facts.key;
-      },
-      oauth: (provider) => {
-        credentials.push(`oauth:${provider}`);
-        return !!facts.oauth;
-      },
       available: (provider) => {
         credentials.push(`available:${provider}`);
+        if (provider === "openai") return !!(facts.key || facts.openai);
         return provider === "opencode" ? !!facts.opencode : !!facts.codex;
       },
     },
@@ -76,18 +70,30 @@ for (const row of [
     current: "openai",
   },
   {
-    label: "OAuth",
-    facts: { oauth: true, codex: true },
-    explicit: "openai-codex",
-    current: "openai-codex",
+    label: "OpenAI ChatGPT OAuth wins over legacy Codex",
+    facts: { openai: true, oauth: true, codex: true },
+    explicit: "openai",
+    current: "openai",
   },
   {
-    label: "environment-only Codex",
+    label: "environment-only Codex never replaces OpenAI",
     facts: { codex: true },
     explicit: null,
-    current: "openai-codex",
+    current: "openai",
   },
   { label: "no credentials", facts: {}, explicit: null, current: "openai" },
+  {
+    label: "legacy OAuth never replaces OpenAI",
+    facts: { oauth: true, codex: true },
+    explicit: null,
+    current: "openai",
+  },
+  {
+    label: "OpenAI stored API key or OAuth without legacy credentials",
+    facts: { openai: true },
+    explicit: "openai",
+    current: "openai",
+  },
   {
     label: "OAuth without matching model",
     facts: { oauth: true, codex: true, matching: false },
@@ -111,7 +117,7 @@ for (const row of [
     } else
       assert.throws(() => f.resolution.explicit(input), {
         message:
-          "Model openai/review requires OPENAI_API_KEY. Select an openai-codex model or set OPENAI_API_KEY.",
+          "Model openai/review requires OpenAI credentials. Sign in with ChatGPT via /login openai or set OPENAI_API_KEY.",
       });
     const selected = f.selected("openai");
     assert.deepEqual(f.resolution.current(selected), {

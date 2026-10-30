@@ -41,4 +41,13 @@ test("native OAuth refresh serializes rotated tokens and preserves unrelated cre
   assert.equal(saved.openai.accountId, "account");
   assert.deepEqual(saved.other, { type: "api", key: "keep" });
   assert.deepEqual(await first.read("other"), { type: "api_key", key: "keep" });
+  assert.equal(
+    await first.read("openai"),
+    undefined,
+    "legacy OpenCode OAuth is not native OpenAI auth",
+  );
+  assert.deepEqual(await first.list(), [
+    { providerId: "openai-codex", type: "oauth" },
+    { providerId: "other", type: "api_key" },
+  ]);
 });

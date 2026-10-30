@@ -149,11 +149,15 @@ function resolveDefaultModel(): SelectedModel {
     );
   }
 
-  // Local dev usually has Pi's ChatGPT/Codex OAuth but no Anthropic token. Prefer
-  // the UI-visible OpenAI model; getCurrentReviewModel() will route it to
-  // openai-codex when needed.
-  if (hasPiOAuthProvider("openai-codex") && !process.env.OPENAI_API_KEY) {
-    const openAiModel = getModelEntry("openai", "gpt-5.5");
+  // Prefer native OpenAI auth (API key or ChatGPT sign-in). Legacy Codex-only
+  // setups keep their own provider rather than masquerading as OpenAI.
+  const openAiProvider = hasProviderCredentials("openai")
+    ? "openai"
+    : hasProviderCredentials("openai-codex")
+      ? "openai-codex"
+      : null;
+  if (openAiProvider) {
+    const openAiModel = getModelEntry(openAiProvider, "gpt-5.5");
     if (openAiModel) return toSelectedModel(openAiModel, null, DEFAULT_REASONING_EFFORT);
   }
 
@@ -228,8 +232,6 @@ export function setSelectedModel(input: {
 const modelResolution = createModelResolution({
   catalog: { get: getModelEntry },
   credentials: {
-    openAiApiKey: () => !!process.env.OPENAI_API_KEY,
-    oauth: hasPiOAuthProvider,
     available: hasProviderCredentials,
   },
   currentThinking: () => currentModel?.thinkingLevel,

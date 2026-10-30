@@ -70,7 +70,7 @@ test("explicit selection survives server restart instead of reverting to the Cod
     "only model intent is persisted, never credentials",
   );
   run(
-    `try { setSelectedModel({providerId: "openai", modelId: "gpt-5.5-pro"}); throw new Error("accepted"); } catch (error) { if (!error.message.includes("requires OPENAI_API_KEY")) throw error; } console.log(JSON.stringify(getSelectedModel()))`,
+    `try { setSelectedModel({providerId: "openai", modelId: "gpt-5.5-pro"}); throw new Error("accepted"); } catch (error) { if (!error.message.includes("requires OpenAI credentials")) throw error; } console.log(JSON.stringify(getSelectedModel()))`,
   );
   assert.equal(
     await readFile(env.BETTER_REVIEW_MODEL_SELECTION_PATH, "utf8"),
@@ -181,13 +181,13 @@ test("selection policy preserves current preference, catalog ordering, wire form
   `);
   assert.equal(
     result.preference.providerId,
-    "openai",
-    "the default remains the UI-visible preference",
+    "openai-codex",
+    "legacy-only credentials default to their actual provider",
   );
   assert.equal(
     result.effective.model.provider,
     "openai-codex",
-    "execution routes without rewriting preference",
+    "execution preserves the selected provider",
   );
   assert.equal(result.effective.thinkingLevel, result.preference.thinkingLevel);
   assert.equal(result.connected, 1);
@@ -225,3 +225,72 @@ test("selection policy preserves current preference, catalog ordering, wire form
   assert.equal(configured.modelId, "gpt-5.5");
   assert.equal(configured.selectionSource, "default");
 });
+
+for (const type of ["oauth", "api_key"] as const) {
+  test(`native OpenAI ${type} selection stays OpenAI across persistence and runtime auth`, async (t) => {
+    const directory = await mkdtemp(path.join(tmpdir(), "review-openai-selection-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const authPath = path.join(directory, "auth.json");
+    await writeFile(
+      authPath,
+      JSON.stringify({
+        openai:
+          type === "oauth"
+            ? {
+                type,
+                access: "native-openai",
+                refresh: "native-refresh",
+                expires: Date.now() + 3_600_000,
+              }
+            : { type, key: "native-openai" },
+        "openai-codex": { type: "oauth", access: "legacy", refresh: "legacy-refresh", expires: 1 },
+      }),
+    );
+    const env = {
+      PATH: process.env.PATH,
+      HOME: directory,
+      BETTER_REVIEW_PI_AUTH_PATH: authPath,
+      BETTER_REVIEW_OPENCODE_AUTH_PATH: path.join(directory, "missing.json"),
+      BETTER_REVIEW_MODEL_SELECTION_PATH: path.join(directory, "selection.json"),
+    };
+    function run(select: boolean) {
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "-e",
+          `
+        import { getSelectedModel, getCurrentReviewModel, setSelectedModel, searchModels } from ${JSON.stringify(new URL("./model-selection.ts", import.meta.url).href)};
+        import { createReviewModels } from ${JSON.stringify(new URL("./review/providers.ts", import.meta.url).href)};
+        const initial = getSelectedModel();
+        if (${select}) setSelectedModel({ providerId: 'openai', modelId: 'gpt-6.1-sol', thinkingLevel: 'high' });
+        const auth = await createReviewModels().getAuth('openai');
+        console.log(JSON.stringify({ initial, selected: getSelectedModel(), effective: getCurrentReviewModel(), auth, firstProvider: searchModels('').models[0].providerId }));
+      `,
+        ],
+        { env, encoding: "utf8" },
+      );
+      assert.equal(child.status, 0, child.stderr);
+      return JSON.parse(child.stdout);
+    }
+    const first = run(true);
+    assert.equal(
+      first.initial.providerId,
+      "openai",
+      "native auth takes priority over stale legacy auth",
+    );
+    for (const result of [first, run(false)]) {
+      assert.equal(result.selected.providerId, "openai");
+      assert.equal(result.selected.modelId, "gpt-6.1-sol");
+      assert.equal(result.selected.thinkingLevel, "high");
+      assert.equal(result.effective, "openai/gpt-6.1-sol");
+      assert.equal(result.firstProvider, "openai");
+      assert.ok(JSON.stringify(result.auth).includes("native-openai"));
+      assert.ok(!JSON.stringify(result.auth).includes("legacy"));
+    }
+    const saved = JSON.parse(await readFile(env.BETTER_REVIEW_MODEL_SELECTION_PATH, "utf8"));
+    assert.equal(saved.providerId, "openai");
+  });
+}
