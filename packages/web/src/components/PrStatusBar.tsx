@@ -114,10 +114,10 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
                 href={status().url}
                 target="_blank"
                 rel="noopener noreferrer"
-                class="text-sm font-medium text-text hover:text-accent inline-flex items-baseline gap-1.5 group leading-snug"
+                class="min-w-0 text-sm font-medium text-text hover:text-accent inline-flex items-baseline gap-1.5 group leading-snug"
                 title="Open PR in GitHub"
               >
-                <span class="break-words">{status().title}</span>
+                <span class="line-clamp-2 break-words sm:line-clamp-none">{status().title}</span>
                 <span
                   class="text-text-faint group-hover:text-accent transition-colors flex-shrink-0"
                   aria-hidden="true"
@@ -128,7 +128,7 @@ export const PrStatusBar: Component<PrStatusBarProps> = (props) => {
             </div>
 
             {/* Line 2: State badge, author, branch, CI checks, mergeable, description toggle */}
-            <div class="flex items-center gap-3 flex-wrap">
+            <div class="flex items-center gap-3 overflow-x-auto sm:flex-wrap sm:overflow-visible [&>*]:shrink-0">
               {/* State badge */}
               <Badge variant={status().draft ? "neutral" : style().variant}>
                 {status().draft ? "Draft" : style().label}

@@ -23,6 +23,7 @@ import type {
 
 import { AgentReviewContext } from "../components/AgentReviewContext";
 import { AppHeader } from "../components/AppHeader";
+import { CompactTools } from "../components/CompactTools";
 import {
   Badge,
   Button,
@@ -675,7 +676,7 @@ export default function AgentReviewPage() {
     const nextTop = Math.max(24, rect.bottom + 14);
     const nextLeft = Math.min(
       Math.max(24, rect.left + rect.width / 2 - 190),
-      window.innerWidth - 400,
+      Math.max(16, window.innerWidth - 400),
     );
 
     setDraftQuote(selected);
@@ -937,10 +938,10 @@ export default function AgentReviewPage() {
         }
       >
         {(loadedSession) => (
-          <div class="flex flex-col h-screen">
+          <div class="app-viewport flex flex-col">
             <Show when={!focusMode()}>
               <AppHeader>
-                <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+                <div class="flex flex-wrap items-center justify-between gap-1 sm:gap-3 border-t border-border px-2 py-1 sm:px-4 sm:py-3">
                   <div class="flex-1 min-w-0 space-y-1">
                     <div class="flex items-center gap-3 min-w-0">
                       <h1
@@ -960,7 +961,7 @@ export default function AgentReviewPage() {
                       hideDiffContext={Boolean(rangeBaseSha())}
                     />
                   </div>
-                  <div class="flex flex-wrap items-center justify-end gap-3 text-xs text-text-faint flex-shrink-0">
+                  <div class="flex flex-wrap items-center gap-1 sm:gap-3">
                     <div class="flex items-center gap-1 border-r border-border pr-3">
                       <Show when={isDiffSession()}>
                         <Button
@@ -991,106 +992,108 @@ export default function AgentReviewPage() {
                         Review
                       </Button>
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      title="Enter focus mode (F)"
-                      onClick={toggleFocusMode}
-                    >
-                      Focus
-                    </Button>
-                    <Popover label="Session details" width={360}>
-                      <div class="space-y-2 mb-4">
-                        <p class="text-sm text-text-muted">Review session history</p>
-                        <Show when={(sessionHistory()?.length ?? 0) > 1}>
-                          <Select
-                            compact
-                            value={params.sessionId}
-                            aria-label="Review session history"
-                            class="w-full"
-                            onInput={(event) => {
-                              const sessionId = event.currentTarget.value;
-                              if (sessionId !== params.sessionId) {
-                                window.location.assign(
-                                  `/agent-review/${encodeURIComponent(sessionId)}`,
-                                );
-                              }
-                            }}
-                          >
-                            <For each={sessionHistory() ?? []}>
-                              {(reviewSession) => (
-                                <option value={reviewSession.id}>
-                                  {new Date(reviewSession.createdAt).toLocaleString()} -{" "}
-                                  {reviewSession.title}
-                                </option>
-                              )}
-                            </For>
-                          </Select>
-                        </Show>
-                      </div>
-                      <dl class="space-y-3 text-sm">
-                        <Show when={loadedSession().branch !== undefined}>
-                          <div>
-                            <dt class="text-text-muted">Branch at creation</dt>
-                            <dd class="break-all font-mono text-xs">
-                              {loadedSession().branch ?? "Detached HEAD"}
-                            </dd>
-                          </div>
-                        </Show>
-                        <Show when={!rangeBaseSha() && selectedDiffVariant()}>
-                          {(variant) => (
-                            <>
-                              <div>
-                                <dt class="text-text-muted">Review scope</dt>
-                                <dd>{variant().label}</dd>
-                                <Show when={variant().description}>
-                                  {(description) => (
-                                    <dd class="text-xs text-text-faint">{description()}</dd>
-                                  )}
-                                </Show>
-                              </div>
-                              <Show when={getVariantCommits(variant()).length > 0}>
-                                <div>
-                                  <dt class="text-text-muted">
-                                    Commits ({getVariantCommits(variant()).length})
-                                  </dt>
-                                  <dd class="max-h-64 overflow-y-auto space-y-3 mt-1">
-                                    <For each={getVariantCommits(variant())}>
-                                      {(commit) => (
-                                        <div>
-                                          <p class="break-all font-mono text-xs">{commit.sha}</p>
-                                          <p class="mt-1 whitespace-pre-wrap break-words">
-                                            {commit.message}
-                                          </p>
-                                        </div>
-                                      )}
-                                    </For>
-                                  </dd>
-                                </div>
-                              </Show>
-                            </>
-                          )}
-                        </Show>
-                        <div>
-                          <dt class="text-text-muted">Created</dt>
-                          <dd>{formatTimestamp(loadedSession().createdAt)}</dd>
+                    <CompactTools label="Session tools">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        title="Enter focus mode (F)"
+                        onClick={toggleFocusMode}
+                      >
+                        Focus
+                      </Button>
+                      <Popover label="Session details" width={360}>
+                        <div class="space-y-2 mb-4">
+                          <p class="text-sm text-text-muted">Review session history</p>
+                          <Show when={(sessionHistory()?.length ?? 0) > 1}>
+                            <Select
+                              compact
+                              value={params.sessionId}
+                              aria-label="Review session history"
+                              class="w-full"
+                              onInput={(event) => {
+                                const sessionId = event.currentTarget.value;
+                                if (sessionId !== params.sessionId) {
+                                  window.location.assign(
+                                    `/agent-review/${encodeURIComponent(sessionId)}`,
+                                  );
+                                }
+                              }}
+                            >
+                              <For each={sessionHistory() ?? []}>
+                                {(reviewSession) => (
+                                  <option value={reviewSession.id}>
+                                    {new Date(reviewSession.createdAt).toLocaleString()} -{" "}
+                                    {reviewSession.title}
+                                  </option>
+                                )}
+                              </For>
+                            </Select>
+                          </Show>
                         </div>
-                        <div>
-                          <dt class="text-text-muted">Origin</dt>
-                          <dd>{loadedSession().origin}</dd>
-                        </div>
-                        <Show when={loadedSession().cwd}>
-                          {(cwd) => (
+                        <dl class="space-y-3 text-sm">
+                          <Show when={loadedSession().branch !== undefined}>
                             <div>
-                              <dt class="text-text-muted">Working directory</dt>
-                              <dd class="break-all font-mono text-xs">{cwd()}</dd>
+                              <dt class="text-text-muted">Branch at creation</dt>
+                              <dd class="break-all font-mono text-xs">
+                                {loadedSession().branch ?? "Detached HEAD"}
+                              </dd>
                             </div>
-                          )}
-                        </Show>
-                      </dl>
-                    </Popover>
-                    <SettingsPanel settings={settings()} onChange={setSettings} />
+                          </Show>
+                          <Show when={!rangeBaseSha() && selectedDiffVariant()}>
+                            {(variant) => (
+                              <>
+                                <div>
+                                  <dt class="text-text-muted">Review scope</dt>
+                                  <dd>{variant().label}</dd>
+                                  <Show when={variant().description}>
+                                    {(description) => (
+                                      <dd class="text-xs text-text-faint">{description()}</dd>
+                                    )}
+                                  </Show>
+                                </div>
+                                <Show when={getVariantCommits(variant()).length > 0}>
+                                  <div>
+                                    <dt class="text-text-muted">
+                                      Commits ({getVariantCommits(variant()).length})
+                                    </dt>
+                                    <dd class="max-h-64 overflow-y-auto space-y-3 mt-1">
+                                      <For each={getVariantCommits(variant())}>
+                                        {(commit) => (
+                                          <div>
+                                            <p class="break-all font-mono text-xs">{commit.sha}</p>
+                                            <p class="mt-1 whitespace-pre-wrap break-words">
+                                              {commit.message}
+                                            </p>
+                                          </div>
+                                        )}
+                                      </For>
+                                    </dd>
+                                  </div>
+                                </Show>
+                              </>
+                            )}
+                          </Show>
+                          <div>
+                            <dt class="text-text-muted">Created</dt>
+                            <dd>{formatTimestamp(loadedSession().createdAt)}</dd>
+                          </div>
+                          <div>
+                            <dt class="text-text-muted">Origin</dt>
+                            <dd>{loadedSession().origin}</dd>
+                          </div>
+                          <Show when={loadedSession().cwd}>
+                            {(cwd) => (
+                              <div>
+                                <dt class="text-text-muted">Working directory</dt>
+                                <dd class="break-all font-mono text-xs">{cwd()}</dd>
+                              </div>
+                            )}
+                          </Show>
+                        </dl>
+                      </Popover>
+                      <SettingsPanel settings={settings()} onChange={setSettings} />
+                    </CompactTools>
                   </div>
                 </div>
               </AppHeader>
@@ -1100,7 +1103,7 @@ export default function AgentReviewPage() {
               <div class="flex items-center justify-between px-3 py-1.5 bg-bg-surface border-b border-accent/30 flex-shrink-0">
                 <div class="flex items-center gap-2">
                   <span class="text-xs text-text-muted font-medium">Focus mode</span>
-                  <span class="text-xs text-text-faint">
+                  <span class="hidden sm:inline text-xs text-text-faint">
                     Side panels hidden. Press Esc or F to exit.
                   </span>
                 </div>
@@ -1129,7 +1132,10 @@ export default function AgentReviewPage() {
                   >
                     <FileTreePanel
                       files={files()}
-                      onFileSelect={scrollToFile}
+                      onFileSelect={(path) => {
+                        scrollToFile(path);
+                        if (compactPanels()) setPanelVisibility({ files: false, review: false });
+                      }}
                       readFiles={readFiles()}
                       onToggleRead={toggleFileRead}
                     />
@@ -1138,44 +1144,46 @@ export default function AgentReviewPage() {
 
                 <div class="flex-1 min-w-0 flex flex-col">
                   <Show when={availableDiffVariants().length > 0 || (commits()?.length ?? 0) > 0}>
-                    <div class="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 bg-bg-surface shrink-0">
-                      <span class="text-xs text-text-muted">Compare</span>
-                      <Show when={availableDiffVariants().length > 0}>
+                    <div class="border-b border-border px-2 py-1 sm:px-3 sm:py-2 bg-bg-surface shrink-0">
+                      <CompactTools label="Compare">
+                        <span class="hidden sm:inline text-xs text-text-muted">Compare</span>
+                        <Show when={availableDiffVariants().length > 0}>
+                          <Select
+                            compact
+                            aria-label="Diff source"
+                            class="max-w-full sm:max-w-52"
+                            value={currentDiffVariantId() ?? ""}
+                            disabled={Boolean(rangeBaseSha())}
+                            onInput={(event) => setCurrentDiffVariantId(event.currentTarget.value)}
+                          >
+                            <For each={availableDiffVariants()}>
+                              {(variant) => <option value={variant.id}>{variant.label}</option>}
+                            </For>
+                          </Select>
+                        </Show>
                         <Select
                           compact
-                          aria-label="Diff source"
-                          class="max-w-full sm:max-w-52"
-                          value={currentDiffVariantId() ?? ""}
-                          disabled={Boolean(rangeBaseSha())}
-                          onInput={(event) => setCurrentDiffVariantId(event.currentTarget.value)}
+                          value={rangeBaseSha() ?? ""}
+                          aria-label="Comparison base"
+                          class="min-w-0 w-full sm:w-64"
+                          title="Review changes since this commit"
+                          onInput={(event) =>
+                            setRangeBaseSha(event.currentTarget.value.trim() || null)
+                          }
                         >
-                          <For each={availableDiffVariants()}>
-                            {(variant) => <option value={variant.id}>{variant.label}</option>}
+                          <option value="">Review original diff</option>
+                          <For each={commits() ?? []}>
+                            {(commit) => (
+                              <option value={commit.sha}>
+                                Since {commit.shortSha} — {commit.subject}
+                              </option>
+                            )}
                           </For>
                         </Select>
-                      </Show>
-                      <Select
-                        compact
-                        value={rangeBaseSha() ?? ""}
-                        aria-label="Comparison base"
-                        class="min-w-0 w-full sm:w-64"
-                        title="Review changes since this commit"
-                        onInput={(event) =>
-                          setRangeBaseSha(event.currentTarget.value.trim() || null)
-                        }
-                      >
-                        <option value="">Review original diff</option>
-                        <For each={commits() ?? []}>
-                          {(commit) => (
-                            <option value={commit.sha}>
-                              Since {commit.shortSha} — {commit.subject}
-                            </option>
-                          )}
-                        </For>
-                      </Select>
-                      <Show when={rangeDiff.loading}>
-                        <span class="text-xs text-text-faint">Loading diff...</span>
-                      </Show>
+                        <Show when={rangeDiff.loading}>
+                          <span class="text-xs text-text-faint">Loading diff...</span>
+                        </Show>
+                      </CompactTools>
                     </div>
                   </Show>
 
@@ -1249,13 +1257,13 @@ export default function AgentReviewPage() {
             </Show>
 
             <Show when={!isDiffSession()}>
-              <div class="flex flex-1 min-h-0">
+              <div class="relative flex flex-1 min-h-0">
                 <div class="flex-1 min-w-0 overflow-auto">
                   <div
                     ref={(element) => {
                       contentRef = element;
                     }}
-                    class="mx-auto max-w-4xl px-6 py-6"
+                    class="mx-auto max-w-4xl px-3 py-3 sm:px-6 sm:py-6"
                     onMouseUp={captureSelection}
                     onKeyUp={captureSelection}
                     onClick={navigateToInlineAnnotation}
@@ -1270,7 +1278,9 @@ export default function AgentReviewPage() {
                 </div>
 
                 <Show when={showReviewPanel()}>
-                  <div class="w-72 flex-shrink-0 border-l border-border flex flex-col bg-bg-surface">
+                  <div
+                    class={`${compactPanels() ? "absolute inset-y-0 right-0 z-30 max-w-full" : "flex-shrink-0"} w-72 border-l border-border flex flex-col bg-bg-surface`}
+                  >
                     <div class="flex-1 overflow-y-auto">
                       <AnnotationsPanel
                         annotations={annotations()}

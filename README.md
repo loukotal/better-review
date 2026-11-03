@@ -222,6 +222,17 @@ The source examples are in [`examples/`](./examples/).
 Copy the command files into `.opencode/commands/` in the repository where you want to use them and
 rename them as desired.
 
+## Reviewing on a phone
+
+Open your reachable Better Review URL in Safari. Use Share → Add to Home Screen
+to open it as a standalone app. The server must remain reachable; reviews are not
+available offline. Use your private Tailscale URL for access from another device.
+
+On narrow screens, diffs use one column without changing your desktop preference.
+Chat and Files open one at a time; selecting a file closes the file drawer.
+Secondary controls live under **Review tools** (or **Session tools** for agent
+reviews). Agent review feedback and submission live in the **Review** panel.
+
 ## Development
 
 Review sandboxes share VMs by checkout, with at most four distinct checkout VMs by default.

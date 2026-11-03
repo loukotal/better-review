@@ -93,6 +93,17 @@ interface Props {
 }
 
 export function DiffViewer(props: Props) {
+  const [phone, setPhone] = createSignal(window.matchMedia("(max-width: 639px)").matches);
+  onMount(() => {
+    const media = window.matchMedia("(max-width: 639px)");
+    const update = () => setPhone(media.matches);
+    media.addEventListener("change", update);
+    onCleanup(() => media.removeEventListener("change", update));
+  });
+  // Preserve desktop preferences. Two code columns are unreadable on a phone.
+  const displaySettings = createMemo(() =>
+    phone() ? { ...props.settings, diffStyle: "unified" as const } : props.settings,
+  );
   let viewerRef: HTMLDivElement | undefined;
   let searchInputRef: HTMLInputElement | undefined;
   let toolbarRef: HTMLDivElement | undefined;
@@ -285,7 +296,7 @@ export function DiffViewer(props: Props) {
         ref={(element) => {
           toolbarRef = element;
         }}
-        class="sticky top-0 z-20 -mt-3 mb-3 flex items-center gap-2 border-b border-border bg-bg-surface py-1 px-2"
+        class="sticky top-0 z-20 -mt-3 mb-3 flex flex-wrap items-center gap-2 border-b border-border bg-bg-surface py-1 px-2"
       >
         <div class="w-52 max-w-full shrink-0">
           <TextInput
@@ -404,7 +415,7 @@ export function DiffViewer(props: Props) {
                   onCommentDraftChange={(hasDraft) =>
                     props.onCommentDraftChange?.(file.name, hasDraft)
                   }
-                  settings={props.settings}
+                  settings={displaySettings()}
                   highlightedLine={highlightLine()}
                   repoOwner={props.repoOwner}
                   repoName={props.repoName}

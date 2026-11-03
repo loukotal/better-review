@@ -486,8 +486,11 @@ const PrListPage: Component = () => {
                         <span class="hidden w-48 shrink-0 truncate font-mono text-xs text-text-muted sm:block lg:w-56">
                           {pr.repository.nameWithOwner}#{pr.number}
                         </span>
-                        <div class="flex min-w-0 flex-1 items-center gap-2">
-                          <span class="truncate text-sm text-text group-hover:text-accent">
+                        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1 sm:gap-2">
+                          <span class="w-full truncate font-mono text-xs text-text-muted sm:hidden">
+                            {pr.repository.nameWithOwner}#{pr.number}
+                          </span>
+                          <span class="line-clamp-2 text-sm text-text group-hover:text-accent sm:truncate">
                             {pr.title}
                           </span>
                           <Show when={pr.isDraft}>

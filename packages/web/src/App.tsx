@@ -22,6 +22,7 @@ import { AnchoredSelectionEditor } from "./components/AnchoredSelectionEditor";
 import { AppHeader } from "./components/AppHeader";
 import { ApproveButton } from "./components/ApproveButton";
 import { CommitNavigator } from "./components/CommitNavigator";
+import { CompactTools } from "./components/CompactTools";
 import { DiffStatsBadge } from "./components/DiffStatsBadge";
 import { DiffViewToggle, type DiffViewMode } from "./components/DiffViewToggle";
 import { GithubCommentCard } from "./components/GithubCommentCard";
@@ -1116,7 +1117,7 @@ const AppContent: Component = () => {
   };
 
   return (
-    <div class="h-screen bg-bg text-text flex flex-col">
+    <div class="app-viewport bg-bg text-text flex flex-col">
       {/* Header Bar - hidden in focus mode */}
       <Show when={!focusMode() || !changesActive()}>
         <AppHeader
@@ -1163,14 +1164,16 @@ const AppContent: Component = () => {
                     Files
                   </Button>
                 </div>
-                <Button
-                  onClick={toggleFocusMode}
-                  variant="ghost"
-                  size="sm"
-                  title="Enter focus mode (F)"
-                >
-                  Focus
-                </Button>
+                <span class="hidden sm:contents">
+                  <Button
+                    onClick={toggleFocusMode}
+                    variant="ghost"
+                    size="sm"
+                    title="Enter focus mode (F)"
+                  >
+                    Focus
+                  </Button>
+                </span>
               </Show>
             </>
           }
@@ -1245,8 +1248,8 @@ const AppContent: Component = () => {
           </Show>
           {/* PR Status Bar */}
           <Show when={loadedPrUrl() && changesActive()}>
-            <div class="px-4 py-3 border-t border-border bg-bg flex flex-wrap items-center justify-between gap-x-6 gap-y-3 relative">
-              <div class="flex-1 min-w-64">
+            <div class="px-2 py-1 sm:px-4 sm:py-3 border-t border-border bg-bg flex flex-wrap items-center justify-between gap-x-3 gap-y-1 relative">
+              <div class="flex-1 min-w-0 sm:min-w-64">
                 <PrStatusBar
                   onOpenChecks={() => selectTab("checks")}
                   status={prStatus()}
@@ -1256,7 +1259,10 @@ const AppContent: Component = () => {
                 />
               </div>
               <DiffStatsBadge files={files()} />
-              <div class="flex flex-wrap items-center gap-2">
+              <CompactTools>
+                <Button variant="ghost" size="sm" class="sm:hidden" onClick={toggleFocusMode}>
+                  Focus
+                </Button>
                 <ReviewModeToggle
                   mode={reviewMode()}
                   onModeChange={handleModeChange}
@@ -1320,7 +1326,7 @@ const AppContent: Component = () => {
                   canSubmit={loadedPrUrl() === prUrl()}
                   approvalState={reviewApproval().state}
                 />
-              </div>
+              </CompactTools>
             </div>
             {/* PR Comments (top-level conversation) */}
             <div id="pr-conversation" hidden={!conversationOpen()}>
@@ -1344,7 +1350,7 @@ const AppContent: Component = () => {
       <Show when={loadedPrUrl()}>
         <nav
           aria-label="Pull request tabs"
-          class="flex shrink-0 flex-wrap gap-2 border-b border-border px-4 py-2"
+          class="pr-tabs flex shrink-0 gap-1 border-b border-border px-2 py-1 sm:gap-2 sm:px-4 sm:py-2"
           onPointerDown={rememberReviewFocus}
         >
           <For each={["overview", "changes", "checks"] as const}>
@@ -1368,7 +1374,7 @@ const AppContent: Component = () => {
               disabled={refreshingDetail()}
               aria-busy={refreshingDetail()}
             >
-              Refresh details
+              <span class="block max-w-14 truncate sm:max-w-none">Refresh details</span>
             </Button>
           </Show>
         </nav>
@@ -1379,7 +1385,7 @@ const AppContent: Component = () => {
         <div class="flex items-center justify-between px-3 py-1.5 bg-bg-surface border-b border-accent/30">
           <div class="flex items-center gap-2">
             <span class="text-xs text-accent font-medium">Focus mode</span>
-            <span class="text-xs text-text-faint">
+            <span class="hidden sm:inline text-xs text-text-faint">
               Diff takes priority. Press Esc or F to exit.
             </span>
           </div>
@@ -1417,7 +1423,7 @@ const AppContent: Component = () => {
         )}
       </Show>
       <Show when={loadedPrUrl() && !changesActive()}>
-        <main class="min-h-0 flex-1 overflow-y-auto p-5">
+        <main class="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
           <div class="mx-auto max-w-5xl space-y-6">
             <Show when={detailError() && activeTab() !== "checks"}>
               <p role="alert">{detailError()}</p>
@@ -1767,7 +1773,10 @@ const AppContent: Component = () => {
               <div id="file-tree-panel" class="file-tree-shell flex shrink-0">
                 <FileTreePanel
                   files={orderedFiles()}
-                  onFileSelect={(file) => scrollToFile(file)}
+                  onFileSelect={(file) => {
+                    scrollToFile(file);
+                    if (compactLayout()) setPanelVisibility({ chat: false, files: false });
+                  }}
                   reviewOrder={reviewOrder()}
                   readFiles={readFiles()}
                   onToggleRead={toggleFileRead}

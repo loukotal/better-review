@@ -20,9 +20,9 @@ export function AppHeader(props: {
 }) {
   const navigate = useNavigate();
   return (
-    <header class="shrink-0 border-b border-border bg-bg-surface">
+    <header class="app-header shrink-0 border-b border-border bg-bg-surface">
       <div
-        class={`flex min-h-12 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2 ${props.constrained ? "mx-auto max-w-6xl" : ""}`}
+        class={`app-header-row flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2 py-1 sm:gap-x-4 sm:gap-y-2 sm:px-4 sm:py-2 ${props.constrained ? "mx-auto max-w-6xl" : ""}`}
       >
         <div class="flex flex-wrap items-center gap-2">
           <Show when={props.backHref}>
@@ -49,7 +49,8 @@ export function AppHeader(props: {
                 aria-label="Back to pull requests"
                 class="mr-2 inline-flex items-center gap-1 text-xs text-text-muted hover:text-text"
               >
-                <span aria-hidden="true">←</span> Back to pull requests
+                <span aria-hidden="true">←</span>
+                <span class="hidden sm:inline"> Back to pull requests</span>
               </A>
             )}
           </Show>
@@ -65,7 +66,7 @@ export function AppHeader(props: {
           </A>
           <AppUpdateNotice />
         </div>
-        <div class="flex flex-wrap items-center gap-3">
+        <div class="app-header-tools flex flex-wrap items-center gap-1 sm:gap-3">
           <Show when={props.actions}>
             <div role="group" aria-label="Page tools" class="flex flex-wrap items-center gap-1">
               {props.actions}
