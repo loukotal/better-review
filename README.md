@@ -62,6 +62,29 @@ For a production-style local build and server:
 pnpm start:production
 ```
 
+### One-click updates
+
+Start through `pnpm start`, `pnpm dev`, or `pnpm start:production` to enable the
+restart supervisor. Existing installations need one manual restart with one of
+these commands after installing this feature.
+
+When the update notice appears, click **Update & restart** (or **Install & restart**
+if the checkout is already current). Better Review installs locked dependencies,
+rebuilds production assets, restarts, and reloads the page once the new app is ready.
+Progress and errors appear in the notice. Save unsent drafts before restarting;
+open tabs briefly disconnect.
+
+Git updates require a clean `main` checkout and fast-forward history. Local edits
+are never reset, stashed, or discarded. An already updated checkout can restart
+with local edits intact. Install/build failures stop the job before its deliberate
+restart; production assets are staged before replacement. Development watchers may
+reload when Git updates source files. Check the launching terminal if the server
+cannot boot.
+
+One-click updates require API authentication. Direct package launches and
+`BETTER_REVIEW_DISABLE_API_AUTH=1` retain manual instructions rather than exposing
+a host-restart action.
+
 ### Local API authentication
 
 `pnpm start` (or `pnpm dev`) creates a gitignored `.better-review-api-token` and shares it with the

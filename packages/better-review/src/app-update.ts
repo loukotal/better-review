@@ -101,7 +101,8 @@ export function createAppUpdateChecker(repoRoot: string, cacheMs = CACHE_MS) {
   };
 
   // Startup and incoming UI requests share this cache; there is no scheduled refresh loop.
-  return (): Promise<AppUpdateStatus> => {
+  return (options?: { refresh?: boolean }): Promise<AppUpdateStatus> => {
+    if (options?.refresh) cached = undefined;
     if (inFlight) return inFlight;
     inFlight = check().finally(() => {
       inFlight = undefined;

@@ -55,6 +55,7 @@ import {
   ADVERSARIAL_REVIEW_PROMPT,
   buildReviewPrompt,
   STRUCTURED_REVIEW_PROMPT,
+  ORDER_FILES_PROMPT,
 } from "./lib/review-prompts";
 import type { SelectionSourceContext } from "./lib/selection-question-message";
 import { highlightCode, clearHighlightCache } from "./lib/shiki";
@@ -79,6 +80,8 @@ interface ChatPanelProps {
   repoOwner: string | null;
   repoName: string | null;
   files: string[];
+  /** Actual diff order, distinct from patch paths used for review context. */
+  displayedFiles?: string[];
   theme: DiffTheme;
   aiAnnotations?: Annotation[];
   onScrollToFile?: (
@@ -449,13 +452,13 @@ export function ChatPanel(props: ChatPanelProps) {
     }
   }
 
-  async function submitMessage(message: string) {
+  async function submitMessage(message: string, options: { clearInput?: boolean } = {}) {
     const trimmedMessage = message.trim();
     const model = selectedModel();
     if (!trimmedMessage || !model || reviewActionsDisabled() || !sessionId()) return;
 
     setPullNotice(null);
-    setInput("");
+    if (options.clearInput !== false) setInput("");
     await chat.sendMessage(trimmedMessage, {
       model: modelIntent(model),
       reviewMode: props.reviewMode,
@@ -554,6 +557,10 @@ export function ChatPanel(props: ChatPanelProps) {
 
   function startReview() {
     void submitMessage(buildReviewPrompt(STRUCTURED_REVIEW_PROMPT, useSte100()));
+  }
+
+  function orderFiles() {
+    void submitMessage(buildReviewPrompt(ORDER_FILES_PROMPT, useSte100()), { clearInput: false });
   }
 
   async function startAdversarialReview() {
@@ -1028,7 +1035,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 }
               ).files
             }
-            currentFiles={props.files}
+            currentFiles={props.displayedFiles ?? props.files}
             onApplyOrder={handleApplyOrder}
             onFileClick={(file) => handleFileClick(file, undefined, segmentProps.revision)}
           />
@@ -1320,6 +1327,7 @@ export function ChatPanel(props: ChatPanelProps) {
                 disabled={reviewActionsDisabled()}
                 canPull={props.reviewMode !== "commit"}
                 onReview={startReview}
+                onOrderFiles={orderFiles}
                 onSummarize={() =>
                   void submitMessage(
                     buildReviewPrompt("Summarize the changes in this PR.", useSte100()),
@@ -1367,6 +1375,7 @@ export function ChatPanel(props: ChatPanelProps) {
             onHide={handleHideSession}
             onNew={() => void handleNewSession()}
             onReview={startReview}
+            onOrderFiles={orderFiles}
             onAdversarial={() => void startAdversarialReview()}
           />
           <p

@@ -1,3 +1,4 @@
+import { QueryClient, dehydrate, hydrate } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
 import { render } from "solid-js/web";
 
@@ -6,9 +7,10 @@ import type { ReviewSnapshot } from "@better-review/shared";
 import { ChatPanel } from "../ChatPanel";
 import {
   AUTO_ORDER_PREFERENCE_KEY,
+  createAutomaticOrderTracker,
   type AvailableReviewOrder,
 } from "../lib/automatic-review-order";
-import { getReviewOrder, restoreCache } from "../lib/query";
+import { getReviewOrder, restoreCache, queryClient, queryKeys } from "../lib/query";
 import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 
@@ -27,6 +29,124 @@ const rawDiff = paths
       `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,80 +1,80 @@\n-old\n+new\n${Array.from({ length: 79 }, (_, i) => ` line ${i}`).join("\n")}\n`,
   )
   .join("");
+
+export async function testAutomaticOrderCardReflectsDisplayedOrderInBrowser() {
+  return automaticOrderCardFixture(false);
+}
+
+export async function testPartialAutomaticOrderCardReflectsDisplayedOrderInBrowser() {
+  return automaticOrderCardFixture(true);
+}
+
+async function automaticOrderCardFixture(partial: boolean) {
+  const { check, wait, result } = createAssertions(5000);
+  localStorage.removeItem(AUTO_ORDER_PREFERENCE_KEY);
+  localStorage.removeItem("better-review:applied-review-orders");
+  const suggested = partial ? [paths[2]] : [...paths].reverse();
+  const expected = [...suggested, ...paths.filter((path) => !suggested.includes(path))];
+  await mountAppFixture({
+    diff: rawDiff,
+    reviewSnapshot: (sessionId) => ({
+      sessionId,
+      revision: head,
+      running: false,
+      compacting: false,
+      settlements: [],
+      messages: [
+        {
+          id: "order-status",
+          role: "assistant",
+          metadata: { timestamp: "2026-01-01", revision: head },
+          parts: [
+            { type: "text", text: `<<REVIEW_ORDER>>${JSON.stringify(suggested)}<</REVIEW_ORDER>>` },
+          ],
+        },
+      ],
+    }),
+  });
+  const displayed = () =>
+    [...document.querySelectorAll<HTMLElement>('[id^="file-src"]')]
+      .map((element) => decodeURIComponent(element.id.slice(5)))
+      .join(",");
+  await wait(() => displayed() === expected.join(","), "Automatic order did not update the diff");
+  document.querySelector<HTMLButtonElement>('[aria-controls="chat-panel"]')!.click();
+  await wait(
+    () => !!document.querySelector("#chat-panel")?.textContent?.includes("Review order"),
+    "Order card missing",
+  );
+  const card = [...document.querySelectorAll("#chat-panel span")]
+    .find((element) => element.textContent === "Review order")!
+    .closest(".my-2")!;
+  check(
+    card.textContent?.includes("Applied"),
+    "Automatically applied order must be marked Applied",
+  );
+  check(
+    ![...card.querySelectorAll("button")].some(
+      (button) => button.textContent?.trim() === "Apply order",
+    ),
+    "An already displayed order must not ask to be applied again",
+  );
+  return result();
+}
+
+export async function testSavedReviewOrderLateHydrationInBrowser() {
+  const { check, wait, result } = createAssertions(5000);
+  localStorage.removeItem(AUTO_ORDER_PREFERENCE_KEY);
+  localStorage.removeItem("better-review:applied-review-orders");
+  const suggested = [...paths].reverse();
+  const manual = [paths[1], paths[0], paths[2]];
+  createAutomaticOrderTracker().take(
+    {
+      prUrl: url,
+      sessionId: "bootstrap",
+      revision: head,
+      mode: "full",
+      messageId: "already-consumed",
+      files: suggested,
+    },
+    paths,
+  );
+  await mountAppFixture({
+    diff: rawDiff,
+    reviewSnapshot: (sessionId) => ({
+      sessionId,
+      revision: head,
+      running: false,
+      compacting: false,
+      settlements: [],
+      messages: [
+        {
+          id: "already-consumed",
+          role: "assistant",
+          metadata: { timestamp: "2026-01-01", revision: head },
+          parts: [
+            { type: "text", text: `<<REVIEW_ORDER>>${JSON.stringify(suggested)}<</REVIEW_ORDER>>` },
+          ],
+        },
+      ],
+    }),
+  });
+  const displayed = () =>
+    [...document.querySelectorAll<HTMLElement>('[id^="file-src"]')]
+      .map((element) => decodeURIComponent(element.id.slice(5)))
+      .join(",");
+  check(displayed() === paths.join(","), "Consumed order must not replay before cache hydration");
+  // Exercise the real hydration path: newly restored queries emit added, not success.
+  const persisted = new QueryClient();
+  persisted.setQueryData(queryKeys.local.reviewOrder(url), manual);
+  hydrate(queryClient, dehydrate(persisted));
+  persisted.clear();
+  await wait(
+    () => displayed() === manual.join(","),
+    "Late restored order never reached the displayed diff",
+  );
+  check(
+    getReviewOrder(url)?.join(",") === manual.join(","),
+    "Restore must not overwrite a manual order with the consumed AI suggestion",
+  );
+  return result();
+}
 
 export async function testAutomaticOrderRetainedTabHydrationInBrowser() {
   return heldAppOrderFixture("retained-hydration");
@@ -472,7 +592,10 @@ export async function testAutomaticReviewOrderInBrowser(mode = "existing") {
   const originalNodes = fileElements();
   const anchor = originalNodes[1];
   const scroll = anchor.closest(".overflow-y-auto.pb-3") as HTMLElement;
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  await wait(
+    () => originalNodes.every((node) => node.getBoundingClientRect().height > 500),
+    "Diff bodies must finish initial measurement before testing the scroll anchor",
+  );
   scroll.scrollTop += anchor.getBoundingClientRect().top - scroll.getBoundingClientRect().top + 50;
   await new Promise(requestAnimationFrame);
   const offset = anchor.getBoundingClientRect().top - scroll.getBoundingClientRect().top;

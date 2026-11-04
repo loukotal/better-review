@@ -12,6 +12,7 @@ import {
   onCleanup,
   on,
   batch,
+  untrack,
 } from "solid-js";
 
 import type { PrInfo } from "@better-review/shared";
@@ -784,12 +785,36 @@ const AppContent: Component = () => {
   createEffect(() => {
     const url = loadedPrUrl();
     if (url) {
-      const savedOrder = getReviewOrder(url);
-      if (savedOrder) {
-        setReviewOrder(savedOrder);
-      } else {
-        setReviewOrder(null);
-      }
+      const syncSavedOrder = () => {
+        const saved = getReviewOrder(url);
+        const current = untrack(reviewOrder);
+        if (
+          saved === current ||
+          (saved &&
+            current &&
+            saved.length === current.length &&
+            saved.every((path, index) => path === current[index]))
+        )
+          return;
+        preserveReviewPosition(diffScrollRef, () => setReviewOrder(saved));
+      };
+      // IndexedDB can hydrate after this PR mounts. Consumption is stored separately,
+      // so ignoring that cache publication leaves patch order with no automatic replay.
+      onCleanup(
+        queryClient.getQueryCache().subscribe((event) => {
+          const key = event.query.queryKey;
+          if (
+            key[0] === "local" &&
+            key[1] === "reviewOrder" &&
+            key[2] === url &&
+            ((event.type === "added" && Array.isArray(event.query.state.data)) ||
+              event.type === "removed" ||
+              (event.type === "updated" && event.action.type === "success"))
+          )
+            syncSavedOrder();
+        }),
+      );
+      syncSavedOrder();
 
       // Legacy PR-wide caches have no trustworthy active-session provenance.
       // ChatPanel republishes the active transcript rather than merging these records.
@@ -1554,6 +1579,7 @@ const AppContent: Component = () => {
               repoOwner={prInfo()?.owner ?? null}
               repoName={prInfo()?.repo ?? null}
               files={fileNames()}
+              displayedFiles={orderedFiles().map((file) => file.name)}
               reviewMode={reviewMode()}
               displayedHeadSha={diffRevision().headSha ?? null}
               commitSha={

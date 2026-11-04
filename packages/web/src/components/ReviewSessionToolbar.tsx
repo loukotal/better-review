@@ -13,6 +13,7 @@ export function ReviewSessionToolbar(props: {
   onHide: (id: string) => void;
   onNew: () => void;
   onReview: () => void;
+  onOrderFiles: () => void;
   onAdversarial: () => void;
 }) {
   return (
@@ -37,11 +38,12 @@ export function ReviewSessionToolbar(props: {
           {props.creating ? "Creating…" : "+ New session"}
         </Button>
       </div>
-      <div class="grid grid-cols-2 gap-2">
+      <div class="grid grid-cols-3 gap-1">
         <Button
           type="button"
           size="sm"
           fullWidth
+          class="min-w-0 px-1"
           disabled={props.disabled}
           onClick={props.onReview}
           title="Run a normal review in this conversation"
@@ -53,12 +55,24 @@ export function ReviewSessionToolbar(props: {
           size="sm"
           fullWidth
           variant="primary"
+          class="min-w-0 px-1"
           disabled={props.disabled}
           onClick={props.onAdversarial}
           aria-label="Run adversarial review"
           title="Run an adversarial review in this conversation"
         >
           Adversarial
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          fullWidth
+          class="min-w-0 px-1"
+          disabled={props.disabled}
+          onClick={props.onOrderFiles}
+          title="Suggest a reading order without running a code review"
+        >
+          Order files
         </Button>
       </div>
     </div>

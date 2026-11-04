@@ -31,7 +31,8 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
 
   // Check if current order differs from suggested
   const orderDiffers = () => {
-    if (props.files.length !== props.currentFiles.length) return true;
+    // Applying a partial suggestion puts its paths first, retaining other files.
+    if (props.files.length > props.currentFiles.length) return true;
     for (let i = 0; i < props.files.length; i++) {
       if (props.files[i] !== props.currentFiles[i]) return true;
     }

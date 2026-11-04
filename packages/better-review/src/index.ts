@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { stat, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -14,6 +14,7 @@ import { isGitHubAssetId } from "@better-review/shared/github-asset";
 
 import { ReviewSessionService } from "./agent-sessions";
 import { createAppUpdateChecker } from "./app-update";
+import { createAppUpdateControl } from "./app-update-control";
 import { runCommand } from "./command";
 import { corsMiddleware, getCorsHeaders, withCors } from "./cors";
 import { filterDiffByLineRange, type FileDiffMeta, type HunkInfo } from "./diff";
@@ -48,6 +49,15 @@ function readDevTokenFile(): string | null {
 
 const apiToken = process.env.BETTER_REVIEW_API_TOKEN?.trim() || readDevTokenFile();
 const apiAuthDisabled = process.env.BETTER_REVIEW_DISABLE_API_AUTH === "1";
+const instanceId = randomUUID();
+const appUpdateControl = createAppUpdateControl({
+  instanceId,
+  apiToken,
+  authDisabled: apiAuthDisabled,
+  supervisorUrl: process.env.BETTER_REVIEW_SUPERVISOR_URL,
+  supervisorToken: process.env.BETTER_REVIEW_SUPERVISOR_TOKEN,
+  checkStatus: checkAppUpdate,
+});
 const apiTokenCookieName = "better_review_api_token";
 
 if (!apiToken && !apiAuthDisabled) {
@@ -688,11 +698,25 @@ ${fileStats.join("\n")}`;
   },
 
   "/api/sessions/healthcheck": {
-    GET: () => Response.json({ ok: true }),
+    GET: () => Response.json({ ok: true, instanceId }),
   },
 
   "/api/app/update-status": {
-    GET: async () => Response.json(await checkAppUpdate()),
+    GET: async () =>
+      Response.json({ ...(await checkAppUpdate()), oneClickUpdate: appUpdateControl.supported }),
+  },
+
+  "/api/app/update-job": {
+    GET: async () => {
+      try {
+        return Response.json(await appUpdateControl.status(), {
+          headers: { "Cache-Control": "no-store" },
+        });
+      } catch {
+        return Response.json({ error: "Restart supervisor unavailable" }, { status: 503 });
+      }
+    },
+    POST: (req: Request) => appUpdateControl.start(req),
   },
 
   "/api/sessions": {

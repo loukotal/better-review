@@ -8,13 +8,18 @@ pnpm test:review-transport
 ```
 
 Linux CI installs OS dependencies with `pnpm exec playwright install --with-deps chromium`.
-The root dev dependency is `playwright`; the root script is
-`"test:browser": "node scripts/test-browser.mjs"`.
+The root dev dependency is `playwright`. `pnpm test:browser` runs cache-isolation
+regressions, then `scripts/test-browser.mjs`.
 
 ## Contracts
 
 - The runner starts its own Vite server on a random loopback port. It never opens
   an existing development page, starts the backend, or reads the development API token.
+- Each test process gets a temporary dependency cache under `node_modules/.cache`,
+  removed on exit. Development uses `packages/web/node_modules/.vite-dev`.
+  Never share these caches: Vite replaces optimized chunks when configurations
+  differ, leaving running diff workers with missing language/theme imports and
+  blank code panels. Separate caches also let browser checks run concurrently.
 - Its separate Vite config disables env-file loading, the development API proxy,
   HMR, and remote font loading. Browser requests to APIs, external hosts, and
   non-GET endpoints are blocked and fail the case if a local fixture did not intercept them.

@@ -75,7 +75,7 @@ async function open() {
   });
   const page = await context.newPage();
   await page.exposeFunction("setBrowserReviewViewport", async (width, height) => {
-    assert.ok([320, 393, 852, 1280].includes(width));
+    assert.ok([320, 393, 640, 768, 852, 1280].includes(width));
     await page.setViewportSize({ width, height });
   });
   await page.exposeFunction("captureMobileReview", async () => {

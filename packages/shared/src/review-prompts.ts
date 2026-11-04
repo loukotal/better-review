@@ -1,6 +1,14 @@
 export const STRUCTURED_REVIEW_PROMPT =
   "Please analyze this PR and provide a structured review with file order and annotations.";
 
+export const ORDER_FILES_PROMPT = `Order the changed files for reading in the current review scope only.
+
+Inspect the canonical diff and relevant dependencies. Put foundational changes before their callers, and keep related implementation and tests together.
+
+This is only a file-ordering task, not a code review. Do not report findings, annotations, security verdicts, or proposed code changes.
+
+Return exactly one <<REVIEW_ORDER>>["path/to/file"]<</REVIEW_ORDER>> block containing every changed file exactly once. Use the exact full paths from the changed-file list. Do not include unchanged files or prose outside the block.`;
+
 export const ADVERSARIAL_REVIEW_PROMPT = `Please run an adversarial code review of this PR.
 
 Use the Adversarial Code Reviewer workflow:

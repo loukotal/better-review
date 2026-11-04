@@ -51,6 +51,8 @@ test("app updates compare the running main checkout to the remote without fetchi
   });
   const cachedCheck = createAppUpdateChecker(app);
   assert.equal((await cachedCheck()).updateAvailable, false);
+  const forcedCheck = createAppUpdateChecker(app);
+  assert.equal((await forcedCheck()).updateAvailable, false);
   const latest = await commit(publisher, "new revision");
   await git(publisher, "push", "origin", "main");
   const beforeRefs = await git(app, "show-ref");
@@ -67,6 +69,8 @@ test("app updates compare the running main checkout to the remote without fetchi
   assert.equal(await git(app, "rev-parse", "HEAD"), initial);
   await assert.rejects(git(app, "cat-file", "-e", `${latest}^{commit}`));
   assert.equal((await cachedCheck()).updateAvailable, false);
+
+  assert.equal((await forcedCheck({ refresh: true })).updateAvailable, true);
 
   // A day passing does not schedule work; the next request refreshes the cached status.
   t.mock.timers.tick(23 * 60 * 60_000);

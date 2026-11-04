@@ -78,7 +78,15 @@ exit 1
       clearTimeout(startupTimer);
       const health = await fetch(`${origin}/api/sessions/healthcheck`);
       assert.equal(health.status, 200);
-      assert.deepEqual(await health.json(), { ok: true });
+      const identity = await health.json();
+      assert.equal(identity.ok, true);
+      assert.match(identity.instanceId, /^[a-f0-9-]{36}$/);
+      const updateControl = await fetch(`${origin}/api/app/update-job`);
+      assert.equal(updateControl.status, 200);
+      assert.deepEqual(await updateControl.json(), {
+        supported: false,
+        instanceId: identity.instanceId,
+      });
       const list = await fetch(`${origin}/api/trpc/prs.list`);
       assert.equal(list.status, 200, await list.clone().text());
       assert.deepEqual((await list.json()).result.data.json.prs, []);

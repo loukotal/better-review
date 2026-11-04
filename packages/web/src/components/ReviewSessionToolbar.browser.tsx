@@ -29,6 +29,7 @@ export async function testReviewSessionToolbarInBrowser() {
         onHide={(id) => calls.push(`hide:${id}`)}
         onNew={() => calls.push("new")}
         onReview={() => calls.push("review")}
+        onOrderFiles={() => calls.push("order")}
         onAdversarial={() => calls.push("adversarial")}
       />
     ),
@@ -42,6 +43,9 @@ export async function testReviewSessionToolbarInBrowser() {
     )!;
     const adversarial = host.querySelector<HTMLButtonElement>(
       'button[title="Run an adversarial review in this conversation"]',
+    )!;
+    const order = host.querySelector<HTMLButtonElement>(
+      'button[title="Suggest a reading order without running a code review"]',
     )!;
     for (const width of [240, 320, 370, 600]) {
       host.style.width = `${width}px`;
@@ -62,7 +66,12 @@ export async function testReviewSessionToolbarInBrowser() {
         Math.abs(c.width - d.width) < 1 && c.height === d.height,
         `${width}px: review actions must have equal dimensions`,
       );
-      for (const button of [session, fresh, review, adversarial]) {
+      check(
+        order.getBoundingClientRect().top === c.top &&
+          Math.abs(order.getBoundingClientRect().width - c.width) < 1,
+        `${width}px: Review, Adversarial, and Order files share one equal-width row`,
+      );
+      for (const button of [session, fresh, review, adversarial, order]) {
         const range = document.createRange();
         range.selectNodeContents(button);
         const text = range.getBoundingClientRect(),
@@ -77,19 +86,20 @@ export async function testReviewSessionToolbarInBrowser() {
     fresh.click();
     review.click();
     adversarial.click();
+    order.click();
     check(
-      calls.join(",") === "new,review,adversarial",
-      "New/Run/Adversarial must each remain one-click actions",
+      calls.join(",") === "new,review,adversarial,order",
+      "New/Run/Adversarial/Order must each remain one-click actions",
     );
     session.click();
     host.querySelector<HTMLButtonElement>('button[aria-pressed="false"]')!.click();
     check(calls.at(-1) === "select:two", "saved session picker must still select directly");
     setDisabled(true);
-    for (const button of [session, fresh, review, adversarial]) {
+    for (const button of [session, fresh, review, adversarial, order]) {
       check(button.disabled, "busy controls must stay disabled");
       button.click();
     }
-    check(calls.length === 4, "disabled controls must not invoke actions");
+    check(calls.length === 5, "disabled controls must not invoke actions");
     setCreating(true);
     check(
       fresh.textContent?.includes("Creating") ?? false,

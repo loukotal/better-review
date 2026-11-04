@@ -54,7 +54,7 @@ for (const listener of listeners) {
     if (
       !info ||
       protectedPids.has(parent) ||
-      !/\b(pnpm|concurrently|tsx|vite)\b/.test(info.command) ||
+      !/\b(pnpm|concurrently|tsx|vite|run-app\.mjs)\b/.test(info.command) ||
       !belongsHere(parent)
     )
       break;

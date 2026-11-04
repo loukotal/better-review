@@ -6,6 +6,7 @@ export function ReviewActions(props: {
   disabled: boolean;
   canPull: boolean;
   onReview: () => void;
+  onOrderFiles: () => void;
   onSummarize: () => void;
   onSecurity: () => void;
   onPull: () => void;
@@ -15,6 +16,11 @@ export function ReviewActions(props: {
 }) {
   const actions = () => [
     { label: "Run review", description: "Review again in this conversation.", run: props.onReview },
+    {
+      label: "Order files",
+      description: "Suggest a reading order without running a code review.",
+      run: props.onOrderFiles,
+    },
     {
       label: "Summarize changes",
       description: "Explain what changed in this PR.",

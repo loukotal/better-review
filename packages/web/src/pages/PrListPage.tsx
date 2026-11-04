@@ -483,14 +483,14 @@ const PrListPage: Component = () => {
                       onClick={rememberListPosition}
                     >
                       <div class="flex min-w-0 items-center gap-3 px-2 py-2">
-                        <span class="hidden w-48 shrink-0 truncate font-mono text-xs text-text-muted sm:block lg:w-56">
+                        <span class="hidden w-32 shrink-0 truncate font-mono text-xs text-text-muted sm:block lg:w-56">
                           {pr.repository.nameWithOwner}#{pr.number}
                         </span>
-                        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1 sm:gap-2">
+                        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1 sm:flex-nowrap sm:gap-2">
                           <span class="w-full truncate font-mono text-xs text-text-muted sm:hidden">
                             {pr.repository.nameWithOwner}#{pr.number}
                           </span>
-                          <span class="line-clamp-2 text-sm text-text group-hover:text-accent sm:truncate">
+                          <span class="min-w-0 basis-full line-clamp-2 text-sm text-text group-hover:text-accent sm:basis-auto sm:flex-1 sm:line-clamp-none sm:truncate">
                             {pr.title}
                           </span>
                           <Show when={pr.isDraft}>
@@ -501,7 +501,7 @@ const PrListPage: Component = () => {
                             <Badge variant="danger">Changes requested</Badge>
                           </Show>
                         </div>
-                        <span class="hidden w-28 shrink-0 truncate text-xs text-text-muted md:block">
+                        <span class="hidden w-28 shrink-0 truncate text-xs text-text-muted lg:block">
                           @{pr.author.login}
                         </span>
                         <span
@@ -512,7 +512,7 @@ const PrListPage: Component = () => {
                           <span class="text-success">+{pr.additions}</span>
                           <span class="text-error">−{pr.deletions}</span>
                         </span>
-                        <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint sm:block">
+                        <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint lg:block">
                           {formatRelativeTime(pr.createdAt)}
                         </span>
                       </div>

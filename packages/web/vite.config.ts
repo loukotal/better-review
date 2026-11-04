@@ -27,6 +27,7 @@ export default defineConfig(({ command }) => {
       : (process.env.VITE_BETTER_REVIEW_API_TOKEN ?? "");
 
   return {
+    cacheDir: "node_modules/.vite-dev",
     plugins: [solidPlugin(), tailwindcss()],
     worker: {
       plugins: () => [
