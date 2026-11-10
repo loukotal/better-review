@@ -10,7 +10,7 @@ import { ThemeToggle } from "./ThemeToggle";
 export function AppHeader(props: {
   actions?: JSX.Element;
   children?: JSX.Element;
-  constrained?: boolean;
+  constrained?: boolean | "wide";
   hideNavigation?: boolean;
   onOpenPr?: () => void;
   prSwitcherOpen?: boolean;
@@ -22,7 +22,7 @@ export function AppHeader(props: {
   return (
     <header class="app-header shrink-0 border-b border-border bg-bg-surface">
       <div
-        class={`app-header-row flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2 py-1 sm:gap-x-4 sm:gap-y-2 sm:px-4 sm:py-2 ${props.constrained ? "mx-auto max-w-6xl" : ""}`}
+        class={`app-header-row flex min-h-12 flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2 py-1 sm:gap-x-4 sm:gap-y-2 sm:px-4 sm:py-2 ${props.constrained === "wide" ? "mx-auto max-w-[1600px]" : props.constrained ? "mx-auto max-w-6xl" : ""}`}
       >
         <div class="flex flex-wrap items-center gap-2">
           <Show when={props.backHref}>

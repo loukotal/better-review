@@ -75,11 +75,18 @@ async function open() {
   });
   const page = await context.newPage();
   await page.exposeFunction("setBrowserReviewViewport", async (width, height) => {
-    assert.ok([320, 393, 640, 768, 852, 1280].includes(width));
+    assert.ok([320, 393, 640, 768, 852, 1280, 1920].includes(width));
     await page.setViewportSize({ width, height });
   });
   await page.exposeFunction("captureMobileReview", async () => {
     await page.screenshot({ path: `${artifacts}/mobile-review-393.png`, animations: "disabled" });
+  });
+  await page.exposeFunction("captureBrowserPrListLayout", async (width) => {
+    assert.ok([393, 1920].includes(width));
+    await page.screenshot({
+      path: `${artifacts}/pr-list-title-first-${width}.png`,
+      animations: "disabled",
+    });
   });
   await page.exposeFunction("copyBrowserFeedback", async () => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin });

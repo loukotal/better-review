@@ -6,12 +6,21 @@ import type { AutomaticReviewStatus } from "@better-review/shared";
 
 import { AppHeader } from "../components/AppHeader";
 import { GithubSyncStatus, githubSyncState } from "../components/GithubSyncStatus";
-import { ReviewDecisionBadge } from "../components/ReviewDecisionBadge";
+import { PrListSummary } from "../components/PrListSummary";
 import { useGithubQueue } from "../context/GithubQueueContext";
-import { Alert, Badge, Button, EmptyState, LoadingState, Select } from "../design-system";
+import {
+  Alert,
+  Button,
+  EmptyState,
+  LoadingState,
+  SegmentedControl,
+  Select,
+} from "../design-system";
 import { InfoIcon } from "../icons/info-icon";
+import { ListLayoutIcon } from "../icons/list-layout-icon";
 import { SpinnerIcon } from "../icons/spinner-icon";
 import { modelIntent, resolveReviewModelSelection } from "../lib/model-selection";
+import { loadPrListLayout, savePrListLayout, type PrListLayout } from "../lib/pr-list-layout";
 import {
   prPageHref,
   prListReturnPath,
@@ -69,28 +78,8 @@ const CiStatusBadge: Component<{ prUrl: string; ciStatuses: Record<string, CiSta
   return <Show when={status()}>{(s) => <CiStatusBadgeInner status={s()} />}</Show>;
 };
 
-function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffMinutes = Math.floor(diffMs / (1000 * 60));
-
-  if (diffMinutes < 60) {
-    return `${diffMinutes}m ago`;
-  } else if (diffHours < 24) {
-    return `${diffHours}h ago`;
-  } else if (diffDays === 1) {
-    return "yesterday";
-  } else if (diffDays < 7) {
-    return `${diffDays}d ago`;
-  } else {
-    return date.toLocaleDateString();
-  }
-}
-
 const PrListPage: Component = () => {
+  const [layout, setLayout] = createSignal<PrListLayout>(loadPrListLayout());
   const queue = useGithubQueue();
   const pendingFor = (url: string) =>
     queue
@@ -318,7 +307,7 @@ const PrListPage: Component = () => {
   return (
     <div class="h-screen bg-bg text-text flex flex-col">
       {/* Header */}
-      <AppHeader constrained />
+      <AppHeader constrained="wide" />
 
       {/* Content */}
       <main
@@ -328,7 +317,7 @@ const PrListPage: Component = () => {
         }}
         class="flex-1 overflow-y-auto"
       >
-        <div class="mx-auto max-w-6xl px-4 py-4">
+        <div class="mx-auto max-w-[1600px] px-4 py-4">
           <div class="mb-3 flex items-center justify-between gap-4">
             <div class="flex min-w-0 items-baseline gap-2.5">
               <h1 class="text-lg font-semibold tracking-tight text-text">Reviews</h1>
@@ -400,21 +389,53 @@ const PrListPage: Component = () => {
                 )}
               </For>
             </div>
-            <Select
-              id="repo-filter"
-              aria-label="Filter by repository"
-              compact
-              value={repoFilter()}
-              onChange={(e) => setSearchParams({ repo: e.currentTarget.value || undefined })}
-              class={
-                repoFilter()
-                  ? "border-accent text-accent"
-                  : "text-text-muted hover:border-text-faint"
-              }
-            >
-              <option value="">All repos</option>
-              <For each={uniqueRepos()}>{(repo) => <option value={repo}>{repo}</option>}</For>
-            </Select>
+            <div class="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-2 sm:basis-auto sm:flex-none">
+              <SegmentedControl
+                label="Review list layout"
+                value={layout()}
+                options={[
+                  {
+                    value: "title-first",
+                    title: "Title-first layout",
+                    label: (
+                      <>
+                        <ListLayoutIcon layout="title-first" />
+                        <span class="sr-only">Title-first</span>
+                      </>
+                    ),
+                  },
+                  {
+                    value: "table",
+                    title: "Table layout",
+                    label: (
+                      <>
+                        <ListLayoutIcon layout="table" />
+                        <span class="sr-only">Table</span>
+                      </>
+                    ),
+                  },
+                ]}
+                onChange={(value) => {
+                  setLayout(value);
+                  savePrListLayout(value);
+                }}
+              />
+              <Select
+                id="repo-filter"
+                aria-label="Filter by repository"
+                compact
+                value={repoFilter()}
+                onChange={(e) => setSearchParams({ repo: e.currentTarget.value || undefined })}
+                class={
+                  repoFilter()
+                    ? "w-40 min-w-0 max-w-full flex-1 border-accent text-accent sm:w-auto sm:flex-none"
+                    : "w-40 min-w-0 max-w-full flex-1 text-text-muted hover:border-text-faint sm:w-auto sm:flex-none"
+                }
+              >
+                <option value="">All repos</option>
+                <For each={uniqueRepos()}>{(repo) => <option value={repo}>{repo}</option>}</For>
+              </Select>
+            </div>
           </div>
 
           {/* Loading state */}
@@ -482,40 +503,7 @@ const PrListPage: Component = () => {
                       onMouseDown={() => handleMouseDown(pr.url)}
                       onClick={rememberListPosition}
                     >
-                      <div class="flex min-w-0 items-center gap-3 px-2 py-2">
-                        <span class="hidden w-32 shrink-0 truncate font-mono text-xs text-text-muted sm:block lg:w-56">
-                          {pr.repository.nameWithOwner}#{pr.number}
-                        </span>
-                        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1 sm:flex-nowrap sm:gap-2">
-                          <span class="w-full truncate font-mono text-xs text-text-muted sm:hidden">
-                            {pr.repository.nameWithOwner}#{pr.number}
-                          </span>
-                          <span class="min-w-0 basis-full line-clamp-2 text-sm text-text group-hover:text-accent sm:basis-auto sm:flex-1 sm:line-clamp-none sm:truncate">
-                            {pr.title}
-                          </span>
-                          <Show when={pr.isDraft}>
-                            <Badge variant="neutral">Draft</Badge>
-                          </Show>
-                          <ReviewDecisionBadge decision={pr.reviewDecision} />
-                          <Show when={pr.myReviewState === "CHANGES_REQUESTED"}>
-                            <Badge variant="danger">Changes requested</Badge>
-                          </Show>
-                        </div>
-                        <span class="hidden w-28 shrink-0 truncate text-xs text-text-muted lg:block">
-                          @{pr.author.login}
-                        </span>
-                        <span
-                          class="flex w-20 shrink-0 items-center justify-end gap-1.5 font-mono text-xs tabular-nums"
-                          title={`${pr.additions} added, ${pr.deletions} removed`}
-                          aria-label={`${pr.additions} lines added, ${pr.deletions} lines removed`}
-                        >
-                          <span class="text-success">+{pr.additions}</span>
-                          <span class="text-error">−{pr.deletions}</span>
-                        </span>
-                        <span class="hidden w-16 shrink-0 text-right text-xs text-text-faint lg:block">
-                          {formatRelativeTime(pr.createdAt)}
-                        </span>
-                      </div>
+                      <PrListSummary pr={pr} layout={layout()} />
                     </A>
                     <A
                       href={prPageHref(pr.url, { tab: "checks", returnTo: listReturnTo() })}

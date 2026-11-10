@@ -11,6 +11,7 @@ GitHub review actions, AI-assisted review, and browser-based approval flows for 
 
 - Open any GitHub pull request available to your authenticated `gh` account.
 - Browse assigned pull requests and review a full PR or an individual commit.
+- Switch the Reviews list between title-first and compact table rows. The choice is saved in your browser.
 - Read, write, and manage GitHub comments and submit reviews.
 - Switch between the exact **Original** diff and an on-demand, read-only **Reading** view with
   program-design, blast-radius, review-focus, and unknowns analysis.

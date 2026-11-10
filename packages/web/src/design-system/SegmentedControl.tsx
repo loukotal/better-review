@@ -5,7 +5,7 @@ import { Button } from "./Button";
 export function SegmentedControl<T extends string>(props: {
   label: string;
   value: T;
-  options: readonly { value: T; label: JSX.Element; disabled?: boolean }[];
+  options: readonly { value: T; label: JSX.Element; title?: string; disabled?: boolean }[];
   onChange: (value: T) => void;
   disabled?: boolean;
 }) {
@@ -22,6 +22,7 @@ export function SegmentedControl<T extends string>(props: {
             variant="ghost"
             size="sm"
             aria-pressed={props.value === option.value}
+            title={option.title}
             disabled={props.disabled || option.disabled}
             class={
               props.value === option.value ? "bg-bg-elevated text-text font-medium" : undefined
