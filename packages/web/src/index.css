@@ -182,6 +182,9 @@ html {
   font-family: var(--font-sans);
   /* Zoom out scales every rem-based size; --ui-zoom comes from display settings. */
   font-size: calc(16px * var(--ui-zoom, 1));
+  /* Diff code inherits these into its shadow DOM; keep in sync with diffCodeMetrics. */
+  --diffs-font-size: calc(13px * var(--ui-zoom, 1));
+  --diffs-line-height: round(calc(20px * var(--ui-zoom, 1)), 1px);
 }
 
 /* Compact density: Tailwind derives padding, gaps and sizes from --spacing. */
@@ -190,6 +193,7 @@ html {
   --text-xs--line-height: 1.35;
   --text-sm--line-height: 1.35;
   --text-base--line-height: 1.4;
+  --diffs-line-height: round(calc(18px * var(--ui-zoom, 1)), 1px);
 }
 
 body {

@@ -19,9 +19,10 @@ export async function testCompactUiAndZoomOutSettingsInBrowser() {
   initializeUiDisplay();
   let dispose = await mountAppFixture();
   await wait(() => codeRowHeight() > 0, "Diff rows did not render");
+  check(codeRowHeight() === 18, `First painted code row is ${codeRowHeight()}px, not compact`);
   const before = { header: headerHeight(), row: codeRowHeight() };
   check(rootFontSize() === "16px", `Default root font size is ${rootFontSize()}`);
-  check(before.row === 20, `Default code row is ${before.row}px`);
+  check(document.documentElement.dataset.uiDensity === "compact", "Compact is not the default");
 
   const open = async () => {
     document.querySelector<HTMLButtonElement>('button[aria-label="Review settings"]')!.click();
@@ -37,22 +38,25 @@ export async function testCompactUiAndZoomOutSettingsInBrowser() {
   };
 
   let controls = await open();
-  check(!controls.compact.checked && controls.zoom.value === "100", "Defaults not shown");
+  check(controls.compact.checked && controls.zoom.value === "100", "Defaults not shown");
   controls.compact.click();
   await window.dismissBrowserPopover("escape");
-  await wait(() => codeRowHeight() === 18, "Compact mode did not tighten code rows");
-  check(document.documentElement.dataset.uiDensity === "compact", "Compact flag not applied");
-  check(headerHeight() < before.header, "Compact mode did not tighten the header");
+  await wait(() => codeRowHeight() === 20, "Comfortable mode did not relax code rows");
+  check(
+    document.documentElement.dataset.uiDensity === "comfortable",
+    "Comfortable flag not applied",
+  );
+  check(headerHeight() > before.header, "Compact mode did not tighten the header");
 
   controls = await open();
   controls.zoom.value = "80";
   controls.zoom.dispatchEvent(new Event("change", { bubbles: true }));
   await window.dismissBrowserPopover("escape");
   await wait(() => rootFontSize() === "12.8px", "Zoom 80% did not scale the root font size");
-  await wait(() => codeRowHeight() === 14, "Zoom did not scale code rows");
+  await wait(() => codeRowHeight() === 16, "Zoom did not scale code rows");
   check(
     JSON.stringify(JSON.parse(localStorage.getItem(UI_DISPLAY_SETTINGS_KEY)!)) ===
-      JSON.stringify({ density: "compact", zoom: 80 }),
+      JSON.stringify({ density: "comfortable", zoom: 80 }),
     "Display settings were not persisted",
   );
 
@@ -60,13 +64,13 @@ export async function testCompactUiAndZoomOutSettingsInBrowser() {
   initializeUiDisplay();
   dispose = await mountAppFixture({ initialPath: "/", waitForFiles: false });
   controls = await open();
-  check(controls.compact.checked && controls.zoom.value === "80", "Reload lost display settings");
+  check(!controls.compact.checked && controls.zoom.value === "80", "Reload lost display settings");
   check(rootFontSize() === "12.8px", "Reload lost zoom");
   controls.compact.click();
   controls.zoom.value = "100";
   controls.zoom.dispatchEvent(new Event("change", { bubbles: true }));
   await wait(
-    () => rootFontSize() === "16px" && document.documentElement.dataset.uiDensity === "comfortable",
+    () => rootFontSize() === "16px" && document.documentElement.dataset.uiDensity === "compact",
     `Display settings did not reset: ${rootFontSize()} ${document.documentElement.dataset.uiDensity} ${controls.compact.checked}`,
   );
   await window.dismissBrowserPopover("escape");

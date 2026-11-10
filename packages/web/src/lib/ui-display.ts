@@ -9,7 +9,7 @@ export interface UiDisplaySettings {
 }
 
 export const UI_DISPLAY_SETTINGS_KEY = "better-review:ui-display:v1";
-export const DEFAULT_UI_DISPLAY_SETTINGS: UiDisplaySettings = { density: "comfortable", zoom: 100 };
+export const DEFAULT_UI_DISPLAY_SETTINGS: UiDisplaySettings = { density: "compact", zoom: 100 };
 type DisplayStorage = Pick<Storage, "getItem" | "setItem">;
 
 function isUiZoom(value: unknown): value is UiZoom {
@@ -24,7 +24,7 @@ export function loadUiDisplaySettings(storage?: DisplayStorage): UiDisplaySettin
     if (!value || typeof value !== "object") return DEFAULT_UI_DISPLAY_SETTINGS;
     const stored = value as Partial<Record<keyof UiDisplaySettings, unknown>>;
     return {
-      density: stored.density === "compact" ? "compact" : "comfortable",
+      density: stored.density === "comfortable" ? "comfortable" : "compact",
       zoom: isUiZoom(stored.zoom) ? stored.zoom : DEFAULT_UI_DISPLAY_SETTINGS.zoom,
     };
   } catch {
@@ -40,12 +40,10 @@ export function saveUiDisplaySettings(settings: UiDisplaySettings, storage?: Dis
   }
 }
 
-/** Code rows follow the chrome: zoom scales them, compact tightens their rhythm. */
+/** Virtualizer estimate; must match --diffs-line-height in index.css. */
 export function diffCodeMetrics(settings: UiDisplaySettings) {
-  const scale = settings.zoom / 100;
   return {
-    fontSize: Math.round(13 * scale * 10) / 10,
-    lineHeight: Math.round((settings.density === "compact" ? 18 : 20) * scale),
+    lineHeight: Math.round((settings.density === "compact" ? 18 : 20) * (settings.zoom / 100)),
   };
 }
 

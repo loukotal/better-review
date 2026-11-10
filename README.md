@@ -12,8 +12,8 @@ GitHub review actions, AI-assisted review, and browser-based approval flows for 
 - Open any GitHub pull request available to your authenticated `gh` account.
 - Browse assigned pull requests and review a full PR or an individual commit.
 - Switch the Reviews list between title-first and compact table rows. The choice is saved in your browser.
-- Turn on Compact UI or zoom out to 90%, 80%, or 70% from the settings menu. Both apply to the
-  whole app, including diff code, and are saved in your browser.
+- Compact UI is on by default. Turn it off or zoom out to 90%, 80%, or 70% from the settings
+  menu. Both apply to the whole app, including diff code, and are saved in your browser.
 - Read, write, and manage GitHub comments and submit reviews.
 - Switch between the exact **Original** diff and an on-demand, read-only **Reading** view with
   program-design, blast-radius, review-focus, and unknowns analysis.

@@ -302,12 +302,9 @@ export function FileDiffView(props: FileDiffViewProps) {
   const getCustomCSS = () => {
     const fontFamily = FONT_FAMILY_MAP[props.settings.fontFamily];
     const selectionColor = THEME_SELECTION_COLORS[props.settings.theme];
-    const metrics = diffCodeMetrics(uiDisplay());
     return `
       :host {
         --diffs-font-family: ${fontFamily};
-        --diffs-font-size: ${metrics.fontSize}px;
-        --diffs-line-height: ${metrics.lineHeight}px;
         --diffs-header-font-family: "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       .diffs-code { font-family: ${fontFamily} !important; }
