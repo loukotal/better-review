@@ -8,6 +8,7 @@ import App from "./App";
 import { AppShell } from "./AppShell";
 import { queryClient, restoreCache } from "./lib/query";
 import { initializeUiTheme } from "./lib/theme";
+import { initializeUiDisplay } from "./lib/ui-display";
 import AgentReviewIndexPage from "./pages/AgentReviewIndexPage";
 import AgentReviewPage from "./pages/AgentReviewPage";
 import DesignSystemPage from "./pages/DesignSystemPage";
@@ -17,6 +18,7 @@ import PrListPage from "./pages/PrListPage";
 // Restore cache from IndexedDB on startup
 restoreCache();
 initializeUiTheme();
+initializeUiDisplay();
 
 const root = document.getElementById("root");
 

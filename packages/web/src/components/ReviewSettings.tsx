@@ -5,6 +5,7 @@ import { Popover, Select } from "../design-system";
 import { GearIcon } from "../icons/gear-icon";
 import { getGithubSyncTimeoutMs, setGithubSyncTimeoutMs } from "../lib/github-queue-settings";
 import { githubWrites } from "../lib/github-writes";
+import { setUiDisplay, UI_ZOOM_LEVELS, uiDisplay, type UiZoom } from "../lib/ui-display";
 
 export function ReviewSettings(
   props: {
@@ -38,11 +39,43 @@ export function ReviewSettings(
             Applies to new actions and retries.
           </span>
         </label>
+        <label class="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            class="mt-1 accent-accent"
+            name="compact-ui"
+            checked={uiDisplay().density === "compact"}
+            onChange={(event) =>
+              setUiDisplay({ density: event.currentTarget.checked ? "compact" : "comfortable" })
+            }
+          />
+          <span>
+            Compact UI
+            <span class="mt-1 block text-xs text-text-muted">
+              Tighter spacing and code rows. Saved in this browser.
+            </span>
+          </span>
+        </label>
+        <label class="block text-sm">
+          <span class="mb-1 block">Zoom</span>
+          <Select
+            aria-label="Zoom"
+            value={String(uiDisplay().zoom)}
+            onChange={(event) =>
+              setUiDisplay({ zoom: Number(event.currentTarget.value) as UiZoom })
+            }
+          >
+            {UI_ZOOM_LEVELS.map((zoom) => (
+              <option value={String(zoom)}>{zoom === 100 ? "100% (default)" : `${zoom}%`}</option>
+            ))}
+          </Select>
+        </label>
         <Show when={props.onAutomaticOrderChange}>
           <label class="flex items-start gap-2 text-sm">
             <input
               type="checkbox"
               class="mt-1 accent-accent"
+              name="automatic-review-order"
               checked={props.automaticOrder}
               onChange={(event) => props.onAutomaticOrderChange?.(event.currentTarget.checked)}
             />

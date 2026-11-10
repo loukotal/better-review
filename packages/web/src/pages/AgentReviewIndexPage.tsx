@@ -132,7 +132,9 @@ export default function AgentReviewIndexPage() {
                       onClick={() => setStatusFilter(status)}
                     >
                       <span class="capitalize">{status}</span>
-                      <span class="font-mono text-[11px] text-text-faint">{countFor(status)}</span>
+                      <span class="font-mono text-[0.6875rem] text-text-faint">
+                        {countFor(status)}
+                      </span>
                     </Button>
                   )}
                 </For>

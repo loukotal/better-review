@@ -298,8 +298,8 @@ const KanbanPage: Component = () => {
         padding: "sm" as const,
         rootClass: "space-y-1.5",
         headerClass: "",
-        titleClass: "text-[13px] leading-snug",
-        metaClass: "text-[11px] text-text-faint flex items-center gap-1.5 flex-wrap",
+        titleClass: "text-[0.8125rem] leading-snug",
+        metaClass: "text-[0.6875rem] text-text-faint flex items-center gap-1.5 flex-wrap",
         footerClass: "",
       };
     }
@@ -888,7 +888,7 @@ const KanbanPage: Component = () => {
                                       {(targetWeek) => (
                                         <Badge
                                           variant="accent"
-                                          class="text-[11px]"
+                                          class="text-[0.6875rem]"
                                           title="Target week"
                                         >
                                           {formatTargetWeekBadgeText(targetWeek())}
@@ -898,18 +898,20 @@ const KanbanPage: Component = () => {
                                     <Show
                                       when={(item.assignees?.length ?? 0) > 0}
                                       fallback={
-                                        <span class="text-[11px] text-text-faint">Unassigned</span>
+                                        <span class="text-[0.6875rem] text-text-faint">
+                                          Unassigned
+                                        </span>
                                       }
                                     >
                                       <For each={item.assignees?.slice(0, 3) ?? []}>
                                         {(assignee) => (
-                                          <Badge variant="neutral" class="text-[11px]">
+                                          <Badge variant="neutral" class="text-[0.6875rem]">
                                             @{assignee}
                                           </Badge>
                                         )}
                                       </For>
                                       <Show when={(item.assignees?.length ?? 0) > 3}>
-                                        <Badge variant="neutral" class="text-[11px]">
+                                        <Badge variant="neutral" class="text-[0.6875rem]">
                                           +{(item.assignees?.length ?? 0) - 3}
                                         </Badge>
                                       </Show>

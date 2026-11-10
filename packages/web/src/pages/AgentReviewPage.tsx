@@ -1534,14 +1534,16 @@ function AnnotationsPanel(props: {
                           }
                         >
                           <span
-                            class="truncate font-mono text-[11px] text-text"
+                            class="truncate font-mono text-[0.6875rem] text-text"
                             title={location().title}
                           >
                             {location().title}
                           </span>
                           <Show when={location().detail}>
                             {(detail) => (
-                              <span class="shrink-0 text-[11px] text-text-faint">{detail()}</span>
+                              <span class="shrink-0 text-[0.6875rem] text-text-faint">
+                                {detail()}
+                              </span>
                             )}
                           </Show>
                         </button>
@@ -1567,7 +1569,7 @@ function AnnotationsPanel(props: {
                             onClick={(event) => event.stopPropagation()}
                           />
                         </Show>
-                        <blockquote class="m-0 mt-2 line-clamp-3 border-l border-border pl-2 text-[11px] leading-4 text-text-faint">
+                        <blockquote class="m-0 mt-2 line-clamp-3 border-l border-border pl-2 text-[0.6875rem] leading-4 text-text-faint">
                           {annotation.quote}
                         </blockquote>
                       </div>

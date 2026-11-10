@@ -180,7 +180,16 @@ html {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
-  font-size: 16px;
+  /* Zoom out scales every rem-based size; --ui-zoom comes from display settings. */
+  font-size: calc(16px * var(--ui-zoom, 1));
+}
+
+/* Compact density: Tailwind derives padding, gaps and sizes from --spacing. */
+:root[data-ui-density="compact"] {
+  --spacing: 0.2rem;
+  --text-xs--line-height: 1.35;
+  --text-sm--line-height: 1.35;
+  --text-base--line-height: 1.4;
 }
 
 body {

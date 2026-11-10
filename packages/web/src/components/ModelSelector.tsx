@@ -282,7 +282,7 @@ export function ModelSelector(props: ModelSelectorProps) {
                   <span class="text-text font-medium truncate">{model.modelId}</span>
                   <span class="text-text-faint text-xs">{model.providerId}</span>
                   <Show when={model.variants.length > 0 || model.reasoning}>
-                    <span class="text-[11px] text-text-faint truncate">
+                    <span class="text-[0.6875rem] text-text-faint truncate">
                       {[
                         model.reasoning ? "reasoning" : null,
                         model.variants.length > 0 ? `${model.variants.length} variants` : null,

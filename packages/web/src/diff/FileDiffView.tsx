@@ -45,6 +45,7 @@ import {
   textSelectionAnchor,
   type SelectionBubbleAnchor,
 } from "../lib/selection-bubble";
+import { diffCodeMetrics, uiDisplay } from "../lib/ui-display";
 import type { Annotation } from "../utils/parseReviewTokens";
 import {
   FocusableFileDiff,
@@ -301,9 +302,12 @@ export function FileDiffView(props: FileDiffViewProps) {
   const getCustomCSS = () => {
     const fontFamily = FONT_FAMILY_MAP[props.settings.fontFamily];
     const selectionColor = THEME_SELECTION_COLORS[props.settings.theme];
+    const metrics = diffCodeMetrics(uiDisplay());
     return `
       :host {
         --diffs-font-family: ${fontFamily};
+        --diffs-font-size: ${metrics.fontSize}px;
+        --diffs-line-height: ${metrics.lineHeight}px;
         --diffs-header-font-family: "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
       .diffs-code { font-family: ${fontFamily} !important; }
@@ -505,7 +509,7 @@ export function FileDiffView(props: FileDiffViewProps) {
   // Re-render when settings change
   createEffect(
     on(
-      () => ({ ...props.settings, readOnly: props.readOnly }),
+      () => ({ ...props.settings, ...uiDisplay(), readOnly: props.readOnly }),
       () => {
         if (instance && _containerRef) {
           // Clean up and recreate with new settings
@@ -1044,7 +1048,12 @@ export function FileDiffView(props: FileDiffViewProps) {
     };
     instance = nonVirtualized
       ? new FocusableFileDiff(options, props.workerPool)
-      : new FocusableVirtualizedFileDiff(options, props.virtualizer, undefined, props.workerPool);
+      : new FocusableVirtualizedFileDiff(
+          options,
+          props.virtualizer,
+          { lineHeight: diffCodeMetrics(uiDisplay()).lineHeight },
+          props.workerPool,
+        );
     for (const [index, region] of expandedHunks) {
       instance.getExpandedHunks().set(index, region);
     }

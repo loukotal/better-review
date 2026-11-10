@@ -1182,7 +1182,7 @@ export function ChatPanel(props: ChatPanelProps) {
           </Show>
         </summary>
         <Show when={hasDetails()}>
-          <div class="mt-1 min-w-0 max-w-full space-y-1 overflow-hidden border-t border-border pt-1 text-[11px] leading-relaxed text-text-faint">
+          <div class="mt-1 min-w-0 max-w-full space-y-1 overflow-hidden border-t border-border pt-1 text-[0.6875rem] leading-relaxed text-text-faint">
             <Show when={Object.keys(tool.input).length > 0}>
               <div class="min-w-0 max-w-full overflow-hidden">
                 <div class="text-text-muted">Arguments</div>

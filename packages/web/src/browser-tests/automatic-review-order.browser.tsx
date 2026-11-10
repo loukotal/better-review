@@ -496,7 +496,9 @@ async function initialOrderFixture(mode: string) {
     if (mode === "completed") {
       document.querySelector<HTMLButtonElement>('button[aria-label="Review settings"]')!.click();
       check(
-        document.querySelector<HTMLInputElement>('[aria-label="Review settings"] input')?.checked,
+        document.querySelector<HTMLInputElement>(
+          '[aria-label="Review settings"] input[name="automatic-review-order"]',
+        )?.checked,
         "Preference did not default on",
       );
     }
@@ -608,7 +610,7 @@ export async function testAutomaticReviewOrderInBrowser(mode = "existing") {
     "Settings did not open",
   );
   const toggle = document.querySelector<HTMLInputElement>(
-    '[role="dialog"][aria-label="Review settings"] input',
+    '[role="dialog"][aria-label="Review settings"] input[name="automatic-review-order"]',
   )!;
   check(!toggle.checked, "Explicit off preference was not preserved");
   toggle.click();
@@ -780,7 +782,9 @@ export async function testAutomaticReviewOrderReloadInBrowser(phase = "before") 
     check(order() === manual.join(","), "Reload reapplied consumed AI order");
     document.querySelector<HTMLButtonElement>('button[aria-label="Review settings"]')!.click();
     check(
-      document.querySelector<HTMLInputElement>('[aria-label="Review settings"] input')?.checked,
+      document.querySelector<HTMLInputElement>(
+        '[aria-label="Review settings"] input[name="automatic-review-order"]',
+      )?.checked,
       "Reload lost enabled toggle",
     );
   }

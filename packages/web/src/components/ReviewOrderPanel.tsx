@@ -101,7 +101,7 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
                   </span>
                   <Show when={change !== null && change !== 0}>
                     <span
-                      class={`text-[9px] ml-auto ${change! > 0 ? "text-success" : "text-error"}`}
+                      class={`text-[0.5625rem] ml-auto ${change! > 0 ? "text-success" : "text-error"}`}
                     >
                       {change! > 0 ? `+${change}` : change}
                     </span>

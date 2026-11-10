@@ -198,7 +198,9 @@ export async function testInitialAutomaticOrderPaintedRowsInBrowser() {
     check(sessionCalls === 1, "Initial preload duplicated session creation");
     document.querySelector<HTMLButtonElement>('button[aria-label="Review settings"]')!.click();
     check(
-      document.querySelector<HTMLInputElement>('[aria-label="Review settings"] input')?.checked,
+      document.querySelector<HTMLInputElement>(
+        '[aria-label="Review settings"] input[name="automatic-review-order"]',
+      )?.checked,
       "Preference did not default on",
     );
     return result();

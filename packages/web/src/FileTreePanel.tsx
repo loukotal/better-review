@@ -92,7 +92,7 @@ function DiffStatBadge(props: { file: FileDiffMetadata }) {
   const stats = () => getFileDiffStats(props.file);
   return (
     <Show when={hasDiffChanges(stats())}>
-      <span class="flex items-center gap-1 font-mono text-[10px] leading-none tabular-nums shrink-0">
+      <span class="flex items-center gap-1 font-mono text-[0.625rem] leading-none tabular-nums shrink-0">
         <span class="text-success">+{stats().additions}</span>
         <span class="text-error">−{stats().deletions}</span>
       </span>
@@ -148,7 +148,7 @@ function TreeNodeView(props: {
               style={{ "padding-left": `${props.depth * 10 + 8}px` }}
             >
               <span
-                class="text-text-faint text-[9px] transition-transform w-3 text-center"
+                class="text-text-faint text-[0.5625rem] transition-transform w-3 text-center"
                 classList={{ "rotate-90": isExpanded() }}
               >
                 ▶

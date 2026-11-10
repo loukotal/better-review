@@ -51,7 +51,10 @@ export function SelectionQuestionMessage(props: SelectionQuestionMessageProps) {
                   <span class="min-w-0 truncate">{selection.file.split("/").pop()}</span>
                   <span class="shrink-0">:{range}</span>
                 </button>
-                <div class="mt-0.5 truncate text-[11px] text-text-faint" title={selection.revision}>
+                <div
+                  class="mt-0.5 truncate text-[0.6875rem] text-text-faint"
+                  title={selection.revision}
+                >
                   {selectionRevisionLabel(selection)}
                 </div>
               </div>

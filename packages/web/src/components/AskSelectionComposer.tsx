@@ -169,7 +169,7 @@ export function AskSelectionComposer(props: {
         >
           {sending() ? "Sending…" : "Send question"}
         </Button>
-        <span class="text-[11px] text-text-faint">⌘ / Ctrl + Enter</span>
+        <span class="text-[0.6875rem] text-text-faint">⌘ / Ctrl + Enter</span>
       </div>
     </MessageForm>
   );
