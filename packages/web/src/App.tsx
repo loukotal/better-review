@@ -1274,7 +1274,8 @@ const AppContent: Component = () => {
           {/* PR Status Bar */}
           <Show when={loadedPrUrl() && changesActive()}>
             <div class="px-2 py-1 sm:px-4 sm:py-3 border-t border-border bg-bg flex flex-wrap items-center justify-between gap-x-3 gap-y-1 relative">
-              <div class="flex-1 min-w-0 sm:min-w-64">
+              {/* Phones give the PR title the full row; stats and tools wrap below. */}
+              <div class="min-w-0 flex-[1_1_100%] sm:flex-1 sm:min-w-64">
                 <PrStatusBar
                   onOpenChecks={() => selectTab("checks")}
                   status={prStatus()}
@@ -1399,7 +1400,9 @@ const AppContent: Component = () => {
               disabled={refreshingDetail()}
               aria-busy={refreshingDetail()}
             >
-              <span class="block max-w-14 truncate sm:max-w-none">Refresh details</span>
+              <span>
+                Refresh<span class="hidden sm:inline"> details</span>
+              </span>
             </Button>
           </Show>
         </nav>

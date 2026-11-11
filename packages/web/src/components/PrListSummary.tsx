@@ -53,11 +53,11 @@ export function PrListSummary(props: { pr: SearchedPr; layout: PrListLayout }) {
     <Show
       when={props.layout === "table"}
       fallback={
-        <div class="min-w-0 space-y-1 px-2 py-2" data-pr-summary-layout="title-first">
+        <div class="min-w-0 space-y-1 px-2 pt-2.5 sm:py-2" data-pr-summary-layout="title-first">
           <span class="block break-words text-sm font-medium leading-5 text-text group-hover:text-accent">
             {props.pr.title}
           </span>
-          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-text-muted sm:gap-x-3">
             <span class="max-w-full truncate font-mono">{repo()}</span>
             <ReviewBadges pr={props.pr} />
             <span class="max-w-full truncate">@{props.pr.author.login}</span>

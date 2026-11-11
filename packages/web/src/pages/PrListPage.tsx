@@ -486,7 +486,7 @@ const PrListPage: Component = () => {
             <div class="border-t border-border">
               <For each={filteredPrs()}>
                 {(pr) => (
-                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pr-2 hover:bg-bg-surface sm:flex-nowrap">
+                  <div class="flex flex-wrap items-center gap-x-1 gap-y-1 border-b border-border pb-2 pl-1 pr-2 hover:bg-bg-surface sm:flex-nowrap sm:gap-x-2 sm:pb-0 sm:pl-0">
                     <Show when={githubSyncState(pendingFor(pr.url))}>
                       {(status) => (
                         <GithubSyncStatus

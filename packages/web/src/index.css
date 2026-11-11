@@ -222,13 +222,39 @@ body {
     min-height: 44px;
   }
 
+  /* Logo and icon tools share the first row; main navigation gets its own row. */
+  .app-header-tools:has(nav) {
+    display: contents;
+  }
+
+  .app-header-tools:has(nav) > :is(:first-child:not(nav), nav:first-child + *) {
+    margin-left: auto;
+  }
+
   .app-header-tools nav {
     order: 1;
     flex-basis: 100%;
+    margin-inline: -0.25rem;
   }
 
-  .app-header-tools:has(nav) {
-    justify-content: flex-end;
+  .app-header nav a {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* Hunk expanders sit in Pierre's line-number subgrid; zero width keeps them from
+     widening that column, and they overflow left-anchored into the code area. */
+  .hunk-sep {
+    width: 0;
+    min-width: 0;
+    justify-content: flex-start !important;
+    padding-left: 6px !important;
+    white-space: nowrap;
+  }
+
+  /* An idle GitHub queue icon only covers content on narrow screens. */
+  [data-global-github-queue][data-idle] {
+    display: none;
   }
 
   .compact-tools:has(> button[aria-expanded="true"]) {

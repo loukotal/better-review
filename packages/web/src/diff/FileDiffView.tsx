@@ -866,6 +866,7 @@ export function FileDiffView(props: FileDiffViewProps) {
     el.innerHTML = "";
     const options: FileDiffOptions<DiffAnnotationMetadata> = {
       diffStyle: props.settings.diffStyle,
+      overflow: props.settings.overflow ?? "scroll",
       theme: props.settings.theme,
       lineDiffType: props.settings.lineDiffType,
       hunkSeparators: props.readOnly ? undefined : renderHunkSeparator,

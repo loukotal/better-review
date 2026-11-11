@@ -173,6 +173,7 @@ export function GithubPendingPanel() {
       aria-label="GitHub pending writes"
       class="fixed bottom-3 left-3 z-20 text-xs"
       data-global-github-queue
+      data-idle={!status() && !count() && !queue.error() ? "" : undefined}
     >
       <Popover
         label="GitHub queue"

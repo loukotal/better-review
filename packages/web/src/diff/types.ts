@@ -35,6 +35,8 @@ export interface DiffSettings {
   lineDiffType: LineDiffType;
   fontFamily: FontFamily;
   accentColor: AccentColor;
+  /** Viewport-derived, never persisted: phones wrap long lines instead of scrolling. */
+  overflow?: "scroll" | "wrap";
 }
 
 export const DEFAULT_DIFF_SETTINGS: DiffSettings = {

@@ -102,7 +102,9 @@ export function DiffViewer(props: Props) {
   });
   // Preserve desktop preferences. Two code columns are unreadable on a phone.
   const displaySettings = createMemo(() =>
-    phone() ? { ...props.settings, diffStyle: "unified" as const } : props.settings,
+    phone()
+      ? { ...props.settings, diffStyle: "unified" as const, overflow: "wrap" as const }
+      : props.settings,
   );
   let viewerRef: HTMLDivElement | undefined;
   let searchInputRef: HTMLInputElement | undefined;
