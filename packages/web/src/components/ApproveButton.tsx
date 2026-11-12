@@ -28,6 +28,12 @@ export function ApproveButton(props: {
   });
   const { body: comment, setBody: setComment, error: storageError } = draft;
   const [submitting, setSubmitting] = createSignal(false);
+  // Pin the head viewed when this popover opened. The saved draft's context only records
+  // its first open, which may predate the loaded head or a later push.
+  const [viewedHead, setViewedHead] = createSignal<string>();
+  // Popover toggle events are async; wait until this open has loaded its draft.
+  const [hydrated, setHydrated] = createSignal(false);
+  const approvedHead = () => (hydrated() ? (viewedHead() ?? props.expectedHeadSha) : undefined);
   const [error, setError] = createSignal<string | null>(null);
   const cooldown = () =>
     props.approvalOperations?.find((item) => !!item.admissionRetryAt && !item.backendOwned);
@@ -83,7 +89,7 @@ export function ApproveButton(props: {
     try {
       if (props.canSubmit === false)
         throw new Error("Wait for the selected PR to load. Your draft is preserved.");
-      const expectedHeadSha = draft.context().expectedHeadSha;
+      const expectedHeadSha = approvedHead();
       if (!expectedHeadSha)
         throw new Error("Load the current PR head before approving. Your draft is preserved.");
       await draft.submit((text, key) =>
@@ -109,11 +115,15 @@ export function ApproveButton(props: {
       }
       open={open()}
       onOpenChange={(next) => {
+        setHydrated(false);
+        setViewedHead(next ? (props.expectedHeadSha ?? undefined) : undefined);
         if (next && !props.approvalState)
-          void draft.open({
-            body: "",
-            context: props.expectedHeadSha ? { expectedHeadSha: props.expectedHeadSha } : {},
-          });
+          void draft
+            .open({
+              body: "",
+              context: props.expectedHeadSha ? { expectedHeadSha: props.expectedHeadSha } : {},
+            })
+            .then(() => setHydrated(open()));
         setOpen(next);
       }}
       width={320}
@@ -160,7 +170,7 @@ export function ApproveButton(props: {
                   <Textarea
                     id={id}
                     value={comment()}
-                    disabled={submitting() || !draft.ready() || !draft.context().expectedHeadSha}
+                    disabled={submitting() || !draft.ready() || !approvedHead()}
                     onInput={(e) => setComment(e.currentTarget.value)}
                     placeholder="Leave a comment…"
                     class="min-h-20"
@@ -185,7 +195,7 @@ export function ApproveButton(props: {
                   type="submit"
                   variant="success"
                   size="sm"
-                  disabled={submitting() || !draft.ready() || !draft.context().expectedHeadSha}
+                  disabled={submitting() || !draft.ready() || !approvedHead()}
                 >
                   <Show when={submitting()}>
                     <GithubSyncStatus status="saving-local" iconOnly />
