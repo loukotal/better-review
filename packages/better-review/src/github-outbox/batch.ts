@@ -1,5 +1,6 @@
 import {
   DEFAULT_GITHUB_QUEUE_TIMEOUT_MS,
+  githubUnpostableRoots,
   type GithubOutboxBatchControl,
   type GithubOutboxBatchReceipt,
   type GithubOutboxOperation,
@@ -112,6 +113,7 @@ export function applyBatchControl(
   const requiresConfirmation: string[] = [];
   const skipped: string[] = [];
   const all = store.list();
+  const unpostable = githubUnpostableRoots(all);
   const cutoffs = new Map<string, number>();
   for (const id of selected) {
     const op = store.get(id)!;
@@ -140,13 +142,18 @@ export function applyBatchControl(
         (item) =>
           item.command.scope.url === op.command.scope.url &&
           !item.archivedAt &&
+          !unpostable.has(item.command.operationId) &&
           !["synced", "cancelled"].includes(item.status),
       );
       if (op.status === "uncertain" || op.status === "inflight") {
         requiresConfirmation.push(op.command.operationId);
         continue;
       }
-      if (op.status !== "retry-failed" || first?.command.operationId !== op.command.operationId) {
+      if (
+        unpostable.has(op.command.operationId) ||
+        op.status !== "retry-failed" ||
+        first?.command.operationId !== op.command.operationId
+      ) {
         skipped.push(op.command.operationId);
         continue;
       }

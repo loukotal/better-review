@@ -1,5 +1,6 @@
 import {
   DEFAULT_GITHUB_QUEUE_TIMEOUT_MS,
+  githubUnpostableRoots,
   MAX_GITHUB_QUEUE_TIMEOUT_MS,
   isGithubOutboxBatchControl,
   isGithubOutboxAdmissionCycle,
@@ -310,7 +311,10 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
     async listPending() {
       assertOpen();
       const summaries = new Map<string, GithubOutboxPendingScope>();
-      for (const op of store.list()) {
+      const operations = store.list();
+      const unpostable = githubUnpostableRoots(operations);
+      const seenRunnableScope = new Set<string>();
+      for (const op of operations) {
         if (op.status === "synced" || op.status === "cancelled" || op.archivedAt) continue;
         const scope = op.command.scope;
         let summary = summaries.get(scope.url);
@@ -323,13 +327,16 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
             counts: { queued: 0, inflight: 0, "retry-failed": 0, uncertain: 0 },
             updatedAt: op.updatedAt,
           };
+          summaries.set(scope.url, summary);
+        }
+        if (!unpostable.has(op.command.operationId) && !seenRunnableScope.has(scope.url)) {
+          seenRunnableScope.add(scope.url);
           if (
             op.status === "uncertain" ||
             (op.status === "retry-failed" &&
               !(op.retryMode === "automatic" && op.error?.retryable && op.nextAttemptAt))
           )
             summary.blockedByOperationId = op.command.operationId;
-          summaries.set(scope.url, summary);
         }
         summary.pendingCount++;
         summary.counts[op.status]++;
@@ -438,6 +445,13 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
               break;
             }
             case "retry": {
+              if (
+                githubUnpostableRoots(store.list(op.command.scope.url)).has(op.command.operationId)
+              )
+                return reject(
+                  "head-changed",
+                  "Cannot post because the PR changed. Your text is saved. Copy it and post on the latest diff; other comments can still send.",
+                );
               if (op.status !== "retry-failed")
                 return reject("conflict", "Only proven-not-applied failures can be retried.");
               op.status = "queued";

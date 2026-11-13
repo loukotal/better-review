@@ -70,6 +70,11 @@ describes those implemented extensions; it does not freeze the original v1 surfa
 ## Worker/adapter rules
 
 - PR sequencing and dependencies are durable; independent PRs can progress.
+  A proven-not-applied `head-changed` failure is parked rather than blocking the
+  entire PR. Its explicit dependency descendants are parked with it, including
+  after timeout, restart or dismissal of the stale parent. Independent writes
+  continue in admission order. Other failures and uncertain delivery retain their
+  FIFO barriers. No saved command, anchor, head or admission sequence is rewritten.
   Local refs point to creation operations, never fake GitHub numeric IDs. Validate
   dependency scope, actor, entity kind and cycles; resolve to remote IDs before
   adapter dispatch. Thread refs require the actual GraphQL thread ID, not a comment
@@ -136,7 +141,12 @@ according to whether a write may have occurred.
   Persist deduplication before replying; replay identical request returns duplicate
   even if current revision moved. Reused request ID/different payload is conflict.
 - Retry only a proven-not-applied `retry-failed` operation; reconcile uncertain
-  operations using reads. Safe cancel only queued or proven-not-applied failed
+  operations using reads. Stale-head failures and their dependency descendants
+  cannot be retried with unchanged commands; individual Retry rejects them and
+  batch Retry skips them. The browser sorts these after sendable work, labels them
+  "Cannot post: PR changed", retains saved text and offers Copy and Cancel instead
+  of a futile Retry. The cause and recovery instructions remain visible even in
+  compact details, not hidden under diagnostics. Safe cancel only queued or proven-not-applied failed
   operations, never inflight/uncertain/synced. Cancelled dependencies block children.
 - Batch Retry skips unknown delivery and reports that it needs confirmation. Clear
   validates revisions and cancels the affected queued/proven-not-applied suffix in

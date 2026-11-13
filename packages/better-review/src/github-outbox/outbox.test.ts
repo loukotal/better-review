@@ -141,6 +141,102 @@ test("admitted approval completes after navigation releases the last UI lease", 
   assert.equal(posts, 1);
 });
 
+test("stale comments and their dependents do not block independent writes, including after restart", async (t) => {
+  const f = await fixture(t);
+  const stale = command({
+    action: {
+      kind: "inline-comment",
+      body: "saved stale comment",
+      expectedHeadSha: "a".repeat(40),
+      anchor: { path: "file.ts", side: "RIGHT", line: 1 },
+    },
+  });
+  f.adapter.send = async (op) =>
+    op.command.operationId === stale.operationId
+      ? {
+          outcome: "rejected",
+          error: { code: "head-changed", message: "PR changed", retryable: false },
+        }
+      : { outcome: "accepted", result: result(op) };
+  await f.box.enqueue(stale);
+  await until(async () => (await operation(f, stale.operationId)).status === "retry-failed");
+  const child = command({
+    action: {
+      kind: "resolve-thread",
+      target: {
+        source: "local",
+        kind: "thread",
+        operationId: stale.operationId,
+      },
+    },
+    dependencies: [stale.operationId],
+  });
+  await f.box.enqueue(child);
+  const grandchild = command({
+    action: {
+      kind: "unresolve-thread",
+      target: {
+        source: "local",
+        kind: "thread",
+        operationId: stale.operationId,
+      },
+    },
+    dependencies: [stale.operationId, child.operationId],
+  });
+  await f.box.enqueue(grandchild);
+  const independent = command({ action: { kind: "issue-comment", body: "post this now" } });
+  await f.box.enqueue(independent);
+  await until(async () => (await operation(f, independent.operationId)).status === "synced");
+  assert.equal((await operation(f, child.operationId)).attempts, 0);
+  assert.equal((await operation(f, grandchild.operationId)).attempts, 0);
+  assert.deepEqual((await operation(f, stale.operationId)).command, stale);
+  assert.equal((await f.box.listPending())[0]?.blockedByOperationId, undefined);
+  const retry = await f.box.control({
+    kind: "retry",
+    requestId: randomUUID(),
+    operationId: stale.operationId,
+    expectedRevision: (await operation(f, stale.operationId)).revision,
+  });
+  assert.equal(retry.outcome, "rejected");
+  const batch = await f.box.batchControl({
+    kind: "retry",
+    requestId: randomUUID(),
+    operations: await Promise.all(
+      [stale, child, grandchild].map(async (cmd) => ({
+        operationId: cmd.operationId,
+        expectedRevision: (await operation(f, cmd.operationId)).revision,
+      })),
+    ),
+  });
+  assert.equal(batch.outcome, "applied");
+  if (batch.outcome === "applied") assert.equal(batch.skipped.length, 3);
+  // Batch retries must not make immutable stale anchors sendable either.
+  assert.equal((await operation(f, stale.operationId)).status, "retry-failed");
+  f.advance(300_001);
+  await f.reopen();
+  const next = command({ action: { kind: "issue-comment", body: "after restart" } });
+  await f.box.enqueue(next);
+  await until(async () => (await operation(f, next.operationId)).status === "synced");
+  assert.equal(
+    f.adapter.posts.filter((op) => op.command.operationId === stale.operationId).length,
+    1,
+  );
+  assert.equal((await operation(f, child.operationId)).attempts, 0);
+  const cancelled = await f.box.control({
+    kind: "cancel",
+    requestId: randomUUID(),
+    operationId: stale.operationId,
+    expectedRevision: (await operation(f, stale.operationId)).revision,
+  });
+  assert.equal(cancelled.outcome, "applied");
+  const afterCancel = command({
+    action: { kind: "issue-comment", body: "after dismissing stale parent" },
+  });
+  await f.box.enqueue(afterCancel);
+  await until(async () => (await operation(f, afterCancel.operationId)).status === "synced");
+  assert.equal((await operation(f, grandchild.operationId)).attempts, 0);
+});
+
 test("restart resumes queued explicit intent without activity, with fresh identity and one dispatch", async (t) => {
   const f = await fixture(t);
   const cmd = command();

@@ -851,6 +851,41 @@ test("upgrade recovers only the legacy identity-initializing rejection; permanen
   }
 });
 
+test("stale comments are parked last with their dependent actions, not projected as independent FIFO blockers", async () => {
+  const stale = {
+    ...operation(command(1), "retry-failed"),
+    retryMode: "blocked" as const,
+    error: { code: "head-changed" as const, message: "PR changed", retryable: false },
+  };
+  const child = operation({ ...command(2), dependencies: [id(1)] });
+  const independent = operation(command(3));
+  const client = createGithubOutbox({
+    journal: memoryJournal(),
+    transport: transport({
+      async snapshot() {
+        return { scope, revision: 3, operations: [stale, child, independent] };
+      },
+    }),
+  });
+  try {
+    await client.snapshot(scope);
+    const view = client.getState(scope);
+    assert.deepEqual(
+      view.operations.map((item) => item.command.operationId),
+      [id(3), id(1), id(2)],
+    );
+    assert.equal(view.operations[0].blockedByOperationId, undefined);
+    assert.equal(view.operations[1].unpostable, "head-changed");
+    assert.equal(view.operations[2].unpostable, "dependency");
+    assert.equal(view.operations[2].blockedByOperationId, id(1));
+    assert.equal(view.busy, true);
+    assert.equal(view.pendingCount, 3);
+    assert.deepEqual(view.operations[1].command, stale.command);
+  } finally {
+    await client.close();
+  }
+});
+
 test("queued followers expose their uncertain or permanent FIFO blocker without pretending to progress", async () => {
   for (const status of ["uncertain", "retry-failed"] as const) {
     const first = { ...operation(command(1), status), retryMode: "blocked" as const };

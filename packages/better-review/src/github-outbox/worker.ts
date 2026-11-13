@@ -3,7 +3,7 @@ import type {
   GithubOutboxOperation,
   GithubRemoteResult,
 } from "@better-review/shared";
-import { isGithubRemoteResult } from "@better-review/shared";
+import { githubUnpostableRoots, isGithubRemoteResult } from "@better-review/shared";
 
 import { OutboxDatabase } from "./database.js";
 import { expireOperation, queueDeadline } from "./lifecycle";
@@ -138,9 +138,15 @@ export class OutboxWorker {
       if (this.slots.size >= 2 || this.slotWaiters.size > 0) break;
       const scope = row.scope as string;
       if (this.running.has(scope) || this.checking.has(scope)) continue;
-      const first = this.store
-        .list(scope)
-        .find((op) => !op.archivedAt && op.status !== "synced" && op.status !== "cancelled");
+      const operations = this.store.list(scope);
+      const unpostable = githubUnpostableRoots(operations);
+      const first = operations.find(
+        (op) =>
+          !op.archivedAt &&
+          op.status !== "synced" &&
+          op.status !== "cancelled" &&
+          !unpostable.has(op.command.operationId),
+      );
       if (
         !first ||
         first.timedOutAt ||
@@ -387,7 +393,8 @@ export class OutboxWorker {
           permission: "Check GitHub write access and comment ownership, then retry.",
           "target-changed":
             "The comment changed. Recover saved content and review the latest version.",
-          "head-changed": "The pull request head changed. Review the latest diff.",
+          "head-changed":
+            "Cannot post because the PR changed. Your text is saved. Copy it and post on the latest diff; other comments can still send.",
           invalid: "Check the comment target and request format before retrying.",
           conflict: "Refresh GitHub and review the latest version before retrying.",
         };

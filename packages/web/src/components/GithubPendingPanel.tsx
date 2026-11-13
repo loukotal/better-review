@@ -23,6 +23,10 @@ import { GithubSyncStatus, githubSyncState, githubOperationSyncState } from "./G
 
 function shortStatus(item: BrowserGithubOperation) {
   switch (githubOperationSyncState(item)) {
+    case "unpostable":
+      return item.unpostable === "dependency"
+        ? "Needs an unposted comment"
+        : "Cannot post: PR changed";
     case "timed-out":
       return "Timed out";
     case "uncertain":

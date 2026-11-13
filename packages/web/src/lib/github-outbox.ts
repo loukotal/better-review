@@ -1,5 +1,6 @@
 import {
   DEFAULT_GITHUB_QUEUE_TIMEOUT_MS,
+  githubUnpostableRoots,
   isGithubQueueTimeoutMs,
   isGithubOutboxBatchControl,
   type GithubOutboxBatchControl,
@@ -58,8 +59,10 @@ export interface BrowserGithubOperation {
   admissionRetryable?: boolean;
   admissionTimedOut?: boolean;
   admissionDeadlineAt?: string;
-  /** This PR's FIFO cannot advance until this earlier operation is resolved. */
+  /** Earlier FIFO barrier or explicit prerequisite requiring attention. */
   blockedByOperationId?: string;
+  /** Parked without discarding saved content or blocking independent writes. */
+  unpostable?: "head-changed" | "dependency";
 }
 
 export interface BrowserGithubState {
@@ -291,9 +294,19 @@ export function createGithubOutbox(options: {
         (a.operation?.sequence ?? Number.MAX_SAFE_INTEGER) -
         (b.operation?.sequence ?? Number.MAX_SAFE_INTEGER),
     );
+    const unpostable = githubUnpostableRoots(
+      list.flatMap((item) => (item.operation ? [item.operation] : [])),
+    );
+    for (const item of list) {
+      const root = unpostable.get(item.command.operationId);
+      if (!root || ["synced", "cancelled"].includes(item.status)) continue;
+      item.unpostable = root === item.command.operationId ? "head-changed" : "dependency";
+      if (root !== item.command.operationId) item.blockedByOperationId = root;
+    }
     const first = list.find(
       (item) =>
         item.backendOwned &&
+        !item.unpostable &&
         !item.operation?.archivedAt &&
         !["synced", "cancelled"].includes(item.status),
     );
@@ -308,7 +321,7 @@ export function createGithubOutbox(options: {
           )));
     if (needsAttention)
       for (const item of list)
-        if (item.backendOwned && item.status === "queued" && item !== first)
+        if (item.backendOwned && !item.unpostable && item.status === "queued" && item !== first)
           item.blockedByOperationId = first.command.operationId;
     const graph = createGithubDependencyGraph(list, now(), aliases);
     for (const item of list) {
@@ -317,10 +330,13 @@ export function createGithubOutbox(options: {
       if (blocker && blocker.kind !== "waiting") {
         if (blocker.operationId !== item.command.operationId || blocker.kind === "cycle")
           item.blockedByOperationId = blocker.operationId;
+        if (unpostable.has(blocker.operationId)) item.unpostable = "dependency";
         if (blocker.kind === "cycle")
           item.admissionError = "Cyclic local GitHub dependency; saved work needs attention.";
       }
     }
+    // Keep parked comments visible, after the work that can still progress.
+    list.sort((a, b) => Number(!!a.unpostable) - Number(!!b.unpostable));
     return structuredClone({
       scope: value.scope,
       revision: value.revision,
@@ -763,14 +779,18 @@ export function createGithubOutbox(options: {
           (item) => !item.operation?.archivedAt && !["synced", "cancelled"].includes(item.status),
         );
         if (kind === "retry") {
-          const root = pending.find((item) => item.backendOwned);
+          const root = pending.find((item) => item.backendOwned && !item.unpostable);
           if (root?.operation)
             operations.push({
               operationId: root.command.operationId,
               expectedRevision: root.operation.revision,
             });
           for (const item of pending)
-            if (!item.backendOwned && (item.admissionError || item.admissionTimedOut)) {
+            if (
+              !item.backendOwned &&
+              !item.unpostable &&
+              (item.admissionError || item.admissionTimedOut)
+            ) {
               await retryAdmission(scope, item.command.operationId, {
                 queueTimeoutMs: timeoutMs,
                 queueDeadlineAt: deadlineAt,

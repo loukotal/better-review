@@ -3,6 +3,7 @@ import { render } from "solid-js/web";
 
 import { createAssertions } from "../browser-tests/assertions";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
+import { GithubOperationDetails } from "./GithubOperationDetails";
 import {
   GithubSyncStatus,
   githubOperationSyncState,
@@ -76,6 +77,81 @@ export function testGithubAdmissionRetryabilityLabelsInBrowser() {
         (icon) => getComputedStyle(icon).animationName === "spin",
       ),
       "Waiting/rejected/blocked admission falsely spins as active sending",
+    );
+    return result();
+  } finally {
+    dispose();
+    host.remove();
+  }
+}
+
+export function testStaleGithubCommentExplainsWhyItCannotPostInBrowser() {
+  const { check, result } = createAssertions(3000);
+  const item: BrowserGithubOperation = {
+    command: {
+      operationId: "33333333-3333-4333-8333-333333333333",
+      scope: {
+        host: "github.com",
+        owner: "fixture",
+        repo: "fixture",
+        number: 1,
+        url: "https://github.com/fixture/fixture/pull/1",
+      },
+      expectedActor: { id: 42, login: "fixture" },
+      action: {
+        kind: "inline-comment",
+        body: "Keep this saved comment",
+        expectedHeadSha: "a".repeat(40),
+        anchor: { path: "file.ts", side: "RIGHT", line: 9 },
+      },
+      dependencies: [],
+    },
+    backendOwned: true,
+    status: "retry-failed",
+    unpostable: "head-changed",
+  };
+  item.operation = {
+    command: item.command,
+    status: "retry-failed",
+    retryMode: "blocked",
+    attempts: 1,
+    sequence: 1,
+    revision: 3,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    error: { code: "head-changed", message: "Legacy terse diagnostic", retryable: false },
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const dispose = render(
+    () => (
+      <>
+        <GithubSyncStatus status={githubOperationSyncState(item)} iconOnly />
+        <GithubOperationDetails scope={item.command.scope} operations={[item]} compact />
+      </>
+    ),
+    host,
+  );
+  try {
+    const status = host.querySelector('[data-github-sync-status="unpostable"]');
+    check(
+      status?.getAttribute("aria-label")?.includes("PR changed"),
+      "Stale status hides why posting failed",
+    );
+    check(!host.querySelector(".animate-spin"), "Unpostable comment falsely spins as sending");
+    check(
+      host.querySelector('[role="alert"]')?.textContent?.includes("Other comments can still send"),
+      "Compact details hide the recovery explanation inside diagnostics",
+    );
+    const buttons = [...host.querySelectorAll("button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    check(!buttons.includes("Retry"), "Stale immutable anchor offers a futile retry");
+    check(buttons.includes("Copy saved comment"), "Stale comment has no copy action");
+    check(buttons.includes("Cancel queued write"), "Stale comment cannot be dismissed safely");
+    check(
+      host.querySelector("pre")?.textContent === "Keep this saved comment",
+      "Saved comment text was lost",
     );
     return result();
   } finally {

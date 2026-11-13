@@ -30,6 +30,7 @@ export function GithubOperationDetails(props: {
   onRevealBlocker?: (operationId: string) => boolean;
 }) {
   const [error, setError] = createSignal<string>();
+  const [copied, setCopied] = createSignal<string>();
   const decisions = githubWrites.createDecisions();
   const [decisionState, setDecisionState] = createSignal(decisions.getState());
   onCleanup(decisions.subscribe(() => setDecisionState(decisions.getState())));
@@ -128,7 +129,39 @@ export function GithubOperationDetails(props: {
                   <GithubSyncStatus status={githubOperationSyncState(item)} iconOnly />
                 </p>
               </Show>
+              <Show when={githubOperationSyncState(item) === "unpostable"}>
+                <p role="alert" class="text-warning">
+                  {item.unpostable === "dependency"
+                    ? "This action needs a comment that could not be posted because the PR changed. Other comments can still send."
+                    : "Cannot post because the PR changed. Your text is saved. Copy it and post on the latest diff. Other comments can still send."}
+                </p>
+              </Show>
               <div class="flex flex-wrap gap-2" data-github-primary-controls>
+                <Show
+                  when={
+                    githubOperationSyncState(item) === "unpostable" && "body" in item.command.action
+                  }
+                >
+                  <Button
+                    size="sm"
+                    onClick={async () => {
+                      if (!("body" in item.command.action)) return;
+                      try {
+                        await navigator.clipboard.writeText(item.command.action.body);
+                        setCopied(item.command.operationId);
+                        setError(undefined);
+                      } catch {
+                        setError(
+                          "Could not copy. Open Recover saved content below and copy the text.",
+                        );
+                      }
+                    }}
+                  >
+                    {copied() === item.command.operationId
+                      ? "Copied comment"
+                      : "Copy saved comment"}
+                  </Button>
+                </Show>
                 <Show when={item.blockedByOperationId && props.onRevealBlocker}>
                   <Button
                     size="sm"
@@ -159,6 +192,7 @@ export function GithubOperationDetails(props: {
                 <Show
                   when={
                     item.status === "retry-failed" &&
+                    githubOperationSyncState(item) !== "unpostable" &&
                     item.backendOwned &&
                     !item.blockedByOperationId
                   }
@@ -394,6 +428,7 @@ export function GithubOperationDetails(props: {
             >
               <Show
                 when={
+                  !item.unpostable &&
                   (item.status === "queued" || item.status === "retry-failed") &&
                   all().some((entry) => entry.blockedByOperationId === item.command.operationId)
                 }

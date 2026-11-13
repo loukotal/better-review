@@ -167,6 +167,43 @@ export interface GithubOutboxOperation {
   archivedAt?: string;
 }
 
+/** Permanently stale intents are parked, not PR-wide FIFO barriers. Preserve
+ * their commands and propagate parking only through explicit dependencies.
+ * Never bypass uncertain delivery, auth failures or ordinary retry backoff.
+ */
+export function githubUnpostableRoots(
+  operations: readonly GithubOutboxOperation[],
+): Map<string, string> {
+  const roots = new Map<string, string>();
+  const followers = new Map<string, string[]>();
+  for (const op of operations) {
+    const id = op.command.operationId;
+    // Dismissing a stale parent must not turn its unsendable children into a
+    // new FIFO barrier. Cancellation does not make their prerequisite exist.
+    if (
+      (op.status === "retry-failed" || op.status === "cancelled") &&
+      op.error?.code === "head-changed"
+    )
+      roots.set(id, id);
+    if (!["queued", "retry-failed", "cancelled"].includes(op.status)) continue;
+    for (const dependency of op.command.dependencies) {
+      const children = followers.get(dependency) ?? [];
+      children.push(id);
+      followers.set(dependency, children);
+    }
+  }
+  const pending = [...roots.keys()];
+  for (let index = 0; index < pending.length; index++) {
+    const parent = pending[index]!;
+    for (const child of followers.get(parent) ?? []) {
+      if (roots.has(child)) continue;
+      roots.set(child, roots.get(parent)!);
+      pending.push(child);
+    }
+  }
+  return roots;
+}
+
 export interface GithubOutboxSnapshot {
   scope: GithubPrScope;
   /** Monotonic snapshot revision; clients must ignore older snapshots. */

@@ -12,7 +12,8 @@ export type GithubSyncState =
   | "retry-pending"
   | "blocked"
   | "timed-out"
-  | "verifying-account";
+  | "verifying-account"
+  | "unpostable";
 const labels: Record<GithubSyncState, string> = {
   "saving-local": "Saving on this device · not synced to GitHub",
   "local-pending": "Saved locally · awaiting app · not synced to GitHub",
@@ -24,11 +25,17 @@ const labels: Record<GithubSyncState, string> = {
   synced: "Synced to GitHub",
   cancelled: "Cancelled · no further GitHub sync",
   blocked: "Waiting for earlier action · not synced to GitHub",
+  unpostable: "Cannot post: PR changed · text saved · other comments can still send",
   "timed-out": "Timed out · action needed · not confirmed on GitHub",
   "verifying-account":
     "Waiting for GitHub account verification · saved locally · not sent to GitHub",
 };
 export function githubOperationSyncState(item: BrowserGithubOperation): GithubSyncState {
+  if (
+    item.unpostable ||
+    (item.status === "retry-failed" && item.operation?.error?.code === "head-changed")
+  )
+    return "unpostable";
   if (
     item.admissionTimedOut ||
     item.operation?.timedOutAt ||
@@ -52,6 +59,7 @@ export function githubSyncWarning(operations: readonly BrowserGithubOperation[])
   const states = operations.map(githubOperationSyncState);
   if (states.includes("uncertain")) return "uncertain";
   if (states.includes("timed-out")) return "timed-out";
+  if (states.includes("unpostable")) return "unpostable";
   if (states.includes("retry-failed")) return "retry-failed";
   if (states.includes("blocked")) return "blocked";
   return undefined;
@@ -91,7 +99,7 @@ export function GithubSyncIndicator(props: {
 }) {
   const warningState = () =>
     githubSyncWarning(props.operations ?? []) ??
-    (["uncertain", "retry-failed", "blocked", "timed-out"].includes(props.status)
+    (["uncertain", "retry-failed", "blocked", "timed-out", "unpostable"].includes(props.status)
       ? props.status
       : undefined);
   const label = () => githubSyncLabel(props.status, props.operations);

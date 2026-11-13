@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   isGithubOutboxCommand,
+  githubUnpostableRoots,
+  type GithubOutboxOperation,
   isGithubOutboxControl,
   isGithubRemoteResult,
   isGithubQueueTimeoutMs,
@@ -26,6 +28,45 @@ const command = {
   action: { kind: "issue-comment", body: "Keep this comment" },
   dependencies: [],
 };
+
+test("parking follows stale dependencies through dismissal, but never skips unknown delivery or ordinary failures", () => {
+  const operation = (
+    id: string,
+    status: GithubOutboxOperation["status"],
+    dependencies: string[] = [],
+  ): GithubOutboxOperation => ({
+    command: {
+      ...command,
+      operationId: id,
+      scope: { ...scope, host: "github.com" },
+      action: { kind: "issue-comment", body: "saved" },
+      dependencies,
+    },
+    status,
+    retryMode: "blocked",
+    revision: 1,
+    sequence: 1,
+    attempts: 0,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  });
+  const stale = operation("stale", "cancelled");
+  stale.error = { code: "head-changed", message: "PR changed", retryable: false };
+  const child = operation("child", "cancelled", ["stale"]);
+  const grandchild = operation("grandchild", "retry-failed", ["child"]);
+  grandchild.error = { code: "timeout", message: "expired", retryable: false };
+  const uncertain = operation("uncertain", "uncertain", ["stale"]);
+  const auth = operation("auth", "retry-failed");
+  auth.error = { code: "auth", message: "sign in", retryable: false };
+  const roots = githubUnpostableRoots([grandchild, uncertain, auth, child, stale]);
+  assert.deepEqual([...roots].sort(), [
+    ["child", "stale"],
+    ["grandchild", "stale"],
+    ["stale", "stale"],
+  ]);
+  assert.equal(roots.has("auth"), false);
+  assert.equal(roots.has("uncertain"), false);
+});
 
 test("queue time policy and batch/cycle inputs reject unbounded or malformed scheduling", () => {
   for (const value of [60_000, 300_000, 900_000, 3_600_000])

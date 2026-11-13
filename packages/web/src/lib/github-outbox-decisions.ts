@@ -169,6 +169,7 @@ export function createGithubDecisions(
         const root = value.operations.find(
           (item) =>
             item.backendOwned &&
+            !item.unpostable &&
             !item.operation?.archivedAt &&
             !["synced", "cancelled"].includes(item.status),
         );
