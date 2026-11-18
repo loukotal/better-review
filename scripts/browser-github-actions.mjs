@@ -40,6 +40,8 @@ export function createBrowserGithubActionsFixture() {
   let createdReview;
   let approval;
   let appliedApprovalWithoutAck;
+  let head = "a".repeat(40);
+  let history = [head];
   const comment = {
     id: 20,
     node_id: "comment-node-not-thread",
@@ -82,7 +84,12 @@ export function createBrowserGithubActionsFixture() {
         return Response.json({ message: "private-response-must-not-escape" }, { status: 422 });
       if (url.pathname === "/user") return Response.json(actor);
       if (url.pathname === "/repos/browser-fixture/isolated/pulls/1" && method === "GET")
-        return Response.json({ head: { sha: "a".repeat(40) } });
+        return Response.json({ head: { sha: head } });
+      const compare = url.pathname.match(
+        /^\/repos\/browser-fixture\/isolated\/compare\/([0-9a-f]{40})\.\.\.([0-9a-f]{40})$/,
+      );
+      if (compare && method === "GET")
+        return Response.json({ status: history.includes(compare[1]) ? "ahead" : "diverged" });
       if (url.pathname === "/repos/browser-fixture/isolated/pulls/1/reviews" && method === "POST") {
         if (approvalGate) await approvalGate;
         if (rejectApproval)
@@ -118,11 +125,19 @@ export function createBrowserGithubActionsFixture() {
         url.pathname === "/repos/browser-fixture/isolated/pulls/1/comments" &&
         method === "POST"
       ) {
+        // Like GitHub, a comment on an older commit reports the head as commit_id and keeps
+        // the posted commit and line in original_*.
         createdReview = {
           ...comment,
           id: 21,
           body: payload.body,
           html_url: `${scope.url}#discussion_r21`,
+          path: payload.path,
+          side: payload.side,
+          line: payload.line,
+          original_line: payload.line,
+          commit_id: head,
+          original_commit_id: payload.commit_id,
         };
         return Response.json(createdReview, { status: 201 });
       }
@@ -204,7 +219,12 @@ export function createBrowserGithubActionsFixture() {
         clock = Number(input);
         return clock;
       }
-      if (kind === "state") return { resolved, deleted, calls, approval };
+      if (kind === "state") return { resolved, deleted, calls, approval, head };
+      if (kind === "push") {
+        head = input.sha;
+        history = input.history ?? (input.rebase ? [head] : [...history, head]);
+        return head;
+      }
       if (kind === "fail-delete") {
         failDelete = !!input;
         return;
