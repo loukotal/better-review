@@ -685,19 +685,51 @@ test("approval submits explicit pinned commit and marker-only empty body", async
   f.done();
 });
 
-test("stale heads reject before send for approval and inline", async () => {
-  const actions: GithubWriteAction[] = [
-    { kind: "approve", expectedHeadSha: sha, body: "" },
+test("stale heads reject approval before send", async () => {
+  const f = fixture([user(), head(otherSha)]);
+  const result = await f.adapter.dispatch(
+    operation({ kind: "approve", expectedHeadSha: sha, body: "" }),
+  );
+  assert.equal(result.outcome, "rejected");
+  assert.ok("error" in result && result.error.code === "head-changed");
+  f.done();
+});
+
+const staleInline: GithubWriteAction = {
+  kind: "inline-comment",
+  expectedHeadSha: sha,
+  body: "hello",
+  anchor: { path: "src/a.ts", side: "RIGHT", line: 5 },
+};
+const compare = (extra: Partial<Step>): Step => ({
+  path: `/repos/acme/repo/compare/${sha}...${otherSha}`,
+  ...extra,
+});
+
+test("inline comment posts on its reviewed commit after later pushes", async () => {
+  const f = fixture([
+    user(),
+    head(otherSha),
+    compare({ data: { status: "ahead" } }),
     {
-      kind: "inline-comment",
-      expectedHeadSha: sha,
-      body: "hello",
-      anchor: { path: "src/a.ts", side: "RIGHT", line: 5 },
+      path: "/repos/acme/repo/pulls/3/comments",
+      method: "POST",
+      // GitHub moves the comment to the new head and keeps the posted location in original_*.
+      data: inline(wire(), { commit_id: otherSha, original_commit_id: sha, line: 9 }),
+      check: (init) => assert.equal(JSON.parse(String(init.body)).commit_id, sha),
     },
-  ];
-  for (const action of actions) {
-    const f = fixture([user(), head(otherSha)]);
-    const result = await f.adapter.dispatch(operation(action));
+  ]);
+  const sent = operation(staleInline);
+  const result = await f.adapter.dispatch(sent);
+  assert.equal(result.outcome, "accepted");
+  assert.ok("result" in result && matches(sent, result.result, staleInline));
+  f.done();
+});
+
+test("inline comment rejects when a rebase removed its reviewed commit", async () => {
+  for (const step of [compare({ data: { status: "diverged" } }), compare({ status: 404 })]) {
+    const f = fixture([user(), head(otherSha), step]);
+    const result = await f.adapter.dispatch(operation(staleInline));
     assert.equal(result.outcome, "rejected");
     assert.ok("error" in result && result.error.code === "head-changed");
     f.done();
@@ -1022,17 +1054,26 @@ test("inline reconciliation checks full anchor, original positions, commit and r
     expectedHeadSha: sha,
     anchor: { path: "src/a.ts", side: "RIGHT", line: 5, startLine: 2, startSide: "RIGHT" },
   });
-  for (const change of [
-    {},
-    { path: "src/b.ts" },
-    { side: "LEFT" },
-    { line: 6 },
-    { start_line: 3 },
-    { start_side: "LEFT" },
-    { commit_id: otherSha },
-    { in_reply_to_id: 19 },
-    { line: null, original_line: 5, start_line: null, original_start_line: 2 },
-  ]) {
+  const outdated = { line: null, original_line: 5, start_line: null, original_start_line: 2 };
+  const moved = {
+    commit_id: otherSha,
+    original_commit_id: sha,
+    line: 9,
+    start_line: 6,
+    original_start_line: 2,
+  };
+  for (const [change, expected] of [
+    [{}, "matched"],
+    [outdated, "matched"],
+    [moved, "matched"],
+    [{ path: "src/b.ts" }, "conflict"],
+    [{ side: "LEFT" }, "conflict"],
+    [{ line: 6, original_line: 6 }, "conflict"],
+    [{ start_line: 3 }, "conflict"],
+    [{ start_side: "LEFT" }, "conflict"],
+    [{ commit_id: otherSha }, "conflict"],
+    [{ in_reply_to_id: 19 }, "conflict"],
+  ] as const) {
     const f = fixture([
       user(),
       {
@@ -1040,8 +1081,6 @@ test("inline reconciliation checks full anchor, original positions, commit and r
         data: [inline(wire(), { start_line: 2, start_side: "RIGHT", ...change })],
       },
     ]);
-    const expected =
-      !Object.keys(change).length || "original_line" in change ? "matched" : "conflict";
     assert.equal((await f.adapter.reconcile(op)).outcome, expected);
     f.done();
   }

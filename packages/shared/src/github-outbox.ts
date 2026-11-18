@@ -127,6 +127,8 @@ export type GithubRemoteResult =
         line: number | null;
         originalLine: number | null;
         commitSha: string;
+        /** Commit the comment was posted on; differs from commitSha once GitHub moves it. */
+        originalCommitSha?: string;
       };
       inReplyToId?: number;
       /** GraphQL review thread identity, never the comment node ID. May be discovered later. */
@@ -202,6 +204,16 @@ export function githubUnpostableRoots(
     }
   }
   return roots;
+}
+
+/** An inline comment parked by a head change can be retried unchanged: dispatch posts it
+ * on its reviewed commit while that commit is still in the PR head's history. */
+export function githubRetriesOnReviewedCommit(op: GithubOutboxOperation): boolean {
+  return (
+    op.status === "retry-failed" &&
+    op.error?.code === "head-changed" &&
+    op.command.action.kind === "inline-comment"
+  );
 }
 
 export interface GithubOutboxSnapshot {
@@ -475,6 +487,8 @@ export function isGithubRemoteResult(value: unknown): value is GithubRemoteResul
             (value.location.line === null || positive(value.location.line)) &&
             (value.location.originalLine === null || positive(value.location.originalLine)) &&
             sha(value.location.commitSha) &&
+            (value.location.originalCommitSha === undefined ||
+              sha(value.location.originalCommitSha)) &&
             (value.inReplyToId === undefined || positive(value.inReplyToId)) &&
             (value.threadId === undefined || nonempty(value.threadId))))
       );

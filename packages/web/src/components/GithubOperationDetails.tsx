@@ -1,6 +1,6 @@
 import { createSignal, createEffect, createMemo, onCleanup, For, Show } from "solid-js";
 
-import type { GithubPrScope } from "@better-review/shared";
+import { githubRetriesOnReviewedCommit, type GithubPrScope } from "@better-review/shared";
 
 import { useGithubQueue } from "../context/GithubQueueContext";
 import { Button } from "../design-system";
@@ -8,11 +8,23 @@ import { githubActionLabel } from "../lib/github-action-label";
 import type { BrowserGithubOperation } from "../lib/github-outbox";
 import { revealGithubQueueContent } from "../lib/github-queue-layout";
 import { getGithubSyncTimeoutMs } from "../lib/github-queue-settings";
-import { githubWrites } from "../lib/github-writes";
+import { githubWrites, queueGithubWrite } from "../lib/github-writes";
+import { refreshPrDetail } from "../lib/query";
 import {
   GithubSyncIndicator as GithubSyncStatus,
   githubOperationSyncState,
 } from "./GithubSyncIndicator";
+
+/** Stale approvals need a fresh decision on the new head; stale inline comments can still
+ * post on the commit they were written against. */
+export function staleRecovery(item: BrowserGithubOperation) {
+  if (item.unpostable !== "head-changed" || !item.operation) return undefined;
+  if (githubRetriesOnReviewedCommit(item.operation)) return "reviewed-commit" as const;
+  if (item.command.action.kind === "approve") return "approve-latest" as const;
+  return undefined;
+}
+
+const shortSha = (sha: string) => sha.slice(0, 7);
 
 function operationErrorMessage(item: BrowserGithubOperation): string | undefined {
   const error = item.operation?.error;
@@ -52,6 +64,13 @@ export function GithubOperationDetails(props: {
     scope: GithubPrScope;
   }>();
   const [now, setNow] = createSignal(Date.now());
+  const [approvalPrompt, setApprovalPrompt] = createSignal<{
+    operationId: string;
+    reviewed: string;
+    latest?: string;
+    loading?: boolean;
+    error?: string;
+  }>();
   const queue = useGithubQueue();
   const busy = () => !!decisionState().busyKind || !!queue?.batchBusy?.();
   if (!queue) onCleanup(githubWrites.subscribe(() => setVersion((value) => value + 1)));
@@ -110,6 +129,50 @@ export function GithubOperationDetails(props: {
       );
     if (kind === "allow-manual-retry") setConfirmation(undefined);
   };
+  const promptApproveLatest = async (item: BrowserGithubOperation) => {
+    const action = item.command.action;
+    if (action.kind !== "approve") return;
+    const prompt = { operationId: item.command.operationId, reviewed: action.expectedHeadSha };
+    setApprovalPrompt({ ...prompt, loading: true });
+    try {
+      const metadata = (await refreshPrDetail(props.scope.url)).metadata;
+      if (metadata.status !== "available") throw new Error("PR details are unavailable.");
+      if (metadata.data.state !== "OPEN") throw new Error("This PR is no longer open.");
+      if (metadata.data.head.sha === action.expectedHeadSha)
+        throw new Error("GitHub still reports the reviewed commit. Refresh and try again.");
+      setApprovalPrompt({ ...prompt, latest: metadata.data.head.sha });
+    } catch (cause) {
+      setApprovalPrompt({
+        ...prompt,
+        error: cause instanceof Error ? cause.message : "Could not load the latest PR head.",
+      });
+    }
+  };
+  const approveLatest = async (item: BrowserGithubOperation, latest: string) => {
+    const action = item.command.action;
+    if (action.kind !== "approve" || busy()) return;
+    setApprovalPrompt((prompt) => prompt && { ...prompt, loading: true, error: undefined });
+    try {
+      // Queue the new approval before dismissing the stale one, so a failure loses nothing.
+      await queueGithubWrite(props.scope.url, {
+        kind: "approve",
+        expectedHeadSha: latest,
+        body: action.body,
+      });
+    } catch (cause) {
+      setApprovalPrompt(
+        (prompt) =>
+          prompt && {
+            ...prompt,
+            loading: false,
+            error: cause instanceof Error ? cause.message : "Could not queue the approval.",
+          },
+      );
+      return;
+    }
+    setApprovalPrompt(undefined);
+    await control(item, "cancel");
+  };
   return (
     <div class="space-y-3 text-xs">
       <For each={operations()}>
@@ -133,10 +196,85 @@ export function GithubOperationDetails(props: {
                 <p role="alert" class="text-warning">
                   {item.unpostable === "dependency"
                     ? "This action needs a comment that could not be posted because the PR changed. Other comments can still send."
-                    : "Cannot post because the PR changed. Your text is saved. Copy it and post on the latest diff. Other comments can still send."}
+                    : staleRecovery(item) === "reviewed-commit"
+                      ? "The PR changed after you wrote this. Post it on the commit you reviewed; GitHub marks it outdated if that line changed since."
+                      : staleRecovery(item) === "approve-latest"
+                        ? "The PR changed since you reviewed it. Check the new commits, then approve the latest version."
+                        : "Cannot post because the PR changed. Your text is saved. Copy it and post on the latest diff. Other comments can still send."}
                 </p>
               </Show>
+              <Show
+                when={
+                  approvalPrompt()?.operationId === item.command.operationId && approvalPrompt()
+                }
+              >
+                {(prompt) => (
+                  <div
+                    role="alertdialog"
+                    aria-label="PR changed since your review"
+                    class="space-y-2 rounded-md border border-warning/40 p-2"
+                  >
+                    <p>
+                      You reviewed <code>{shortSha(prompt().reviewed)}</code>
+                      <Show when={prompt().latest}>
+                        {(latest) => (
+                          <>
+                            . The PR is now at <code>{shortSha(latest())}</code>.{" "}
+                            <a
+                              class="underline"
+                              href={`${props.scope.url}/files/${prompt().reviewed}..${latest()}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              View changes since your review
+                            </a>
+                          </>
+                        )}
+                      </Show>
+                    </p>
+                    <Show when={prompt().error}>
+                      {(message) => <p role="alert">{message()}</p>}
+                    </Show>
+                    <div class="flex flex-wrap gap-2">
+                      <Show when={prompt().latest}>
+                        {(latest) => (
+                          <Button
+                            size="sm"
+                            variant="success"
+                            disabled={prompt().loading || busy()}
+                            onClick={() => void approveLatest(item, latest())}
+                          >
+                            Approve {shortSha(latest())}
+                          </Button>
+                        )}
+                      </Show>
+                      <Button size="sm" onClick={() => setApprovalPrompt(undefined)}>
+                        Not now
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </Show>
               <div class="flex flex-wrap gap-2" data-github-primary-controls>
+                <Show when={staleRecovery(item) === "reviewed-commit"}>
+                  <Button size="sm" disabled={busy()} onClick={() => void control(item, "retry")}>
+                    Post on reviewed commit
+                  </Button>
+                </Show>
+                <Show
+                  when={
+                    staleRecovery(item) === "approve-latest" &&
+                    approvalPrompt()?.operationId !== item.command.operationId
+                  }
+                >
+                  <Button
+                    size="sm"
+                    disabled={busy()}
+                    onClick={() => void promptApproveLatest(item)}
+                  >
+                    Approve latest…
+                  </Button>
+                </Show>
                 <Show
                   when={
                     githubOperationSyncState(item) === "unpostable" && "body" in item.command.action

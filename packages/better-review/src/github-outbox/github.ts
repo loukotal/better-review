@@ -390,6 +390,29 @@ export function createGithubOutboxAdapter(
     if (data.head.sha !== expected)
       throw new Failure(error("head-changed", "The pull request head has changed."));
   }
+  /** Inline comments stay on the commit they were written against, like GitHub's own
+   * outdated comments. A rebase or force push drops that commit, so it cannot be used. */
+  async function reviewedCommit(ctx: Ctx, reviewed: string) {
+    const { data } = await request(ctx.pr);
+    if (!object(data) || !object(data.head) || !text(data.head.sha)) throw invalid();
+    if (data.head.sha === reviewed) return;
+    let comparison: Json;
+    try {
+      const response = await request(`${ctx.base}/compare/${reviewed}...${data.head.sha}`);
+      if (!object(response.data)) throw invalid();
+      comparison = response.data;
+    } catch (cause) {
+      if (cause instanceof Failure && cause.status === 404)
+        throw new Failure(
+          error("head-changed", "The reviewed commit is no longer in the pull request."),
+        );
+      throw cause;
+    }
+    if (comparison.status !== "ahead")
+      throw new Failure(
+        error("head-changed", "The reviewed commit is no longer in the pull request."),
+      );
+  }
   async function pages(path: string): Promise<Json[]> {
     const all: Json[] = [];
     for (let page = 1; page <= maxPages; page++) {
@@ -455,6 +478,9 @@ export function createGithubOutboxAdapter(
         line: data.line,
         originalLine: data.original_line,
         commitSha: data.commit_id,
+        ...(text(data.original_commit_id) && /^[0-9a-f]{40}$/i.test(data.original_commit_id)
+          ? { originalCommitSha: data.original_commit_id }
+          : {}),
       },
       ...(positive(data.in_reply_to_id) ? { inReplyToId: data.in_reply_to_id } : {}),
     };
@@ -543,12 +569,13 @@ export function createGithubOutboxAdapter(
           const a = action.anchor;
           return (
             belongs(data, "review-comment", ctx) &&
-            data.commit_id === action.expectedHeadSha &&
+            // original_* keep the posted location after GitHub moves or outdates the comment.
+            (data.original_commit_id ?? data.commit_id) === action.expectedHeadSha &&
             (data.in_reply_to_id === null || data.in_reply_to_id === undefined) &&
             data.path === a.path &&
             data.side === a.side &&
-            (data.line ?? data.original_line) === a.line &&
-            (data.start_line ?? data.original_start_line ?? undefined) === a.startLine &&
+            (data.original_line ?? data.line) === a.line &&
+            (data.original_start_line ?? data.start_line ?? undefined) === a.startLine &&
             (data.start_side ?? undefined) === a.startSide
           );
         }
@@ -917,7 +944,7 @@ export function createGithubOutboxAdapter(
             payload = { body };
             break;
           }
-          await head(ctx, action.expectedHeadSha);
+          await reviewedCommit(ctx, action.expectedHeadSha);
           const a = action.anchor;
           payload = {
             body,

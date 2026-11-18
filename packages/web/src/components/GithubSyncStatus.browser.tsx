@@ -140,13 +140,16 @@ export function testStaleGithubCommentExplainsWhyItCannotPostInBrowser() {
     );
     check(!host.querySelector(".animate-spin"), "Unpostable comment falsely spins as sending");
     check(
-      host.querySelector('[role="alert"]')?.textContent?.includes("Other comments can still send"),
+      host.querySelector('[role="alert"]')?.textContent?.includes("commit you reviewed"),
       "Compact details hide the recovery explanation inside diagnostics",
     );
     const buttons = [...host.querySelectorAll("button")].map((button) =>
       button.textContent?.trim(),
     );
-    check(!buttons.includes("Retry"), "Stale immutable anchor offers a futile retry");
+    check(
+      buttons.includes("Post on reviewed commit"),
+      "Stale inline comment cannot be posted on its reviewed commit",
+    );
     check(buttons.includes("Copy saved comment"), "Stale comment has no copy action");
     check(buttons.includes("Cancel queued write"), "Stale comment cannot be dismissed safely");
     check(

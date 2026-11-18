@@ -1,5 +1,6 @@
 import {
   DEFAULT_GITHUB_QUEUE_TIMEOUT_MS,
+  githubRetriesOnReviewedCommit,
   githubUnpostableRoots,
   MAX_GITHUB_QUEUE_TIMEOUT_MS,
   isGithubOutboxBatchControl,
@@ -446,7 +447,10 @@ export async function createGithubOutbox(options: GithubOutboxOptions): Promise<
             }
             case "retry": {
               if (
-                githubUnpostableRoots(store.list(op.command.scope.url)).has(op.command.operationId)
+                githubUnpostableRoots(store.list(op.command.scope.url)).has(
+                  op.command.operationId,
+                ) &&
+                !githubRetriesOnReviewedCommit(op)
               )
                 return reject(
                   "head-changed",

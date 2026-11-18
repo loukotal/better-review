@@ -63,8 +63,8 @@ export function matches(
         result.body === a.body &&
         result.location.path === a.anchor.path &&
         result.location.side === a.anchor.side &&
-        (result.location.line ?? result.location.originalLine) === a.anchor.line &&
-        result.location.commitSha === a.expectedHeadSha &&
+        (result.location.originalLine ?? result.location.line) === a.anchor.line &&
+        (result.location.originalCommitSha ?? result.location.commitSha) === a.expectedHeadSha &&
         result.inReplyToId === undefined
       );
     case "reply":

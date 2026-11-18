@@ -1,5 +1,6 @@
 import {
   DEFAULT_GITHUB_QUEUE_TIMEOUT_MS,
+  githubRetriesOnReviewedCommit,
   githubUnpostableRoots,
   type GithubOutboxBatchControl,
   type GithubOutboxBatchReceipt,
@@ -138,6 +139,7 @@ export function applyBatchControl(
       delete op.nextAttemptAt;
     } else {
       if (!selected.has(op.command.operationId)) continue;
+      const parked = githubRetriesOnReviewedCommit(op);
       const first = all.find(
         (item) =>
           item.command.scope.url === op.command.scope.url &&
@@ -150,9 +152,9 @@ export function applyBatchControl(
         continue;
       }
       if (
-        unpostable.has(op.command.operationId) ||
+        (unpostable.has(op.command.operationId) && !parked) ||
         op.status !== "retry-failed" ||
-        first?.command.operationId !== op.command.operationId
+        (!parked && first?.command.operationId !== op.command.operationId)
       ) {
         skipped.push(op.command.operationId);
         continue;

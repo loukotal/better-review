@@ -18,15 +18,21 @@ import {
   rememberPrListScroll,
 } from "../lib/pr-navigation";
 import { legacyGithubDraftRecovery } from "../lib/recoverable-drafts";
-import { GithubOperationDetails } from "./GithubOperationDetails";
+import { GithubOperationDetails, staleRecovery } from "./GithubOperationDetails";
 import { GithubSyncStatus, githubSyncState, githubOperationSyncState } from "./GithubSyncStatus";
 
 function shortStatus(item: BrowserGithubOperation) {
   switch (githubOperationSyncState(item)) {
     case "unpostable":
-      return item.unpostable === "dependency"
-        ? "Needs an unposted comment"
-        : "Cannot post: PR changed";
+      if (item.unpostable === "dependency") return "Needs an unposted comment";
+      switch (staleRecovery(item)) {
+        case "reviewed-commit":
+          return "PR changed: post on reviewed commit";
+        case "approve-latest":
+          return "PR changed: review new commits";
+        default:
+          return "Cannot post: PR changed";
+      }
     case "timed-out":
       return "Timed out";
     case "uncertain":

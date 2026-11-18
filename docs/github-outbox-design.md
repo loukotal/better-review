@@ -88,8 +88,12 @@ describes those implemented extensions; it does not freeze the original v1 surfa
   catch transport failures internally. Never persist/log raw credentials, headers,
   CLI output or raw thrown causes. Unexpected adapter throws are uncertain.
 - Approval, request-changes, review-comment and inline expected head SHA are immutable;
-  verify fresh head and submit
-  exact commit SHA. Never re-anchor to a new head. Edits/deletes compare expected
+  submit that exact commit SHA and never re-anchor to a new head. Reviews require the
+  fresh head to equal it. Inline comments require it to be the head or an ancestor of
+  the head (compare status `ahead`), so a later push leaves them postable on the
+  reviewed commit, as GitHub's own outdated comments; a rebase that drops the commit
+  is `head-changed`. Matching uses `original_commit_id`/`original_line`, which keep
+  the posted location after GitHub moves the comment. Edits/deletes compare expected
   clean body before mutation. Approvals return review ID/commit; threads return
   thread ID/state; comment mutations return real remote IDs; delete returns target.
 - Dispatch result kind and target must match action. Reconciliation must exhaust
@@ -143,9 +147,13 @@ according to whether a write may have occurred.
 - Retry only a proven-not-applied `retry-failed` operation; reconcile uncertain
   operations using reads. Stale-head failures and their dependency descendants
   cannot be retried with unchanged commands; individual Retry rejects them and
-  batch Retry skips them. The browser sorts these after sendable work, labels them
-  "Cannot post: PR changed", retains saved text and offers Copy and Cancel instead
-  of a futile Retry. The cause and recovery instructions remain visible even in
+  batch Retry skips them. Exception: a parked inline comment itself
+  (`githubRetriesOnReviewedCommit`) retries unchanged on its reviewed commit; its
+  descendants wait for it. The browser sorts parked work after sendable work, retains
+  saved text and offers Copy and Cancel. Inline comments add "Post on reviewed
+  commit". A stale approval offers "Approve latest…", which shows the reviewed and
+  current heads with a link to the changes between them, queues a new approval for
+  the current head only after confirmation, then cancels the stale one. The cause and recovery instructions remain visible even in
   compact details, not hidden under diagnostics. Safe cancel only queued or proven-not-applied failed
   operations, never inflight/uncertain/synced. Cancelled dependencies block children.
 - Batch Retry skips unknown delivery and reports that it needs confirmation. Clear
