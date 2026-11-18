@@ -2,7 +2,7 @@ packages:
   - "packages/*"
 overrides:
   # The durable review runtime and app share one provider contract and model catalog.
-  "@earendil-works/pi-ai": "1.2.0"
+  "@earendil-works/pi-ai": "1.5.2"
   picomatch: "4.0.4"
   rollup: "4.59.0"
   semver: "7.7.4"
@@ -17,7 +17,6 @@ minimumReleaseAgeExclude:
   - "@anthropic-ai/sdk@0.129.0"
   - "@earendil-works/pi-agent-core"
   - "@earendil-works/pi-ai"
-  - "@earendil-works/pi-telemetry@1.2.0"
 trustPolicy: no-downgrade
 blockExoticSubdeps: true
 allowBuilds:

@@ -4,9 +4,9 @@ import path from "node:path";
 
 import { createModels, normalizeContext, type Provider } from "@earendil-works/pi-ai";
 import { findEnvKeys } from "@earendil-works/pi-ai/compat";
-import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import { reviewCredentials } from "./credentials";
+import { catalogProviders } from "./pi-catalog";
 
 const PI_AUTH_PATH =
   process.env.BETTER_REVIEW_PI_AUTH_PATH ?? path.join(homedir(), ".pi", "agent", "auth.json");
@@ -124,7 +124,7 @@ function withReviewTransport(provider: Provider): Provider {
 }
 
 export function getReviewProviders(): Provider[] {
-  return builtinProviders().map((provider) => {
+  return catalogProviders().map((provider) => {
     const reviewProvider = withReviewTransport(provider);
     const token = PI_OAUTH_PROVIDER_IDS.includes(provider.id)
       ? getAuthApiKey(provider.id)
@@ -149,6 +149,6 @@ export function hasPiOAuthProvider(provider: string): boolean {
 
 export function createReviewModels() {
   const models = createModels({ credentials: reviewCredentials() });
-  for (const provider of builtinProviders()) models.setProvider(withReviewTransport(provider));
+  for (const provider of catalogProviders()) models.setProvider(withReviewTransport(provider));
   return models;
 }

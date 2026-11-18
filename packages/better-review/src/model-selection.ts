@@ -4,13 +4,13 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import {
+  createModels,
   getSupportedThinkingLevels,
   type Api,
   type Model,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { findEnvKeys } from "@earendil-works/pi-ai/compat";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 
 import {
   createModelResolution,
@@ -25,6 +25,7 @@ import {
   type SelectedModel,
   type ResolvedReviewModel,
 } from "./model-resolution";
+import { catalogProviders } from "./review/pi-catalog";
 import { hasPiOAuthProvider } from "./review/providers";
 
 export { REASONING_EFFORTS } from "./model-resolution";
@@ -35,7 +36,23 @@ export type {
   SelectedModel,
 } from "./model-resolution";
 
-const FALLBACK_REVIEW_MODEL = "anthropic/claude-sonnet-4-6";
+// Defaults follow the catalog: the newest Sol, else the newest Opus. Variants (-pro, -fast,
+// dated snapshots) never qualify.
+const SOL_MODEL = /^gpt-(\d+)(?:\.(\d+))?-sol$/;
+const OPUS_MODEL = /^claude-opus-(\d+)(?:-(\d+))?$/;
+
+function newestModel(providerId: string, pattern: RegExp): Model<Api> | undefined {
+  let newest: { model: Model<Api>; major: number; minor: number } | undefined;
+  for (const model of getModelsByProvider(providerId)) {
+    const match = pattern.exec(model.id);
+    if (!match) continue;
+    const major = Number(match[1]),
+      minor = Number(match[2] ?? 0);
+    if (!newest || major > newest.major || (major === newest.major && minor > newest.minor))
+      newest = { model, major, minor };
+  }
+  return newest?.model;
+}
 const configuredDefaultModel = process.env.BETTER_REVIEW_MODEL?.trim();
 const selectionPath =
   process.env.BETTER_REVIEW_MODEL_SELECTION_PATH ??
@@ -84,7 +101,8 @@ function saveSelection(selection: ModelSelection) {
   }
 }
 
-const modelCatalog = builtinModels();
+const modelCatalog = createModels();
+for (const provider of catalogProviders()) modelCatalog.setProvider(provider);
 const getModelById = (provider: string, modelId: string): Model<Api> | undefined =>
   modelCatalog.getModel(provider, modelId);
 const getModelsByProvider = (provider: string): readonly Model<Api>[] =>
@@ -157,15 +175,12 @@ function resolveDefaultModel(): SelectedModel {
       ? "openai-codex"
       : null;
   if (openAiProvider) {
-    const openAiModel = getModelEntry(openAiProvider, "gpt-5.5");
-    if (openAiModel) return toSelectedModel(openAiModel, null, DEFAULT_REASONING_EFFORT);
+    const sol = newestModel(openAiProvider, SOL_MODEL);
+    if (sol) return toSelectedModel(toModelEntry(sol), null, DEFAULT_REASONING_EFFORT);
   }
 
-  const fallback = parseReviewModel(FALLBACK_REVIEW_MODEL);
-  if (fallback) {
-    const model = getModelEntry(fallback.providerId, fallback.modelId);
-    if (model) return toSelectedModel(model, fallback.variant, fallback.thinkingLevel);
-  }
+  const opus = newestModel("anthropic", OPUS_MODEL);
+  if (opus) return toSelectedModel(toModelEntry(opus), null, DEFAULT_REASONING_EFFORT);
 
   const firstProvider = getProviderIds()[0];
   const firstModel = firstProvider ? getModelsByProvider(firstProvider)[0] : undefined;

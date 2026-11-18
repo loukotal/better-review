@@ -34,6 +34,7 @@ const ReviewDoc = defineDoc<{ session: string; legacySettlements: string }>({
   history: "rewindable",
   fork: "asOf",
   initial: () => ({ session: "", legacySettlements: "[]" }),
+  checkpointWhen: () => false,
 });
 
 export async function openReviewEngine(options: {
@@ -77,7 +78,12 @@ export async function openReviewEngine(options: {
     {
       models: options.models,
       registry,
-      settings: { compaction: { enabled: true }, toolExecution: "parallel" },
+      settings: {
+        compaction: { enabled: true },
+        toolExecution: "parallel",
+        // The live snapshot is built from stored commits; store streamed progress at once.
+        progress: { persistWithinMs: 0 },
+      },
     },
     context,
   );
@@ -200,6 +206,11 @@ export async function openReviewEngine(options: {
         projection.addSubmission(change.value);
         changed = true;
       } else if (change.type === "document" && change.conversationId === conversation.id) {
+        if (change.kind === "retire") {
+          delete docs[change.record.kind];
+          changed = true;
+          continue;
+        }
         docs[change.record.kind] = change.value;
         // Commit listeners can request a snapshot before syncSession's await resumes.
         // Adopt the session alongside its revision marker, before notifying them.
@@ -215,10 +226,14 @@ export async function openReviewEngine(options: {
       });
     }
   }
-  const stopCommits = harness.subscribeCommits((publication) => {
-    if (!hydrated) pendingCommits.push(publication);
-    else adopt(publication);
+  const commits = harness.observeCommits({
+    advance: (publication) => {
+      if (!hydrated) pendingCommits.push(publication);
+      else adopt(publication);
+    },
+    end: () => {},
   });
+  const stopCommits = () => commits.detach();
   const hydrateDone = startMeasurement("snapshot.hydrate");
   const [initialEntries, initialSubmissions, initialView] = await Promise.all([
     allEntries(),

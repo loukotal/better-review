@@ -5,7 +5,6 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
-  Type,
   contentText,
   type Api,
   type AssistantMessage,
@@ -14,6 +13,7 @@ import {
   type ToolCall,
 } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { arr, bool, int, nullable, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 
 import { getReviewProviders } from "./review/providers";
 import { STORE_BASE_DIR } from "./store";
@@ -106,77 +106,52 @@ type PlanGenerator = (
   repositoryRoot?: string,
 ) => Promise<ReadingDiffPlan>;
 
-const evidenceSchema = Type.Object(
-  {
-    file: Type.String({ minLength: 1, maxLength: 500 }),
-    line: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
-  },
-  { additionalProperties: false },
-);
+const evidenceSchema = obj({
+  file: str({ minLength: 1, maxLength: 500 }),
+  line: nullable(int({ minimum: 1 })),
+});
 
-const reportSchema = Type.Object(
-  {
-    features: Type.Array(
-      Type.Object(
-        {
-          title: Type.String({ minLength: 1, maxLength: 160 }),
-          nodes: Type.Array(
-            Type.Object(
-              {
-                id: Type.String({ minLength: 1, maxLength: 48 }),
-                parentId: Type.Union([Type.String({ minLength: 1, maxLength: 48 }), Type.Null()]),
-                kind: Type.Union([
-                  Type.Literal("entry"),
-                  Type.Literal("boundary"),
-                  Type.Literal("service"),
-                  Type.Literal("persistence"),
-                  Type.Literal("side_effect"),
-                  Type.Literal("other"),
-                ]),
-                label: Type.String({ minLength: 1, maxLength: 160 }),
-                detail: Type.Union([Type.String({ maxLength: 300 }), Type.Null()]),
-                evidence: Type.Union([evidenceSchema, Type.Null()]),
-                inferred: Type.Boolean(),
-              },
-              { additionalProperties: false },
-            ),
-            { maxItems: 24 },
-          ),
-        },
-        { additionalProperties: false },
+const reportSchema = obj({
+  features: arr(
+    obj({
+      title: str({ minLength: 1, maxLength: 160 }),
+      nodes: arr(
+        obj({
+          id: str({ minLength: 1, maxLength: 48 }),
+          parentId: nullable(str({ minLength: 1, maxLength: 48 })),
+          kind: oneOf(["entry", "boundary", "service", "persistence", "side_effect", "other"]),
+          label: str({ minLength: 1, maxLength: 160 }),
+          detail: nullable(str({ maxLength: 300 })),
+          evidence: nullable(evidenceSchema),
+          inferred: bool(),
+        }),
+        { maxItems: 24 },
       ),
-      { maxItems: 6 },
-    ),
-  },
-  { additionalProperties: false },
-);
+    }),
+    { maxItems: 6 },
+  ),
+});
 
 const submitReadingReportTool = {
   name: "submit_reading_report",
   description: "Submit feature callstack trees and a one-line summary.",
-  parameters: Type.Object(
-    {
-      summary: Type.String({
-        minLength: 1,
-        maxLength: MAX_SUMMARY_LENGTH,
-        description: "One-line description of the behavior represented by the diff.",
-      }),
-      report: reportSchema,
-    },
-    { additionalProperties: false },
-  ),
+  parameters: obj({
+    summary: str({
+      minLength: 1,
+      maxLength: MAX_SUMMARY_LENGTH,
+      description: "One-line description of the behavior represented by the diff.",
+    }),
+    report: reportSchema,
+  }),
   constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
 };
 
 const submitSummaryTool = {
   name: "submit_reading_report_summary",
   description: "Submit one concise sentence summarizing all reading-diff chunks.",
-  parameters: Type.Object(
-    {
-      summary: Type.String({ minLength: 1, maxLength: MAX_SUMMARY_LENGTH }),
-    },
-    { additionalProperties: false },
-  ),
+  parameters: obj({
+    summary: str({ minLength: 1, maxLength: MAX_SUMMARY_LENGTH }),
+  }),
   constrainedSampling: { type: "json_schema" as const, strict: "prefer" as const },
 };
 
@@ -366,29 +341,20 @@ function extractJsonObject(text: string): unknown {
 const readRepositoryFileTool = {
   name: "read_repo_file",
   description: "Read one repository-relative text file from the prepared PR checkout.",
-  parameters: Type.Object(
-    { path: Type.String({ minLength: 1, maxLength: 500 }) },
-    { additionalProperties: false },
-  ),
+  parameters: obj({ path: str({ minLength: 1, maxLength: 500 }) }),
 };
 
 const searchRepositoryTool = {
   name: "search_repo",
   description:
     "Search the prepared PR checkout for an exact identifier or short text fragment. Returns repository-relative file and line matches.",
-  parameters: Type.Object(
-    { query: Type.String({ minLength: 2, maxLength: 160 }) },
-    { additionalProperties: false },
-  ),
+  parameters: obj({ query: str({ minLength: 2, maxLength: 160 }) }),
 };
 
 const listRepositoryFilesTool = {
   name: "list_repo_files",
   description: "List tracked repository files, optionally filtered by a short text fragment.",
-  parameters: Type.Object(
-    { filter: Type.Optional(Type.String({ maxLength: 120 })) },
-    { additionalProperties: false },
-  ),
+  parameters: obj({ filter: opt(str({ maxLength: 120 })) }),
 };
 
 async function resolveRepositoryFile(repositoryRoot: string, filePath: string): Promise<string> {

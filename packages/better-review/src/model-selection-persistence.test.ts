@@ -43,9 +43,9 @@ test("explicit selection survives server restart instead of reverting to the Cod
   assert.equal(restarted.thinkingLevel, "high");
   assert.deepEqual(
     run(
-      `const captured = resolveSelectedModel({providerId: "openai-codex", modelId: "gpt-5.5", thinkingLevel: "medium"}); console.log(JSON.stringify([captured.modelId, getSelectedModel().modelId]));`,
+      `const captured = resolveSelectedModel({providerId: "openai-codex", modelId: "gpt-5.6-sol", thinkingLevel: "medium"}); console.log(JSON.stringify([captured.modelId, getSelectedModel().modelId]));`,
     ),
-    ["gpt-5.5", "gpt-6.1-sol"],
+    ["gpt-5.6-sol", "gpt-6.1-sol"],
     "resolving per-request intent must not mutate the persisted global selection",
   );
   assert.equal(
@@ -54,7 +54,7 @@ test("explicit selection survives server restart instead of reverting to the Cod
   );
   assert.equal(
     run(
-      `console.log(JSON.stringify(restoreSelectedModel({providerId: "openai-codex", modelId: "gpt-5.5"})))`,
+      `console.log(JSON.stringify(restoreSelectedModel({providerId: "openai-codex", modelId: "gpt-5.6-sol"})))`,
     ).modelId,
     "gpt-6.1-sol",
     "stale browser migration never replaces saved server intent",
@@ -109,8 +109,8 @@ test("explicit selection survives server restart instead of reverting to the Cod
   );
   assert.equal(
     run("console.log(JSON.stringify(getSelectedModel()))").modelId,
-    "gpt-5.5",
-    "genuine no-selection defaults remain unchanged",
+    "gpt-6.1-sol",
+    "Codex-only installs default to the newest Sol model, since gpt-5.5 left that catalog",
   );
   env.BETTER_REVIEW_MODEL = "openai-codex/no-longer-in-catalog";
   assert.match(
@@ -174,9 +174,9 @@ test("selection policy preserves current preference, catalog ordering, wire form
     rmSync(process.env.BETTER_REVIEW_MODEL_SELECTION_PATH);
     mkdirSync(process.env.BETTER_REVIEW_MODEL_SELECTION_PATH);
     let failed = false;
-    try { setSelectedModel({ providerId: 'openai-codex', modelId: 'gpt-5.5', thinkingLevel: 'low' }); } catch { failed = true; }
+    try { setSelectedModel({ providerId: 'openai-codex', modelId: 'gpt-5.6-sol', thinkingLevel: 'low' }); } catch { failed = true; }
     const after = getSelectedModel();
-    const inherited = resolveSelectedModel({ providerId: 'openai-codex', modelId: 'gpt-5.5' });
+    const inherited = resolveSelectedModel({ providerId: 'openai-codex', modelId: 'gpt-5.6-sol' });
     console.log(JSON.stringify({ preference, effective, connected: search.connectedProvidersCount, firstProvider: search.models[0].providerId, count: search.models.length, wire, failed, after, inherited, source: getModelSelectionState().selectionSource, temporary: readdirSync(${JSON.stringify(directory)}).filter(name => name.endsWith('.tmp')) }));
   `);
   assert.equal(
@@ -213,16 +213,18 @@ test("selection policy preserves current preference, catalog ordering, wire form
     BETTER_REVIEW_PI_AUTH_PATH: path.join(directory, "missing.json"),
     BETTER_REVIEW_MODEL_SELECTION_PATH: path.join(directory, "fresh-selection.json"),
   };
-  assert.equal(
-    run("console.log(JSON.stringify(getSelectedModel()))", noAuth).providerId,
-    "anthropic",
+  const fallback = run("console.log(JSON.stringify(getSelectedModel()))", noAuth);
+  assert.deepEqual(
+    [fallback.providerId, fallback.modelId],
+    ["anthropic", "claude-opus-5-5"],
+    "without OpenAI credentials the default is the newest Opus",
   );
   const configured = run("console.log(JSON.stringify(getModelSelectionState()))", {
     ...noAuth,
-    BETTER_REVIEW_MODEL: "openai-codex/gpt-5.5",
+    BETTER_REVIEW_MODEL: "openai-codex/gpt-5.6-sol",
   });
   assert.equal(configured.providerId, "openai-codex");
-  assert.equal(configured.modelId, "gpt-5.5");
+  assert.equal(configured.modelId, "gpt-5.6-sol");
   assert.equal(configured.selectionSource, "default");
 });
 
@@ -294,3 +296,64 @@ for (const type of ["oauth", "api_key"] as const) {
     assert.equal(saved.providerId, "openai");
   });
 }
+
+test("pi's refreshed model catalog adds newer models, and the default follows the newest Sol", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "review-pi-catalog-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const authPath = path.join(directory, "auth.json");
+  const storePath = path.join(directory, "models-store.json");
+  await writeFile(authPath, JSON.stringify({ "openai-codex": { type: "api", key: "fixture" } }));
+  const base = {
+    PATH: process.env.PATH,
+    HOME: directory,
+    BETTER_REVIEW_MODEL: "",
+    BETTER_REVIEW_PI_AUTH_PATH: authPath,
+    BETTER_REVIEW_OPENCODE_AUTH_PATH: path.join(directory, "missing-auth.json"),
+    BETTER_REVIEW_MODEL_SELECTION_PATH: path.join(directory, "selection.json"),
+    BETTER_REVIEW_PI_MODELS_STORE_PATH: storePath,
+  };
+  const catalog = (lastModified: number) =>
+    writeFile(
+      storePath,
+      JSON.stringify({
+        "openai-codex": {
+          lastModified,
+          models: ["gpt-9.1-sol", "gpt-9.1-sol-pro", "gpt-9.2-terra"].map((id) => ({
+            id,
+            name: id,
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            baseUrl: "https://chatgpt.com/backend-api",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 500000,
+            maxTokens: 128000,
+          })),
+        },
+      }),
+    );
+  const run = () => {
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `import { getSelectedModel, getModelEntry } from ${JSON.stringify(new URL("./model-selection.ts", import.meta.url).href)}; console.log(JSON.stringify({ selected: getSelectedModel().modelId, terra: !!getModelEntry("openai-codex", "gpt-9.2-terra") }));`,
+      ],
+      { env: base, encoding: "utf8" },
+    );
+    assert.equal(child.status, 0, child.stderr);
+    return JSON.parse(child.stdout);
+  };
+  await catalog(Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(run(), { selected: "gpt-9.1-sol", terra: true }, "-pro variants never win");
+  await catalog(0);
+  assert.deepEqual(
+    run(),
+    { selected: "gpt-6.1-sol", terra: false },
+    "a catalog older than pi-ai's bundled data is ignored",
+  );
+});

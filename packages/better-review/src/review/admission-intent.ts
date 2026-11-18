@@ -14,6 +14,7 @@ export const AdmissionIntentDoc = defineDocFamily<{ fingerprint: string }, null>
   history: "latest",
   fork: "initial",
   initial: () => ({ fingerprint: "" }),
+  checkpointWhen: () => false,
 });
 
 export class ReviewAdmissionConflict extends Error {

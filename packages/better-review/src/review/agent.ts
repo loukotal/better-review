@@ -1,5 +1,5 @@
-import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
+import { arr, int, num, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 
 import { reviewBaseRef } from "../pr-checkout";
 import type { PrReviewSession } from "../pr-review-sessions";
@@ -48,20 +48,23 @@ export function reviewerExtension(
     }
     return observations.observe(name, args, execute);
   };
-  const continuation = Type.Optional(Type.String());
-  const paths = Type.Optional(Type.Array(Type.String(), { maxItems: 32 }));
-  const contextLines = Type.Optional(Type.Integer({ minimum: 0, maximum: 10 }));
+  const continuation = opt(str());
+  const paths = opt(arr(str(), { maxItems: 32 }));
+  const contextLines = opt(int({ minimum: 0, maximum: 10 }));
   const search = defineTool({
     name: "search",
     description:
       "Search immutable reviewed files using literal text (default) or extended regex. Optional literal file/directory paths, bounded context, explicit no_match/errors, and revision-bound pagination.",
-    parameters: Type.Object({
-      pattern: Type.String({ maxLength: 2000 }),
-      mode: Type.Optional(Type.Union([Type.Literal("literal"), Type.Literal("regex")])),
-      paths,
-      context: contextLines,
-      continuation,
-    }),
+    parameters: obj(
+      {
+        pattern: str({ maxLength: 2000 }),
+        mode: opt(oneOf(["literal", "regex"])),
+        paths,
+        context: contextLines,
+        continuation,
+      },
+      { open: true },
+    ),
     replay: "safe",
     outputLimits: { maxBytes: 192000, maxLines: 2000 },
     execute: async (args, api, context) =>
@@ -80,17 +83,23 @@ export function reviewerExtension(
     name: "read_files",
     description:
       "Read batched 1-based inclusive file line ranges from the immutable reviewed revision. Overlaps merge; all files share a bounded page budget. Each file has independent errors. Continue with identical ranges and the returned token.",
-    parameters: Type.Object({
-      ranges: Type.Array(
-        Type.Object({
-          path: Type.String(),
-          start: Type.Optional(Type.Integer({ minimum: 1 })),
-          end: Type.Optional(Type.Integer({ minimum: 1 })),
-        }),
-        { minItems: 1, maxItems: 32 },
-      ),
-      continuation,
-    }),
+    parameters: obj(
+      {
+        ranges: arr(
+          obj(
+            {
+              path: str(),
+              start: opt(int({ minimum: 1 })),
+              end: opt(int({ minimum: 1 })),
+            },
+            { open: true },
+          ),
+          { minItems: 1, maxItems: 32 },
+        ),
+        continuation,
+      },
+      { open: true },
+    ),
     replay: "safe",
     outputLimits: { maxBytes: 192000, maxLines: 2000 },
     execute: async (args, api, context) =>
@@ -109,7 +118,7 @@ export function reviewerExtension(
     name: "review_diff",
     description:
       "Canonical diff using the saved full-PR base/head or saved commit/parent, never mutable branch names. Includes renames, old/new hunk line numbers, optional literal paths and context, and bounded pagination.",
-    parameters: Type.Object({ paths, context: contextLines, continuation }),
+    parameters: obj({ paths, context: contextLines, continuation }, { open: true }),
     replay: "safe",
     outputLimits: { maxBytes: 192000, maxLines: 2000 },
     execute: async (args, api, context) =>
@@ -128,10 +137,13 @@ export function reviewerExtension(
     name: "bash",
     description:
       "Escape hatch for shell commands in the isolated checkout. Prefer search, read_files and review_diff for repository inspection. Scratch output is disposable and never cached.",
-    parameters: Type.Object({
-      command: Type.String(),
-      timeoutMs: Type.Optional(Type.Number({ minimum: 1, maximum: 120000 })),
-    }),
+    parameters: obj(
+      {
+        command: str(),
+        timeoutMs: opt(num({ minimum: 1, maximum: 120000 })),
+      },
+      { open: true },
+    ),
     replay: "unsafe",
     outputLimits: { maxBytes: 48000, maxLines: 1000, retain: "tail" },
     execute: async (args, api, context) =>
@@ -159,11 +171,14 @@ export function reviewerExtension(
     name: "read",
     description:
       "Legacy uncached UTF-8 read with 1-based numbered text, offset and limit. Accepts checkout-relative or allowed absolute checkout/scratch paths. Prefer read_files for immutable, validated reads and structured continuations.",
-    parameters: Type.Object({
-      path: Type.String(),
-      offset: Type.Optional(Type.Integer({ minimum: 1 })),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })),
-    }),
+    parameters: obj(
+      {
+        path: str(),
+        offset: opt(int({ minimum: 1 })),
+        limit: opt(int({ minimum: 1, maximum: 2000 })),
+      },
+      { open: true },
+    ),
     replay: "safe",
     outputLimits: { maxBytes: 192000, maxLines: 2000 },
     execute: async (args, api, context) =>
@@ -179,7 +194,7 @@ export function reviewerExtension(
   const verify = defineTool({
     name: "verify_repo_access",
     description: "Verify the reviewed revision and full repository access inside the sandbox.",
-    parameters: Type.Object({}),
+    parameters: obj({}, { open: true }),
     replay: "safe",
     execute: async (args, api, context) =>
       observe("verify_repo_access", args, async (observation) => {
