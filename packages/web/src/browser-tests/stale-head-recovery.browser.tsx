@@ -1,6 +1,6 @@
 import type { GithubOutboxOperation, GithubOutboxSnapshot } from "@better-review/shared";
 
-import { githubPrScope, queueGithubWrite, refreshGithubActor } from "../lib/github-writes";
+import { queueGithubWrite, refreshGithubActor } from "../lib/github-writes";
 import { createAssertions } from "./assertions";
 import { mountAppFixture } from "./mount-app";
 import { prDetailFixture } from "./pr-detail-fixture";
@@ -13,7 +13,6 @@ type FixtureCall = { path: string; method: string; payload?: Record<string, unkn
 /** GitHub queue modal → IndexedDB → RPC → SQLite worker → production HTTP adapter. */
 export async function testGithubQueueModalRecoversWritesAfterHeadChangeInBrowser() {
   const { check, wait, result } = createAssertions(8000);
-  const scope = githubPrScope(url);
   const rpc = (kind: string) => (input: unknown) => window.browserGithubActions({ kind, input });
   await mountAppFixture({
     initialPath: "/",
