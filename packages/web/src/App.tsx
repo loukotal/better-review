@@ -590,6 +590,14 @@ const AppContent: Component = () => {
     }
   };
 
+  // An explicit apply starts reading from the new first file; automatic orders keep your place.
+  const applyChosenReviewOrder = (order: string[]) => {
+    setReviewOrder(order);
+    const url = loadedPrUrl();
+    if (url) querySetReviewOrder(url, order);
+    diffScrollRef?.scrollTo({ top: 0 });
+  };
+
   const automaticOrderContext = () => ({
     requestedUrl: prUrl(),
     loadedUrl: loadedPrUrl(),
@@ -1590,7 +1598,7 @@ const AppContent: Component = () => {
               }
               theme={settings().theme}
               aiAnnotations={aiAnnotations()}
-              onApplyReviewOrder={applyReviewOrder}
+              onApplyReviewOrder={applyChosenReviewOrder}
               onReviewOrderObservation={automaticOrderController.observe}
               initialReviewOrderReady={!automaticOrder() || (!loading() && !loadingCommits())}
               onAnnotationsReceived={addNewAiAnnotations}

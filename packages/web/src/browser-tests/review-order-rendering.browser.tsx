@@ -101,18 +101,24 @@ async function liveOrderFixture(automatic: boolean, keepFirst = false) {
     await wait(() => order() === expected.join(","), "Completed automatic order did not apply");
   } else apply()!.click();
   check(order() === expected.join(","), "Manual order did not apply");
+  // Automatic orders keep the reader's place; an explicit Apply starts at the new first file.
+  const painted = automatic ? "file0_" : `file${paths.indexOf(expected[0]!)}_`;
   for (let frame = 0; frame < 20; frame++) {
-    await new Promise(requestAnimationFrame);
+    // Sample after the frame's callbacks ran, i.e. what that frame actually paints.
+    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
     const rows = visibleRows(scroll);
     check(rows.length > 5, `Blank source viewport after reorder at frame ${frame}`);
     check(
-      rows.some((row) => row.textContent?.includes("file0_")),
+      rows.some((row) => row.textContent?.includes(painted)),
       `Wrong source painted at frame ${frame}`,
     );
-    check(
-      Math.abs(first.getBoundingClientRect().top - scroll.getBoundingClientRect().top - offset) < 3,
-      `Visible file moved at frame ${frame}`,
-    );
+    if (automatic)
+      check(
+        Math.abs(first.getBoundingClientRect().top - scroll.getBoundingClientRect().top - offset) <
+          3,
+        `Visible file moved at frame ${frame}`,
+      );
+    else check(scroll.scrollTop === 0, `Apply order did not scroll to the top at frame ${frame}`);
   }
   check(
     original.every((node) => node.isConnected),
