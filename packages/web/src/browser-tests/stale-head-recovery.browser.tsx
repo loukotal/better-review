@@ -24,6 +24,7 @@ export async function testGithubQueueModalRecoversWritesAfterHeadChangeInBrowser
       "githubOutbox.control": rpc("control"),
       "githubOutbox.pending": rpc("pending"),
       "prDetail.refresh": () => prDetailFixture(url, pushed),
+      "pr.extras": () => ({ comments: [], issueComments: [], status: null }),
       "prs.refresh": () => ({ prs: [], fetchedAt: Date.now() }),
     },
   });

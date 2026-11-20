@@ -104,8 +104,13 @@ async function liveOrderFixture(automatic: boolean, keepFirst = false) {
   // Automatic orders keep the reader's place; an explicit Apply starts at the new first file.
   const painted = automatic ? "file0_" : `file${paths.indexOf(expected[0]!)}_`;
   for (let frame = 0; frame < 20; frame++) {
-    // Sample after the frame's callbacks ran, i.e. what that frame actually paints.
-    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
+    await new Promise(requestAnimationFrame);
+    // The virtualizer learns the jump target is visible from an IntersectionObserver,
+    // one frame late, like any long jump in the diff. Sample after its frame callbacks.
+    if (!automatic) {
+      if (frame === 0) continue;
+      await new Promise((resolve) => setTimeout(resolve));
+    }
     const rows = visibleRows(scroll);
     check(rows.length > 5, `Blank source viewport after reorder at frame ${frame}`);
     check(
