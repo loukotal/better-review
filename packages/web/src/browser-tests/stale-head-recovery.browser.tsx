@@ -89,7 +89,7 @@ export async function testGithubQueueModalRecoversWritesAfterHeadChangeInBrowser
 
   // Still rebased: posting on the reviewed commit is refused again, not re-anchored.
   await wait(
-    () => !!button(staleInline.command.operationId, "Post on reviewed commit"),
+    () => button(staleInline.command.operationId, "Post on reviewed commit")?.disabled === false,
     `Post on reviewed commit missing: ${row(staleInline.command.operationId)?.textContent}`,
   );
   button(staleInline.command.operationId, "Post on reviewed commit")!.click();
@@ -103,7 +103,7 @@ export async function testGithubQueueModalRecoversWritesAfterHeadChangeInBrowser
   // Items parked by the previous release while the reviewed commit was still an ancestor.
   await fixture("push", { sha: pushed, history: [reviewed, pushed] });
   await wait(
-    () => !!button(staleInline.command.operationId, "Post on reviewed commit"),
+    () => button(staleInline.command.operationId, "Post on reviewed commit")?.disabled === false,
     "Post on reviewed commit not offered again",
   );
   button(staleInline.command.operationId, "Post on reviewed commit")!.click();
