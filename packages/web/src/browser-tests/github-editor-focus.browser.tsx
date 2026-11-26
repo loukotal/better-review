@@ -346,3 +346,38 @@ export async function testAppGithubFailedSaveReloadInBrowser(phase = "before") {
   }
   return result();
 }
+
+/** Reply editors are disabled while their durable draft loads; they must still get focus. */
+export async function testReplyFocusesEditorInBrowser() {
+  const url = "https://github.com/browser-fixture/isolated/pull/1";
+  const review: PRComment = {
+    id: 20,
+    node_id: "review-comment-node",
+    body: "inline to answer",
+    html_url: `${url}#discussion_r20`,
+    user: { login: "browser-fixture", avatar_url: "" },
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    canEdit: true,
+    path: "src/example.ts",
+    line: 9,
+    original_line: 9,
+    side: "RIGHT",
+    threadId: "actual-thread",
+  };
+  const { check, wait, result } = createAssertions(4000);
+  await mountAppFixture({ extras: { comments: [review], issueComments: [], status: null } });
+  await refreshGithubActor();
+  const card = () =>
+    document.querySelector<HTMLElement>('[data-github-comment-key="remote:review-comment:20"]');
+  await wait(() => !!card(), "Inline comment card missing");
+  [...card()!.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.textContent?.trim() === "Reply")!
+    .click();
+  await wait(
+    () => document.activeElement === card()!.querySelector("textarea:not(:disabled)"),
+    "Reply did not focus its editor once the draft loaded",
+  );
+  check(!!card()!.querySelector('form[aria-label="Reply to comment"]'), "Reply form missing");
+  return result();
+}

@@ -228,6 +228,7 @@ export function GithubCommentCard(props: {
                   editor = element;
                 }}
                 aria-label="Comment"
+                autofocus
                 value={activeDraft().body()}
                 onInput={(event) => activeDraft().setBody(event.currentTarget.value)}
                 disabled={saving() || !activeDraft().ready()}

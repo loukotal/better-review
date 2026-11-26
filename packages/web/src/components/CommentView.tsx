@@ -174,7 +174,7 @@ export const CommentView: Component<CommentViewProps> = (props) => {
             </div>
             <Textarea
               aria-label="Comment"
-              ref={(el) => setTimeout(() => el.focus(), 0)}
+              autofocus
               value={editBody()}
               onInput={(e) => setEditBody(e.currentTarget.value)}
               onKeyDown={handleKeyDown}
@@ -359,7 +359,7 @@ const ReplyForm: Component<ReplyFormProps> = (props) => {
     >
       <Textarea
         aria-label="Comment"
-        ref={(el) => setTimeout(() => el.focus(), 0)}
+        autofocus
         value={body()}
         onInput={(e) => setBody(e.currentTarget.value)}
         onKeyDown={handleKeyDown}
@@ -615,7 +615,7 @@ export const PendingCommentForm: Component<PendingCommentFormProps> = (props) =>
       <Show when={ready()} fallback={<p role="status">Loading durable draft…</p>}>
         <Textarea
           aria-label="Comment"
-          ref={(el) => setTimeout(() => el.focus(), 0)}
+          autofocus
           value={body()}
           onInput={(e) => {
             const value = e.currentTarget.value;
