@@ -216,17 +216,14 @@ for (const patch of [
   });
 }
 
-test("automatic order controller: missing paths are not consumed and can apply when paths arrive", (t) => {
+test("automatic order controller: files no longer in the PR are dropped, not blocking", (t) => {
   const f = fixture();
   t.after(() => f.owner.dispose());
   f.owner.updateContext({ ...context(), paths: ["a"] });
   f.owner.beginInitialLoad("pr/1");
   f.owner.observe(observation());
   assert.equal(f.owner.getState().initialPending, false);
-  assert.equal(f.applications.length, 0);
-  assert.equal(f.storage.values.has(appliedKey), false);
-  f.owner.updateContext(context());
-  assert.deepEqual(f.applications, [{ files: ["b", "a"], pending: false }]);
+  assert.deepEqual(f.applications, [{ files: ["a"], pending: true }]);
 });
 
 test("automatic order controller: invalid empty/duplicate orders are not consumed", (t) => {

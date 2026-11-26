@@ -82,7 +82,8 @@ export function ReviewSettings(
             <span>
               Automatically apply AI review order
               <span class="mt-1 block text-xs text-text-muted">
-                Use completed AI orders for this revision. You can still reorder files manually.
+                Use the latest completed AI order, also after new commits. You can still reorder
+                files manually.
               </span>
             </span>
           </label>

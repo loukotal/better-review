@@ -80,8 +80,10 @@ export function availableReviewOrder(
       : savedScope.commitSha !== null)
   )
     return null;
-  if (!snapshot || snapshot.sessionId !== scope.sessionId || snapshot.revision !== scope.revision)
-    return null;
+  if (!snapshot || snapshot.sessionId !== scope.sessionId) return null;
+  // A full-PR review keeps its reading order after later pushes; a commit order needs its commit.
+  if (scope.mode === "commit" && snapshot.revision !== scope.revision) return null;
+  const sameRevision = (revision: string | undefined) => revision === snapshot.revision;
   let result: AvailableReviewOrder | null = null;
   let afterScopeBoundary = savedScope.afterSubmissionId === undefined;
   for (const [index, message] of snapshot.messages.entries()) {
@@ -97,7 +99,7 @@ export function availableReviewOrder(
       content.startsWith("Pulled the latest full PR into this review session.")
     )
       result = null;
-    if (message.role !== "assistant" || message.metadata.revision !== scope.revision) continue;
+    if (message.role !== "assistant" || !sameRevision(message.metadata.revision)) continue;
     if (snapshot.running && index === snapshot.messages.length - 1) continue;
     if (
       message.submissionId &&
@@ -132,8 +134,10 @@ export function createAutomaticOrderTracker(storage?: StorageAccess) {
       applied = value.keys.slice(-100);
   } catch {}
   return {
+    /** Files the PR no longer has are dropped; files the order omits stay after it. */
     take(order: AvailableReviewOrder, paths: string[]): string[] | null {
-      if (!order.files.every((file) => paths.includes(file))) return null;
+      const files = order.files.filter((file) => paths.includes(file));
+      if (!files.length) return null;
       const key = JSON.stringify([
         order.prUrl,
         order.sessionId,
@@ -150,7 +154,7 @@ export function createAutomaticOrderTracker(storage?: StorageAccess) {
           JSON.stringify({ version: 1, keys: applied }),
         );
       } catch {}
-      return order.files;
+      return files;
     },
   };
 }

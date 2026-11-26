@@ -31,12 +31,9 @@ export const ReviewOrderPanel: Component<ReviewOrderPanelProps> = (props) => {
 
   // Check if current order differs from suggested
   const orderDiffers = () => {
-    // Applying a partial suggestion puts its paths first, retaining other files.
-    if (props.files.length > props.currentFiles.length) return true;
-    for (let i = 0; i < props.files.length; i++) {
-      if (props.files[i] !== props.currentFiles[i]) return true;
-    }
-    return false;
+    // Applying puts the suggested paths first and keeps the rest; paths since removed are skipped.
+    const present = props.files.filter((file) => props.currentFiles.includes(file));
+    return present.some((file, index) => file !== props.currentFiles[index]);
   };
 
   // Find position changes for preview

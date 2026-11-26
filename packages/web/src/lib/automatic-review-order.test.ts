@@ -81,13 +81,11 @@ test("storage errors are nonfatal and in-memory consumption still works", () => 
   assert.deepEqual(tracker.take(order, ["a", "b"]), ["b", "a"]);
   assert.equal(tracker.take(order, ["a", "b"]), null);
 });
-test("only completed, session/revision matched orders, never live or failed output", () => {
+test("only completed, session matched orders, never live or failed output", () => {
   const value = snapshot();
   assert.deepEqual(availableReviewOrder(value, scope, savedScope)?.files, ["b", "a"]);
   assert.equal(availableReviewOrder({ ...value, running: true }, scope, savedScope), null);
   assert.equal(availableReviewOrder({ ...value, sessionId: "old" }, scope, savedScope), null);
-  assert.equal(availableReviewOrder({ ...value, revision: "old" }, scope, savedScope), null);
-  assert.equal(availableReviewOrder(value, { ...scope, revision: "new" }, savedScope), null);
   for (const outcome of ["aborted", "failed"] as const)
     assert.equal(
       availableReviewOrder(
@@ -105,11 +103,33 @@ test("only completed, session/revision matched orders, never live or failed outp
   ])
     assert.equal(availableReviewOrder(snapshot(content), scope, savedScope), null);
 });
+test("a full-PR order still applies after new commits; a commit order only to its commit", () => {
+  const pushed = { ...scope, revision: "new" };
+  const reviewedAgain = snapshot();
+  reviewedAgain.messages[0]!.metadata.revision = "older";
+  assert.equal(
+    availableReviewOrder(reviewedAgain, pushed, savedScope),
+    null,
+    "only orders made at the session's own revision",
+  );
+  assert.deepEqual(availableReviewOrder(snapshot(), pushed, savedScope), {
+    ...pushed,
+    messageId: "m",
+    files: ["b", "a"],
+  });
+  const commitScope = { ...savedScope, mode: "commit" as const, commitSha: "new" };
+  assert.equal(availableReviewOrder(snapshot(), { ...pushed, mode: "commit" }, commitScope), null);
+});
+test("files the PR no longer has are dropped instead of blocking the order", () => {
+  const tracker = createAutomaticOrderTracker(memory()),
+    order = availableReviewOrder(snapshot(), scope, savedScope)!;
+  assert.equal(tracker.take(order, ["c"]), null);
+  assert.deepEqual(tracker.take(order, ["a", "c"]), ["a"]);
+});
 test("consume once across polls and reload; distinct PR/session/head/message/order/scope applies anew", () => {
   const store = memory(),
     tracker = createAutomaticOrderTracker(store),
     order = availableReviewOrder(snapshot(), scope, savedScope)!;
-  assert.equal(tracker.take(order, ["a"]), null);
   assert.deepEqual(tracker.take(order, ["a", "b"]), ["b", "a"]);
   assert.equal(tracker.take({ ...order }, ["a", "b"]), null);
   assert.equal(createAutomaticOrderTracker(store).take(order, ["a", "b"]), null);
